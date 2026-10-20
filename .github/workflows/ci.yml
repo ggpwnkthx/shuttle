@@ -187,3 +187,11 @@ jobs:
             echo "the fixtures are part of the production image"
             exit 1
           fi
+
+      - name: the stage of the fixtures builds
+        run: |
+          # The fixtures need the development dependencies: the stage is
+          # built apart, so a mistake in it is a failing build and not a
+          # broken development stack.
+          docker build -f Dockerfile --target fixtures -t shuttle-fixtures:ci .
+          docker run --rm --entrypoint sh shuttle-fixtures:ci -c 'ls node_modules/oidc-provider'

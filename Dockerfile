@@ -28,9 +28,10 @@ RUN bun install --frozen-lockfile --production && \
 FROM oven/bun:${BUN_VERSION}-alpine AS fixtures
 WORKDIR /app
 ENV NODE_ENV=development
+# The fixtures need the development dependencies (the identity provider is
+# one of them), so this stage installs everything.
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
-COPY --from=runtime-deps /app/node_modules ./node_modules
 COPY src ./src
 COPY services ./services
 COPY package.json ./
