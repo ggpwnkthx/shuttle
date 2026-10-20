@@ -200,6 +200,7 @@ export function createUpstream(options: UpstreamOptions = {}): StartedUpstream {
       if (url.pathname === '/delay-headers') {
         const delay = Number(url.searchParams.get('ms') ?? '1000')
         await Bun.sleep(Math.min(delay, 30_000))
+        if (request.signal.aborted) return new Response(null, { status: 499 })
         return Response.json({ service: name, delayedHeaders: delay })
       }
 
@@ -208,8 +209,12 @@ export function createUpstream(options: UpstreamOptions = {}): StartedUpstream {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             setTimeout(() => {
-              controller.enqueue(encoder.encode('late'))
-              controller.close()
+              try {
+                controller.enqueue(encoder.encode('late'))
+                controller.close()
+              } catch {
+                // The caller went away.
+              }
             }, delay)
           },
         })
