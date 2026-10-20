@@ -38,8 +38,8 @@ process, the traffic is plain http over the loopback interface.
 | Measurement | Result |
 | --- | --- |
 | 3000 requests, 50 in flight | 6272 req/s, p50 7.5 ms, p90 10.3 ms, p99 13.1 ms, 0 errors |
-| 20000 requests, 100 in flight | 5926 req/s, p50 16.7 ms, p90 18.8 ms, p99 20.1 ms, max 30.5 ms, 0 errors |
-| 500 websockets | 413 connections/second, p99 197 ms for the handshake, 0 errors |
+| 20000 requests, 100 in flight | 5926 to 6273 req/s over the runs, p50 15.6 to 16.7 ms, p90 18.0 to 18.8 ms, p99 19.4 to 20.1 ms, max 21.7 to 30.5 ms, 0 errors |
+| 500 websockets | 413 to 415 connections/second, p99 187 to 197 ms for the handshake, 0 errors |
 
 What the numbers say:
 

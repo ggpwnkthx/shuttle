@@ -14,7 +14,7 @@ does not expose the boundaries the specification relies on (see
 
 | # | Commit | State | Evidence |
 | --- | --- | --- | --- |
-| 01 | `chore: establish domain boundaries and build checks` | done | `bun test test/architecture` (18 tests), `bun run typecheck`, `bun run lint`, `bun run format:check` |
+| 01 | `chore: establish domain boundaries and build checks` | done | `bun test test/architecture` (21 tests), `bun run typecheck`, `bun run lint`, `bun run format:check` |
 | 02 | `test: prove Bun transport capabilities` | done | `bun test test/network` (14 tests of the transport, 9 of the exchange, 5 of the websockets) with Bun 1.4.3; the transport suite was also run with Bun 1.2.0 and 1.2.23 to measure the boundaries |
 | 03 | `feat: compile and publish route configuration` | done | `bun test src/domains/routing` (19), `src/domains/configuration` (20), `src/runtime/env.test.ts` (12) |
 | 04 | `feat: enforce forwarding trust and identity policy` | done | `bun test src/domains/forwarding` (54 tests: 13 of the signature, 15 of the headers, 8 of the target, 18 of the origins), the vector of the specification is pinned |
@@ -45,7 +45,7 @@ does not expose the boundaries the specification relies on (see
 | Load | `bun run load` | run | run |
 | The image | `docker build` | **not run** (no docker) | run |
 
-The last full run of the suite: **306 tests passed, 8 skipped (the Redis
+The last full run of the suite: **309 tests passed, 8 skipped (the Redis
 tests), 0 failed** with Bun 1.4.3. The suite is 27 files: 14 unit test files
 of the domains and of the runtime, the architecture check, 3 network test
 files, 4 integration test files, 3 contract test files, the browser test and
