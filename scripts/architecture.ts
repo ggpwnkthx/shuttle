@@ -103,24 +103,31 @@ interface Location {
   domain?: string
   /** True when the file is a concrete adapter of its domain. */
   adapter: boolean
+  /** True when the file is a test of a domain. */
+  test: boolean
 }
 
 export function locate(path: string): Location {
   const normalized = path.replace(/\\/g, '/')
-  if (normalized === 'src/main.ts') return { layer: 'entry', adapter: false }
-  if (normalized.startsWith('src/app/')) return { layer: 'app', adapter: false }
-  if (normalized.startsWith('src/platform/')) return { layer: 'platform', adapter: false }
-  if (normalized.startsWith('src/runtime/')) return { layer: 'runtime', adapter: false }
+  const isTest = normalized.endsWith('.test.ts')
+  if (normalized === 'src/main.ts') return { layer: 'entry', adapter: false, test: isTest }
+  if (normalized.startsWith('src/app/')) return { layer: 'app', adapter: false, test: isTest }
+  if (normalized.startsWith('src/platform/')) {
+    return { layer: 'platform', adapter: false, test: isTest }
+  }
+  if (normalized.startsWith('src/runtime/')) {
+    return { layer: 'runtime', adapter: false, test: isTest }
+  }
   if (normalized.startsWith('src/observability/')) {
-    return { layer: 'observability', adapter: false }
+    return { layer: 'observability', adapter: false, test: isTest }
   }
   const domainMatch = /^src\/domains\/([^/]+)\/(.*)$/.exec(normalized)
   if (domainMatch) {
     const domain = domainMatch[1]!
     const rest = domainMatch[2]!
-    return { layer: 'domain', domain, adapter: rest.startsWith('adapters/') }
+    return { layer: 'domain', domain, adapter: rest.startsWith('adapters/'), test: isTest }
   }
-  return { layer: 'unknown', adapter: false }
+  return { layer: 'unknown', adapter: false, test: isTest }
 }
 
 /** The imports of a file, with the position of the statement. */
@@ -210,7 +217,7 @@ export function checkArchitecture(files: SourceFile[]): Violation[] {
       // A bare import is a package. The rules about packages only concern
       // the core domain code, which stays free of frameworks.
       if (!specifier.startsWith('.') && !specifier.startsWith('/')) {
-        if (location.layer === 'domain' && !location.adapter) {
+        if (location.layer === 'domain' && !location.adapter && !location.test) {
           const pkg = packageOf(specifier)
           if (FORBIDDEN_DOMAIN_PACKAGES.includes(pkg)) {
             report(
@@ -230,7 +237,7 @@ export function checkArchitecture(files: SourceFile[]): Violation[] {
 
       // (7) Core domain code imports no application, platform, runtime or
       // observation layer.
-      if (location.layer === 'domain' && !location.adapter) {
+      if (location.layer === 'domain' && !location.adapter && !location.test) {
         if (
           target.layer === 'app' ||
           target.layer === 'platform' ||
@@ -260,7 +267,7 @@ export function checkArchitecture(files: SourceFile[]): Violation[] {
 
       // A concrete adapter belongs to the domain that owns it and to the
       // composition root, which is the only place that assembles them.
-      if (target.adapter) {
+      if (target.adapter && !location.test) {
         const isAdapterEntry = resolved === `src/domains/${target.domain}/adapters/index.ts`
         if (location.layer === 'runtime') {
           if (!isAdapterEntry) {
@@ -308,6 +315,7 @@ export function checkArchitecture(files: SourceFile[]): Violation[] {
       if (
         location.layer === 'domain' &&
         !location.adapter &&
+        !location.test &&
         location.domain &&
         inside(resolved, `src/domains/${location.domain}/adapters`)
       ) {

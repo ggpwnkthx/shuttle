@@ -9,18 +9,14 @@
 
 import {
   GATEWAY_COOKIE_NAMES,
-  SessionStoreError,
-  cookieMaxAgeSeconds,
   loginStateCookie,
   loginStateDeletionCookie,
   sessionCookie,
   sessionDeletionCookie,
   type CookieOptions,
-  type CreateSessionInput,
   type GatewayCookie,
-  type SessionRecord,
-  type SessionStore,
-} from './index'
+} from './cookies'
+import type { CreateSessionInput, SessionRecord, SessionStore } from './session'
 import {
   LOGIN_STATE_TTL_MS,
   sanitizeRedirectTarget,
@@ -30,6 +26,7 @@ import {
 } from './login-state'
 import { OidcError, type OidcPort, type VerifiedIdentity } from './oidc'
 import { selectCredential, type CredentialPlan, type Principal } from './principal'
+import { SessionStoreError, cookieMaxAgeSeconds } from './session'
 
 /** The logger the service uses. */
 export interface AuthLogger {
