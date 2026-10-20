@@ -421,13 +421,21 @@ not given to the caller. Shuttle never evaluates roles itself.
 
 Removed in both directions, never configurable: `connection`, `keep-alive`,
 `proxy-authenticate`, `proxy-authorization`, `te`, `trailer`,
-`transfer-encoding`, `upgrade`, `host`, all `x-forwarded-*`, `x-real-ip`, and
-the identity headers `x-shuttle-user`, `x-shuttle-user-id`, `x-shuttle-email`,
+`transfer-encoding`, `upgrade`, `host`, all `x-forwarded-*`, `x-real-ip`,
+the standard `forwarded` header (the claim of a client about the request it
+made competes with the chain the gateway writes), and the identity headers
+`x-shuttle-user`, `x-shuttle-user-id`, `x-shuttle-email`,
 `x-shuttle-roles`, `x-shuttle-workspace`, `x-shuttle-workspace-id`,
 `x-shuttle-internal`, `x-shuttle-authenticated`, `x-shuttle-signature`,
 `x-forwarded-user`, `x-forwarded-email`, `x-forwarded-groups`, `x-remote-user`,
 `x-remote-email`. Also remove every header named by `Connection` before
 constructing the new forwarding/handshake headers.
+
+The `Authorization` header of the caller is forwarded to the upstream as it
+is: it is not one of the identity headers of the gateway, and the upstream
+is an application of the same platform that the operator chose. A gateway
+that authenticated the caller does not own the token of the caller; the
+identity of the caller travels in the headers below and in the signature.
 
 `Cookie` is rewritten: the cookies of the gateway (`shuttle_session`,
 `shuttle_oidc_state`) are removed, the cookies of the application are kept.
@@ -940,3 +948,4 @@ policies remain explicitly listed in IMPLEMENTATION §10.
 | 19 | Domain organization | Feature policy, ports, domain adapters and unit tests live together; app/platform/runtime are explicit boundaries. Public imports and dependency directions are checked in CI. | §14 |
 | 20 | Inconsistent operational wording | Selected-credential rejection, valid metrics-token success, interim-only response failure, cache reuse and observation byte boundaries are explicit. These clarify the existing contract; they add no configuration fields. | §1, §6, §11.2–11.3, §12.1–12.2 |
 | 21 | The version of the runtime | The runtime is **Bun ≥ 1.4.3**. The boundaries the gateway relies on (an early answer while the upload runs, the cancellation of the upload, the refusal of an upstream websocket handshake, the upgrade of the caller with the headers of the gateway) are not observable on the 1.2 line of the runtime. The behavioral requirements of this specification are unchanged; the version of the platform they are implemented on is part of the contract. The measurements are in `docs/transport-capabilities.md`. | §Status, §10, §11.3 |
+| 22 | The forwarding headers of a client | The standard `forwarded` header is removed in both directions: it is the claim of a client about the request it made and it competes with the chain the gateway writes. The `Authorization` header of the caller is forwarded to the upstream as it is: the upstream is an application of the same platform that the operator chose, and the identity of the caller travels in the headers of the gateway and in the signature. | §7.1, §7.2 |
