@@ -193,6 +193,8 @@ async function main(): Promise<void> {
       // The load test measures the gateway, not the limiter.
       rateLimitMax: 0,
       rateLimitWindowMs: 60_000,
+      rateLimitGlobalMax: 0,
+      rateLimitGlobalWindowMs: 60_000,
       loginRateLimitMax: 0,
       loginRateLimitWindowMs: 60_000,
       allowedOrigins: [],

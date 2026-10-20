@@ -102,10 +102,20 @@ export interface RuntimeOptions {
   websocketMaxConnections: number
   /** How long the gateway waits for the handshake of the upstream. */
   websocketHandshakeTimeoutMs: number
-  /** The number of requests a single caller may make in a window. */
+  /** The number of requests a single caller may make to one route in a window. */
   rateLimitMax: number
   /** The length of the window of the request limiter. */
   rateLimitWindowMs: number
+  /**
+   * The number of requests a single caller may make over all the routes in
+   * a window.
+   *
+   * It is the protection against a flood. It is zero by default, so a
+   * deployment that does not need it does not pay for it.
+   */
+  rateLimitGlobalMax: number
+  /** The length of the window of the global request limiter. */
+  rateLimitGlobalWindowMs: number
   /** The number of login attempts a single caller may make in a window. */
   loginRateLimitMax: number
   /** The length of the window of the login limiter. */
@@ -127,6 +137,13 @@ export interface Runtime {
   auth: AuthService
   /** The limiter of the requests that are forwarded to an upstream. */
   rateLimiter: RequestLimiter
+  /**
+   * The limiter of the requests of a caller over all the routes.
+   *
+   * It is the protection against a flood: the per route limiter alone
+   * would let a caller make the budget of every route.
+   */
+  globalRateLimiter: RequestLimiter
   /** The limiter of the login attempts. */
   loginRateLimiter: RequestLimiter
   /** The key the identity headers are signed with. */
@@ -204,6 +221,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         onError: onSharedStateError,
       })
     : new RateLimiter(limiterOptions)
+  const globalLimiterOptions = {
+    max: options.rateLimitGlobalMax,
+    windowMs: options.rateLimitGlobalWindowMs,
+  }
+  const globalRateLimiter: RequestLimiter = sharedClient
+    ? new RedisRateLimiter({
+        ...globalLimiterOptions,
+        client: sharedClient,
+        keyPrefix: `${options.sharedStateKeyPrefix}:global`,
+        onError: onSharedStateError,
+      })
+    : new RateLimiter(globalLimiterOptions)
   const loginLimiterOptions = {
     max: options.loginRateLimitMax,
     windowMs: options.loginRateLimitWindowMs,
@@ -226,6 +255,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     access,
     auth,
     rateLimiter,
+    globalRateLimiter,
     loginRateLimiter,
     identityKey: deriveIdentityKey(options.sessionSecret),
     startedAt: Date.now(),

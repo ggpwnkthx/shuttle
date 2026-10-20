@@ -29,6 +29,7 @@ const ECHOED_HEADERS = [
   'x-real-ip',
   'x-custom-header',
   'content-type',
+  'cookie',
 ]
 
 /**
@@ -52,6 +53,10 @@ function describeRequest(c: Context) {
   const authorization = c.req.header('authorization')
   return {
     headers,
+    // The target of the request as it arrived: the path and the query
+    // string, the way an upstream would read them to verify the signature
+    // of the identity.
+    target: c.req.url.replace(/^https?:\/\/[^/]+/, ''),
     authorizationPresent: Boolean(authorization),
     authorizationFingerprint: authorization ? fingerprint(authorization) : null,
   }

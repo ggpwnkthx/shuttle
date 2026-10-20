@@ -139,6 +139,12 @@ function isAbortError(error: unknown): boolean {
  * The connect budget is the important one: an upstream that does not answer
  * at all is given up on quickly instead of holding the request until the
  * header budget is over.
+ *
+ * The upload and the body budget are *idle* budgets: they measure the time
+ * between two events, not the total duration of the phase. A client that
+ * uploads slowly, or an upstream that streams server sent events for hours,
+ * is not cut off as long as it keeps making progress. A client or an
+ * upstream that stops making progress is cut off after the budget.
  */
 export async function forwardRequest(options: ForwardOptions): Promise<ForwardResult> {
   const started = Date.now()
@@ -180,7 +186,19 @@ export async function forwardRequest(options: ForwardOptions): Promise<ForwardRe
     if (timer) clearTimeout(timer)
   }
 
+  /**
+   * The upload budget: the time the client may take between two chunks of
+   * the request body. It is rearmed on every chunk, so a slow upload that
+   * keeps making progress is not cut off, and a client that stops sending
+   * is.
+   */
   let uploadTimer: Timer | undefined = arm(timeouts.bodyMs, 'upload')
+  const rearmUpload = (): void => {
+    if (answered) return
+    disarm(uploadTimer)
+    uploadTimer = arm(timeouts.bodyMs, 'upload')
+  }
+
   let connectTimer: Timer | undefined
   let headerTimer: Timer | undefined
   let bodyTimer: Timer | undefined
@@ -196,6 +214,10 @@ export async function forwardRequest(options: ForwardOptions): Promise<ForwardRe
   })
   void sent.then(() => {
     if (answered) return
+    // The body reached the upstream: the upload budget is over, the
+    // upstream has to start answering now.
+    disarm(uploadTimer)
+    uploadTimer = undefined
     connectTimer = arm(timeouts.connectMs, 'connect')
   })
 
@@ -207,8 +229,8 @@ export async function forwardRequest(options: ForwardOptions): Promise<ForwardRe
   if (request.body) {
     body =
       maxBodyBytes > 0
-        ? limitBodyStream(request.body, maxBodyBytes, markSent, requestBytes)
-        : trackBodyStream(request.body, markSent, requestBytes)
+        ? limitBodyStream(request.body, maxBodyBytes, markSent, requestBytes, rearmUpload)
+        : trackBodyStream(request.body, markSent, requestBytes, rearmUpload)
   } else {
     // A request without a body is sent right away.
     markSent()
@@ -239,14 +261,21 @@ export async function forwardRequest(options: ForwardOptions): Promise<ForwardRe
     // The response arrived, its body has to start.
     headerTimer = arm(timeouts.headersMs, 'headers')
 
-    let first = true
     const streamed = response.body.pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({
         transform(chunk, controller) {
-          if (first) {
-            first = false
+          if (headerTimer) {
+            // The body of the response started: the header budget is over.
             disarm(headerTimer)
             headerTimer = undefined
+            // The body budget is an idle budget: it is rearmed on every
+            // chunk, so a long stream that keeps making progress lives, and
+            // a stream that stops making progress is cut off.
+            bodyTimer = arm(timeouts.bodyMs, 'body')
+          } else if (bodyTimer) {
+            // The stream is still making progress: the idle budget starts
+            // again.
+            disarm(bodyTimer)
             bodyTimer = arm(timeouts.bodyMs, 'body')
           }
           responseBytes.value += chunk.byteLength

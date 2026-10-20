@@ -28,8 +28,10 @@ export interface HarnessOptions {
   accessUnavailable?: boolean
   /** CIDR ranges whose forwarding headers are trusted. */
   trustedProxies?: string[]
-  /** The number of requests a single caller may make in a window. */
+  /** The number of requests a single caller may make to one route in a window. */
   rateLimitMax?: number
+  /** The number of requests a single caller may make over all the routes. */
+  rateLimitGlobalMax?: number
   /** The number of login attempts a single caller may make in a window. */
   loginRateLimitMax?: number
   /** The number of websocket connections that may be open at the same time. */
@@ -224,6 +226,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     websocketHandshakeTimeoutMs: 5_000,
     rateLimitMax: options.rateLimitMax ?? 0,
     rateLimitWindowMs: 60_000,
+    rateLimitGlobalMax: options.rateLimitGlobalMax ?? 0,
+    rateLimitGlobalWindowMs: 60_000,
     // The tests log in a lot, the limiter of the logins would get in the way.
     loginRateLimitMax: options.loginRateLimitMax ?? 1_000,
     loginRateLimitWindowMs: 60_000,

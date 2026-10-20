@@ -192,11 +192,27 @@ const EnvSchema = z.object({
    */
   SHUTTLE_WS_HANDSHAKE_TIMEOUT_MS: intEnv(10_000, { min: 100 }),
   /**
-   * The number of requests a single caller may make in a window.
+   * The number of requests a single caller may make to *one route* in a
+   * window.
+   *
+   * The budget is per route: a caller that is busy on one route does not
+   * spend the budget of the other ones. The limit of the caller over all
+   * the routes is `SHUTTLE_RATE_LIMIT_GLOBAL_MAX`.
+   *
    * A limit of zero disables the limiter.
    */
   SHUTTLE_RATE_LIMIT_MAX: intEnv(0),
   SHUTTLE_RATE_LIMIT_WINDOW_MS: intEnv(60_000, { min: 1_000 }),
+  /**
+   * The number of requests a single caller may make over *all* the routes
+   * in a window.
+   *
+   * It is the protection against a flood: the per route limiter alone
+   * would let a caller make the budget of every route. A limit of zero
+   * disables the limiter.
+   */
+  SHUTTLE_RATE_LIMIT_GLOBAL_MAX: intEnv(0),
+  SHUTTLE_RATE_LIMIT_GLOBAL_WINDOW_MS: intEnv(60_000, { min: 1_000 }),
   /**
    * The number of login attempts a single caller may make in a window.
    */
@@ -368,6 +384,8 @@ export function readEnv(env: Env = process.env): RuntimeOptions {
     websocketHandshakeTimeoutMs: parsed.SHUTTLE_WS_HANDSHAKE_TIMEOUT_MS,
     rateLimitMax: parsed.SHUTTLE_RATE_LIMIT_MAX,
     rateLimitWindowMs: parsed.SHUTTLE_RATE_LIMIT_WINDOW_MS,
+    rateLimitGlobalMax: parsed.SHUTTLE_RATE_LIMIT_GLOBAL_MAX,
+    rateLimitGlobalWindowMs: parsed.SHUTTLE_RATE_LIMIT_GLOBAL_WINDOW_MS,
     loginRateLimitMax: parsed.SHUTTLE_LOGIN_RATE_LIMIT_MAX,
     loginRateLimitWindowMs: parsed.SHUTTLE_LOGIN_RATE_LIMIT_WINDOW_MS,
     trustedProxies: parsed.SHUTTLE_TRUSTED_PROXIES,

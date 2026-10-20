@@ -31,9 +31,9 @@ everything that is not listed here is not.
 | Authentication | OpenID Connect: browser login with PKCE, bearer tokens for API clients, four modes that decide predictably which credential a route accepts |
 | Authorization | The access service decides who may use a workspace. Shuttle asks and fails closed, it never decides on its own |
 | Proxying | Streamed request and response bodies, server sent events, uploads, timeouts, body limits, websockets |
-| Header policy | Hop-by-hop and spoofable headers are removed, identity headers are written by the gateway, forwarding headers are only trusted from known proxies |
+| Header policy | Hop-by-hop and spoofable headers are removed in both directions, the cookies of the gateway never leave it, identity headers are written by the gateway, forwarding headers are only trusted from known proxies |
 | Sessions | Server side sessions in an in-process store or in a Redis compatible store, selected by the scheme of a url |
-| Limits | A bound on the requests of a caller, on the login attempts and on the number of open websocket connections |
+| Limits | A bound on the requests of a caller per route and over all the routes, on the login attempts and on the number of open websocket connections |
 | Cross site requests | Requests of a browser that come from another site are refused when they change the state of an upstream |
 | Identity | The identity the gateway writes into the headers is signed, so an upstream can verify that the request went through the gateway |
 | Operations | Health and readiness probes, Prometheus metrics, structured logs with redaction, hot reload of the configuration, graceful shutdown |
@@ -360,6 +360,12 @@ server that the replicas share when `SHUTTLE_SHARED_STATE_URL` names one. A
 cache that is not reachable is skipped, never trusted: the decision is asked
 for again.
 
+The cache is the price of not asking the access service for every single
+request, and it has a cost: a permission that is revoked stays valid for at
+most the lifetime of the cache. A deployment that cannot afford that window
+sets `SHUTTLE_ACCESS_CACHE_TTL_MS=0` and asks the access service for every
+request.
+
 Workspace identifiers are treated as opaque UUIDs: anything that is not an
 RFC 4122 UUID is rejected with `400` before the access service is consulted.
 
@@ -386,7 +392,9 @@ not available to it.
 The status code of an answer tells what happened: `413` for a body that is too
 large, `504` for a budget that ran out, `502` for an upstream that could not
 be reached, and `499` for a request the client aborted before the upstream
-answered.
+answered. The message of a `502` names no internal host and no internal
+port: the details are in the log, the caller learns that the upstream could
+not be reached.
 
 ### Redirects
 
@@ -424,6 +432,13 @@ everything up to the response headers: the upstream has to start answering
 within `connectMs`. A budget that runs out aborts the request and answers
 with `504`.
 
+The upload and the body budget are **idle** budgets: they measure the time
+between two events, not the total duration of the phase. A client that
+uploads slowly, or an upstream that streams server sent events for hours, is
+not cut off as long as it keeps making progress. A client or an upstream
+that stops making progress is cut off after the budget. The connect and the
+headers budget are total budgets: they bound a phase that has one end.
+
 The connect budget is the one that matters when an upstream is down: an
 upstream that does not answer at all is given up on after `connectMs` instead
 of holding the request until the header budget is over. It is also the one
@@ -437,22 +452,54 @@ field, see [Defaults](#defaults).
 
 | Header group | Behaviour |
 | --- | --- |
-| Hop-by-hop headers | Always removed |
-| `x-shuttle-*`, `x-forwarded-user`, `x-remote-user`, … | Always removed, so clients cannot spoof an identity |
+| Hop-by-hop headers | Always removed, in the request and in the answer |
+| `x-shuttle-*`, `x-forwarded-user`, `x-remote-user`, … | Always removed from the request, so clients cannot spoof an identity |
+| `x-shuttle-*` in the answer | Always removed, so an upstream cannot put an identity into the answer of the gateway |
 | `x-forwarded-for`, `x-forwarded-proto`, `x-forwarded-host` | Only honoured when the peer is listed in `trustedProxies`, otherwise the gateway writes its own values |
 | `x-forwarded-port`, `x-real-ip` | Always removed from the request, the gateway writes `x-real-ip` itself |
 | `x-shuttle-user`, `x-shuttle-email`, `x-shuttle-roles`, `x-shuttle-workspace` | Written by the gateway after the caller was authenticated |
+| `cookie` | The cookies of the gateway are removed, the cookies of the application are kept |
+| `set-cookie` in the answer | The cookies of the gateway are removed, the cookies of the application are kept |
 | `x-request-id` | Written by the gateway, taken over from the client when it is a valid identifier |
 
 `x-forwarded-for` is the chain of the addresses the request passed through:
 the gateway appends the address of its peer to the chain it received. The
-client itself is the left-most entry of the chain, that is the address
-`x-real-ip` carries.
+address of the client is the **right-most entry of the chain that is not a
+trusted proxy**, and that is the address `x-real-ip` carries.
+
+The chain is read from the right on purpose. A client can send its own
+`x-forwarded-for` header, and it can only add entries on the **left** of
+the chain: the entries on the right are the ones the proxies added. A
+gateway that took the left-most entry would let a client choose the
+address it is attributed to, and with it the key of the rate limiter. The
+entries a client injected are dropped from the chain that is forwarded
+upstream.
+
+A trusted proxy has to **append** the address it saw to the chain it
+received, not pass the chain of the client through unchanged. A proxy that
+passes it through hands the client the control of the address the gateway
+attributes to it, and no algorithm on the side of the gateway can tell the
+difference.
 
 The list of stripped headers and the names of the identity headers are part of
 the security invariant of the gateway and are therefore **not** configurable.
 The upstream must only be reachable from the gateway, because these headers
 are trusted implicitly.
+
+### The cookies of the gateway
+
+The session cookie of the gateway is a **credential of the caller**: whoever
+holds it is the caller. It is therefore never forwarded to an upstream, and
+an upstream cannot write it either.
+
+| Direction | Rule |
+| --- | --- |
+| Request | The cookies of the gateway are removed, the cookies of the application are kept |
+| Response | A `Set-Cookie` of the gateway is removed, the cookies of the application are kept |
+
+Without that, an upstream could collect the session id of the callers it
+sees and replay it against the gateway, and it could plant a session id of
+its own choice in the browser of a caller.
 
 ### The identity signature
 
@@ -461,26 +508,33 @@ gateway. The gateway signs the identity it writes, so an upstream that wants
 to be sure can verify the signature:
 
 ```
-x-shuttle-signature: v2=<hex hmac sha256>
+x-shuttle-signature: v3=<hex hmac sha256>
 ```
 
 The signature covers the identity **and** the request it belongs to, so it
 cannot be moved to another request or to another route:
 
 ```
-["v2", <method>, <path>, <query>, <host>, <subject>, <workspaceId>, <email>, <roles, sorted>]
+["v3", <method>, <path>, <query>, <host>, <subject>, <workspaceId>, <email>, <roles, sorted>]
 ```
 
 The payload is a json array: the escaping of json keeps every value in its
 own field, so a value that contains a newline, a comma or a quote cannot be
 moved from one field into another.
 
-The query string and the host are part of the payload since `v2`. A `v1`
-signature only bound the method and the path, so it could be replayed onto
-another query string of the same path (`?admin=true` on a path that was
-signed without it). An upstream that verified a `v1` signature has to
-verify a `v2` signature now; the version is part of the value, so the two
-cannot be confused.
+The signed request is the request **as the upstream receives it**: the path
+and the query string of the url the gateway fetches, and the host the
+client used, which the gateway writes into `x-forwarded-host`. An upstream
+verifies the signature with the values it has, without knowing anything
+about the routing of the gateway.
+
+The version is part of the value, so two formats cannot be confused:
+
+| Version | Bound | Note |
+| --- | --- | --- |
+| `v1` | method, path | A signature could be replayed onto another query string of the same path (`?admin=true` on a path that was signed without it) |
+| `v2` | method, path, query, host | The path and the host were the ones of the *client*, which an upstream cannot reconstruct, so the verification did not work |
+| `v3` | method, path, query, host | The values are the ones the upstream receives, so the verification works |
 
 The key is derived from `SHUTTLE_SESSION_SECRET`, so the secret that signs
 the login state is not used for the signature itself. An upstream verifies
@@ -491,7 +545,7 @@ import { createHmac } from 'node:crypto'
 
 const key = createHmac('sha256', secret).update('shuttle-identity-signature-v1').digest()
 const payload = JSON.stringify([
-  'v2',
+  'v3',
   method,
   path,
   query,
@@ -502,8 +556,14 @@ const payload = JSON.stringify([
   [...roles].sort(),
 ])
 const expected = createHmac('sha256', key).update(payload).digest('hex')
-const valid = signature === `v2=${expected}`
+const valid = signature === `v3=${expected}`
 ```
+
+The roles of the payload are the roles of the `x-shuttle-roles` header: a
+role that contains a comma would make the comma separated list of the header
+ambiguous, so it is not written, and it is not signed either. The complete
+list of the roles is handed to the access service unfiltered, so an upstream
+that needs the exact roles asks the access service.
 
 `src/auth/identity.ts` is the reference implementation, it exports
 `deriveIdentityKey`, `canonicalIdentityPayload` and `verifyIdentity`.
@@ -520,6 +580,10 @@ gateway refuses those requests:
 
 * a request with `Sec-Fetch-Site: cross-site` that changes the state of an
   upstream (`POST`, `PUT`, `PATCH`, `DELETE`) is refused with `403`
+* a request with `Sec-Fetch-Site: same-site` and an `Origin` that is not the
+  origin of the gateway is refused as well when it changes the state of an
+  upstream: `same-site` means the same *registrable domain*, not the same
+  origin, so a sibling subdomain is a different origin
 * a request with an `Origin` that is not the origin of the gateway is refused
   when it changes the state of an upstream
 * a **navigation** from another site (a link in an e-mail) is allowed, because
@@ -562,7 +626,8 @@ that is meant to change something. Such an endpoint belongs behind a `POST`.
 
 | Limit | Variable | Default | Effect when it is reached |
 | --- | --- | --- | --- |
-| Requests of a caller | `SHUTTLE_RATE_LIMIT_MAX` | `0` (off) | `429` with a `Retry-After` header |
+| Requests of a caller to one route | `SHUTTLE_RATE_LIMIT_MAX` | `0` (off) | `429` with a `Retry-After` header |
+| Requests of a caller over all the routes | `SHUTTLE_RATE_LIMIT_GLOBAL_MAX` | `0` (off) | `429` with a `Retry-After` header |
 | Login attempts of a caller | `SHUTTLE_LOGIN_RATE_LIMIT_MAX` | `30` | `429` with a `Retry-After` header |
 | Open websocket connections | `SHUTTLE_WS_MAX_CONNECTIONS` | `1000` | `503`, the handshake is refused |
 | Request body | `SHUTTLE_MAX_BODY_BYTES` | `10485760` | `413` |
@@ -570,7 +635,18 @@ that is meant to change something. Such an endpoint belongs behind a `POST`.
 The request and the login limiters count per address of the caller, in the
 window of `SHUTTLE_RATE_LIMIT_WINDOW_MS` (60 seconds). The address is the
 one the trusted proxies report, so a caller behind a load balancer is counted
-once and not once per proxy.
+once and not once per proxy. The address of the caller is the right-most
+entry of the forwarded chain that is not a trusted proxy, so a client cannot
+choose it and escape the limit.
+
+The request limiter has two tiers:
+
+* the **per route** budget (`SHUTTLE_RATE_LIMIT_MAX`) is counted per route,
+  so a caller that is busy on one route does not spend the budget of the
+  other ones;
+* the **global** budget (`SHUTTLE_RATE_LIMIT_GLOBAL_MAX`) is counted over
+  all the routes at once. It is the protection against a flood: the per
+  route budget alone would let a caller make the budget of every route.
 
 The windows live in the memory of the process, so every replica of a
 deployment counts on its own. A deployment with more than one replica points
@@ -744,8 +820,10 @@ finish, after which the remaining connections are closed.
 | `SHUTTLE_WS_IDLE_TIMEOUT_SECONDS` | `120` | Idle timeout of the websockets of the runtime |
 | `SHUTTLE_WS_MAX_CONNECTIONS` | `1000` | Number of websocket connections that may be open at the same time, `0` means no limit |
 | `SHUTTLE_WS_HANDSHAKE_TIMEOUT_MS` | `10000` | How long the gateway waits for the handshake of the upstream |
-| `SHUTTLE_RATE_LIMIT_MAX` | `0` (off) | Number of requests a single caller may make in a window, `0` disables the limiter |
+| `SHUTTLE_RATE_LIMIT_MAX` | `0` (off) | Number of requests a single caller may make to one route in a window, `0` disables the limiter |
 | `SHUTTLE_RATE_LIMIT_WINDOW_MS` | `60000` | Length of the window of the request limiter |
+| `SHUTTLE_RATE_LIMIT_GLOBAL_MAX` | `0` (off) | Number of requests a single caller may make over all the routes in a window, `0` disables the limiter |
+| `SHUTTLE_RATE_LIMIT_GLOBAL_WINDOW_MS` | `60000` | Length of the window of the global request limiter |
 | `SHUTTLE_LOGIN_RATE_LIMIT_MAX` | `30` | Number of login attempts a single caller may make in a window |
 | `SHUTTLE_LOGIN_RATE_LIMIT_WINDOW_MS` | `60000` | Length of the window of the login limiter |
 | `SHUTTLE_ALLOWED_ORIGINS` | – | Origins that may make requests to the gateway, in addition to the origin of the gateway itself |
@@ -846,7 +924,7 @@ denied.
 
 ```
 src/
-  auth/         OIDC client, sessions, access service client, identity signature, crypto helpers
+  auth/         OIDC client, sessions, access service client, identity signature, the cookies of the gateway, crypto helpers
   auth/session/ the session port, the in-process and the Redis backend
   config/       configuration schema, matcher, atomic configuration store
   gateway/      request dispatch, header policy, HTTP proxy, websocket bridge, rate limiter, cross site guard

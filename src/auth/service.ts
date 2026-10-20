@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { deleteCookie, getCookie, getSignedCookie, setCookie, setSignedCookie } from 'hono/cookie'
+import { SESSION_COOKIE_NAME, STATE_COOKIE_NAME } from './cookies'
 import { OidcError, type OidcClient } from './oidc'
 import { SessionStoreError, type SessionRecord, type SessionStore } from './session'
 import type { AuthMode } from '../config/schema'
@@ -35,8 +36,8 @@ interface LoginState {
   exp: number
 }
 
-const DEFAULT_SESSION_COOKIE = 'shuttle_session'
-const DEFAULT_STATE_COOKIE = 'shuttle_oidc_state'
+const DEFAULT_SESSION_COOKIE = SESSION_COOKIE_NAME
+const DEFAULT_STATE_COOKIE = STATE_COOKIE_NAME
 
 /** The path every cookie of the gateway is scoped to. */
 const COOKIE_PATH = '/'
@@ -298,11 +299,24 @@ export class AuthService {
 
 }
 
-/** Only relative, single-slash paths are accepted as post-login targets. */
+/**
+ * Only relative, single-slash paths are accepted as post-login targets.
+ *
+ * The value is the target of a `Location` header, so a control character
+ * in it would be a header injection, and a target that a browser resolves
+ * to another origin would be an open redirect. Both are refused.
+ */
 function resolveRedirect(value: string | undefined | null): string {
   if (!value) return '/'
   if (!value.startsWith('/')) return '/'
   if (value.startsWith('//')) return '/'
   if (value.includes('\\')) return '/'
+  // A control character is never part of a path. Browsers strip tabs and
+  // newlines from a url before they resolve it, so `/\t/evil.com` would
+  // become `//evil.com` and leave the site.
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) return '/'
+  }
   return value
 }

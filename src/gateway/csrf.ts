@@ -152,7 +152,23 @@ export function checkCrossSite(options: CrossSiteOptions): CrossSiteCheck {
       }
       return { allowed: true }
     }
-    if (fetchSite !== 'same-origin' && fetchSite !== 'same-site' && fetchSite !== 'none') {
+    if (fetchSite === 'same-site') {
+      // `same-site` means the same *registrable domain*, not the same
+      // origin: a sibling subdomain is `same-site` but a different origin.
+      // The `Origin` header is the one that says which origin it was, so a
+      // request from a sibling subdomain is a cross origin request and it
+      // is refused like one when it changes the state of an upstream.
+      if (origin !== '' && !originAllowed) {
+        if (unsafe) {
+          return { allowed: false, reason: `the origin "${origin}" is not allowed` }
+        }
+        if (options.strict) {
+          return { allowed: false, reason: `the origin "${origin}" is not allowed` }
+        }
+      }
+      return { allowed: true }
+    }
+    if (fetchSite !== 'same-origin' && fetchSite !== 'none') {
       // An unknown value is not a reason to refuse a request.
       return { allowed: true }
     }

@@ -26,23 +26,47 @@ export interface IdentityClaims {
 
 export interface SignedRequest {
   method: string
-  /** The path of the request, without the query string. */
+  /**
+   * The path of the request, as the upstream received it.
+   *
+   * The path the gateway forwards is the path of the request with the base
+   * path of the upstream in front of it, so this is the path the upstream
+   * sees in its own request line. An upstream that strips a prefix of its
+   * own cannot verify the signature of the request it receives.
+   */
   path: string
-  /** The query string of the request, with its leading `?`. */
+  /**
+   * The query string of the request, with its leading `?`.
+   *
+   * It is the query string the upstream received, so the empty string when
+   * the request had none.
+   */
   query: string
-  /** The host of the request. */
+  /**
+   * The host the client used to reach the gateway.
+   *
+   * It is the value of the `x-forwarded-host` header the gateway writes, so
+   * an upstream reads it from there.
+   */
   host: string
 }
 
 /**
  * The version of the signature format.
  *
- * `v2` binds the whole request target: the method, the path, the query
+ * `v3` binds the whole request target: the method, the path, the query
  * string and the host. `v1` only bound the method and the path, so a
  * signature could be replayed onto another query string of the same path
  * (`?admin=true` on a path that was signed without it).
+ *
+ * `v2` bound the path and the query string of the request as the *client*
+ * wrote them. An upstream cannot reconstruct those: it sees the path of
+ * the *upstream*, with the base path of the upstream in front of it, and it
+ * sees the host of the upstream, not the host of the gateway. `v3` binds
+ * the values the upstream actually received, so the verification works
+ * with the headers the upstream has.
  */
-export const IDENTITY_SIGNATURE_VERSION = 'v2'
+export const IDENTITY_SIGNATURE_VERSION = 'v3'
 
 /** The header the signature is written to. */
 export const IDENTITY_SIGNATURE_HEADER = 'x-shuttle-signature'
@@ -65,6 +89,7 @@ export function deriveIdentityKey(secret: string): Buffer {
  * would make the list ambiguous.
  */
 export function isAmbiguousRole(role: string): boolean {
+  if (role.length === 0) return true
   for (const character of role) {
     if (character === ',') return true
     const code = character.codePointAt(0) ?? 0
@@ -73,6 +98,19 @@ export function isAmbiguousRole(role: string): boolean {
     if (code < 0x20 || code === 0x7f) return true
   }
   return false
+}
+
+/**
+ * The roles that are written into the `x-shuttle-roles` header.
+ *
+ * A role that would make the list ambiguous is dropped: the list is
+ * separated by commas, so a role that contains a comma cannot be told apart
+ * from two roles. The complete list of the roles is handed to the access
+ * service unfiltered, and the signature covers exactly the roles of the
+ * header, so an upstream knows the roles it was given.
+ */
+export function filterRoles(roles: string[]): string[] {
+  return roles.filter((role) => !isAmbiguousRole(role))
 }
 
 /**
@@ -103,7 +141,7 @@ export function canonicalIdentityPayload(
 /**
  * Signs the identity of a request.
  *
- * The result is `v2=<hex>`, the version is part of the value so the format
+ * The result is `v3=<hex>`, the version is part of the value so the format
  * can change later without breaking the verification.
  */
 export function signIdentity(

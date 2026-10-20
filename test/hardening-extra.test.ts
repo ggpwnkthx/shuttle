@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { truncateCloseReason } from '../src/gateway/websocket'
-import { buildUpstreamHeaders, resolveForwarding } from '../src/gateway/headers'
+import { buildUpstreamHeaders, resolveForwarding, writtenIdentity } from '../src/gateway/headers'
 import { createHarness, WORKSPACE_ID, type Harness } from './helpers/harness'
 
 /**
@@ -52,13 +52,14 @@ describe('the roles of the caller', () => {
         peerAddress: '127.0.0.1',
         peerTrusted: false,
         clientIp: '127.0.0.1',
+        chain: ['127.0.0.1'],
         proto: 'http',
         host: 'api.shuttle.test',
       },
-      identity: {
+      identity: writtenIdentity({
         subject: 'alice',
         roles: ['admin', 'member', 'a,b'],
-      },
+      }),
     })
     expect(headers.get('x-shuttle-roles')).toBe('admin,member')
   })
@@ -103,6 +104,23 @@ describe('the forwarding headers', () => {
       tls: true,
     })
     expect(forwarding.proto).toBe('https')
+  })
+
+  test('a client cannot choose the address the gateway attributes to it', () => {
+    // A client that sends its own `x-forwarded-for` header can only add
+    // entries on the left of the chain. The address the gateway uses is the
+    // right-most entry that is not a trusted proxy, so the entries a
+    // client added are ignored.
+    const forwarding = resolveForwarding({
+      peerAddress: '10.1.2.3',
+      incoming: new Headers({ 'x-forwarded-for': '9.9.9.9, 1.2.3.4' }),
+      trustedProxies: ['10.0.0.0/8'],
+      tls: false,
+    })
+    expect(forwarding.clientIp).toBe('1.2.3.4')
+    // The chain that is forwarded upstream starts at the client: the entry
+    // the client injected is not part of it.
+    expect(forwarding.chain).toEqual(['1.2.3.4', '10.1.2.3'])
   })
 })
 

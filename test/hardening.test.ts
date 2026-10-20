@@ -247,7 +247,7 @@ describe('the decision cache of the access service', () => {
 })
 
 describe('the forwarding headers', () => {
-  test('the client is the first entry of the forwarded chain', async () => {
+  test('the client is the entry of the forwarded chain that is not a proxy', async () => {
     const trusted = await createHarness({
       trustedProxies: ['127.0.0.1/32'],
       routes: ({ upstreamA }) => [
@@ -267,10 +267,12 @@ describe('the forwarding headers', () => {
         },
       })
       const body = (await response.json()) as { headers: Record<string, string> }
-      // The chain keeps its order and the peer is appended to it.
-      expect(body.headers['x-forwarded-for']).toBe('203.0.113.7, 198.51.100.9, 127.0.0.1')
-      // The client is the left-most entry of the chain.
-      expect(body.headers['x-real-ip']).toBe('203.0.113.7')
+      // The chain starts at the client and the peer is appended to it. The
+      // entries a client injected on the left of the chain are not part of
+      // it: only a proxy can add an entry on the right.
+      expect(body.headers['x-forwarded-for']).toBe('198.51.100.9, 127.0.0.1')
+      // The client is the entry of the chain that is not a trusted proxy.
+      expect(body.headers['x-real-ip']).toBe('198.51.100.9')
     } finally {
       await trusted.stop()
     }

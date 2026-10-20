@@ -243,6 +243,69 @@ describe('server sent events', () => {
     expect(received).toContain('upstream-a')
   })
 
+  test('a stream that keeps making progress is not cut off', async () => {
+    // The body budget is an *idle* budget: it measures the time between
+    // two events, not the total duration of the stream. A stream that
+    // keeps sending is not cut off, even when it lives longer than the
+    // budget.
+    const local = await createHarness({
+      trustedProxies: [],
+      routes: () => [
+        {
+          id: 'slow-stream',
+          match: { host: 'stream.shuttle.test', path: '/' },
+          upstream: 'http://127.0.0.1:9',
+          auth: { mode: 'none' },
+        },
+      ],
+    })
+    const upstream = Bun.serve({
+      port: 0,
+      fetch() {
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            for (let index = 0; index < 8; index++) {
+              await Bun.sleep(80)
+              controller.enqueue(new TextEncoder().encode(`tick ${index}\n`))
+            }
+            controller.close()
+          },
+        })
+        return new Response(stream, { headers: { 'content-type': 'text/event-stream' } })
+      },
+    })
+    try {
+      const withUpstream = await createHarness({
+        trustedProxies: [],
+        routes: () => [
+          {
+            id: 'slow-stream',
+            match: { host: 'stream.shuttle.test', path: '/' },
+            upstream: `http://127.0.0.1:${upstream.port}`,
+            auth: { mode: 'none' },
+            // The budget is far shorter than the life of the stream, but
+            // the stream never stays silent for that long.
+            timeouts: { bodyMs: 300 },
+          },
+        ],
+      })
+      try {
+        const response = await fetch(`${withUpstream.gatewayUrl}/`, {
+          headers: { host: 'stream.shuttle.test' },
+        })
+        expect(response.status).toBe(200)
+        const text = await response.text()
+        // The whole stream arrived: it was never cut off.
+        expect(text).toContain('tick 7')
+        expect(text.split('tick').length - 1).toBe(8)
+      } finally {
+        await withUpstream.stop()
+      }
+    } finally {
+      await local.stop()
+      upstream.stop(true)
+    }
+  })
 })
 
 describe('the budgets of the upstream exchange', () => {

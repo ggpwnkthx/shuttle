@@ -1,5 +1,6 @@
 import { ipInRanges } from '../util/net'
-import { IDENTITY_SIGNATURE_HEADER } from '../auth/identity'
+import { IDENTITY_SIGNATURE_HEADER, filterRoles } from '../auth/identity'
+import { isGatewaySetCookie, stripGatewayCookies } from '../auth/cookies'
 
 /**
  * Inbound headers that are always dropped, so a client can never spoof an
@@ -42,6 +43,27 @@ const HOP_BY_HOP_HEADERS = [
   'upgrade',
 ]
 
+/**
+ * The response headers that are never forwarded to the caller.
+ *
+ * The hop-by-hop headers belong to the connection between the gateway and
+ * the upstream, not to the message. The identity headers are the ones the
+ * gateway writes on a *request*: an upstream that answered with them would
+ * put an identity into the response, where a browser or a client library
+ * could read it and believe it. The forwarding headers are the ones the
+ * gateway writes itself.
+ */
+const STRIPPED_RESPONSE_HEADERS = [
+  ...HOP_BY_HOP_HEADERS,
+  ...Object.values(IDENTITY_REQUEST_HEADERS),
+  IDENTITY_SIGNATURE_HEADER,
+  'x-forwarded-for',
+  'x-forwarded-proto',
+  'x-forwarded-host',
+  'x-real-ip',
+  'x-forwarded-port',
+]
+
 export interface ForwardingContext {
   /** Address of the peer that opened the connection. */
   peerAddress: string
@@ -49,6 +71,14 @@ export interface ForwardingContext {
   peerTrusted: boolean
   /** Client address as seen by the gateway. */
   clientIp: string
+  /**
+   * The chain of addresses that is forwarded upstream.
+   *
+   * The chain starts with the address of the client and ends with the
+   * address of the peer of the gateway. The entries a client injected into
+   * the chain it sent are not part of it.
+   */
+  chain: string[]
   /**
    * Protocol used by the client towards the gateway.
    *
@@ -70,6 +100,72 @@ export interface IdentityHeaders {
 }
 
 /**
+ * The identity as it is written into the headers of a request.
+ *
+ * The values are the ones the upstream receives, so an upstream that
+ * reconstructs the claims from the headers it got can verify the signature
+ * of the identity.
+ */
+export interface WrittenIdentity {
+  subject: string
+  email?: string
+  roles: string[]
+  workspaceId?: string
+}
+
+/**
+ * The maximum length of a value of an identity header.
+ *
+ * A subject or an e-mail address that is longer than this is not a name
+ * but an attempt to fill the header buffer of the upstream.
+ */
+const MAX_IDENTITY_VALUE_LENGTH = 512
+
+/**
+ * Makes a value safe to write into a header.
+ *
+ * The control characters are removed: a header cannot carry them, and a
+ * value that carries one would be refused by the runtime instead of being
+ * forwarded. The length is bounded.
+ */
+function safeHeaderValue(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  let out = ''
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) continue
+    out += character
+    if (out.length >= MAX_IDENTITY_VALUE_LENGTH) break
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/**
+ * The identity that is written into the headers of a request.
+ *
+ * The roles that would make the comma separated list of the header
+ * ambiguous are dropped: a role that contains a comma cannot be told apart
+ * from two roles. The complete list of the roles is handed to the access
+ * service unfiltered, and the signature covers exactly the roles of the
+ * header, so an upstream that reconstructs the claims from the headers it
+ * received verifies the signature.
+ */
+export function writtenIdentity(identity: IdentityHeaders): WrittenIdentity {
+  const subject = safeHeaderValue(identity.subject)
+  if (!subject) {
+    throw new Error('the subject of the caller cannot be written into a header')
+  }
+  const email = safeHeaderValue(identity.email)
+  const workspaceId = safeHeaderValue(identity.workspaceId)
+  return {
+    subject,
+    email,
+    roles: filterRoles(identity.roles),
+    workspaceId,
+  }
+}
+
+/**
  * Rebuilds the header set that is forwarded upstream.
  *
  * - hop-by-hop headers are removed
@@ -81,7 +177,7 @@ export interface IdentityHeaders {
 export function buildUpstreamHeaders(options: {
   incoming: Headers
   forwarding: ForwardingContext
-  identity?: IdentityHeaders
+  identity?: WrittenIdentity
   /**
    * The signature of the identity, written next to the identity headers.
    *
@@ -103,15 +199,20 @@ export function buildUpstreamHeaders(options: {
     if (lower === 'x-forwarded-port') continue
     if (lower === 'x-real-ip') continue
     if (STRIPPED_REQUEST_HEADERS.includes(lower)) continue
+    // The session cookie of the gateway is a credential of the caller: an
+    // upstream that receives it can act as the caller against the gateway
+    // itself, and against every other route of it. The cookies of the
+    // application are kept, they belong to the application.
+    if (lower === 'cookie') {
+      const kept = stripGatewayCookies(value)
+      if (kept) headers.set('cookie', kept)
+      continue
+    }
     headers.append(key, value)
   }
 
   // Forwarded information: only trusted when the immediate peer is a trusted proxy.
-  const clientChain = forwarding.peerTrusted
-    ? (incoming.get('x-forwarded-for') ?? '').split(',').map((part) => part.trim()).filter(Boolean)
-    : []
-  const chain = [...clientChain, forwarding.peerAddress].filter(Boolean).join(', ')
-  headers.set('x-forwarded-for', chain)
+  headers.set('x-forwarded-for', forwarding.chain.join(', '))
   headers.set('x-forwarded-proto', forwarding.proto)
   headers.set('x-forwarded-host', forwarding.host)
   headers.set('x-real-ip', forwarding.clientIp)
@@ -126,8 +227,7 @@ export function buildUpstreamHeaders(options: {
     // unfiltered, and the header is only a hint for the upstream. An
     // upstream that needs the exact roles verifies the signature and asks
     // the access service.
-    const roles = identity.roles.filter((role) => !isAmbiguousRole(role))
-    headers.set(names.roles, roles.join(','))
+    headers.set(names.roles, identity.roles.join(','))
     if (identity.workspaceId) headers.set(names.workspace, identity.workspaceId)
     if (signature) headers.set(IDENTITY_SIGNATURE_HEADER, signature)
   }
@@ -136,21 +236,35 @@ export function buildUpstreamHeaders(options: {
 }
 
 /**
- * Reports whether a role would make the list of the roles ambiguous.
+ * Rebuilds the header set that is returned to the caller.
  *
- * The roles are written as a list that is separated by commas, so a role
- * that contains a comma (or a character that is not allowed in a header)
- * would make the list ambiguous.
+ * The upstream is a different trust domain: its response headers are not
+ * forwarded as they are.
+ *
+ * - the hop-by-hop headers are removed
+ * - the identity headers of the gateway are removed, an upstream must not
+ *   be able to put an identity into a response
+ * - the forwarding headers of the gateway are removed, the gateway writes
+ *   its own
+ * - a `Set-Cookie` of the gateway is removed: the upstream must not be able
+ *   to fix the session of the browser to an id of its choice, and to log
+ *   the browser out
  */
-function isAmbiguousRole(role: string): boolean {
-  for (const character of role) {
-    if (character === ',') return true
-    const code = character.codePointAt(0) ?? 0
-    // The control characters and the delete character are not allowed in
-    // the value of a header.
-    if (code < 0x20 || code === 0x7f) return true
+export function buildClientHeaders(upstream: Headers): Headers {
+  const headers = new Headers()
+  const withSetCookie = upstream as Headers & { getSetCookie?: () => string[] }
+  const setCookies = typeof withSetCookie.getSetCookie === 'function' ? withSetCookie.getSetCookie() : []
+  for (const [key, value] of upstream) {
+    const lower = key.toLowerCase()
+    if (lower === 'set-cookie') continue
+    if (STRIPPED_RESPONSE_HEADERS.includes(lower)) continue
+    headers.append(key, value)
   }
-  return false
+  for (const cookie of setCookies) {
+    if (isGatewaySetCookie(cookie)) continue
+    headers.append('set-cookie', cookie)
+  }
+  return headers
 }
 
 /** Computes the forwarding context for a request. */
@@ -171,13 +285,18 @@ export function resolveForwarding(options: {
   // Reading the left-most entry instead would let a client that sends its
   // own `x-forwarded-for` header choose the address the gateway attributes
   // to it, and with it the key of the rate limiter.
-  // The left-most entry of the chain is the original client: every proxy
-  // appends itself on the right, so the first one is the address the client
-  // connected from.
+  const received = peerTrusted
+    ? (forwardedFor ?? '').split(',').map((part) => part.trim()).filter(Boolean)
+    : []
+  const clientIndex = rightmostUntrustedIndex(received, options.trustedProxies)
   const clientIp =
-    peerTrusted && forwardedFor
-      ? (forwardedFor.split(',').map((part) => part.trim()).filter(Boolean).at(0) ?? options.peerAddress)
-      : options.peerAddress
+    clientIndex === -1 ? options.peerAddress : received[clientIndex]!
+  // The chain that is forwarded upstream starts at the client. The entries
+  // on the left of it are the ones a client injected, so they are dropped.
+  const chain = [
+    ...(clientIndex === -1 ? [] : received.slice(clientIndex)),
+    options.peerAddress,
+  ].filter(Boolean)
   const host = options.incoming.get('host') ?? ''
   const forwardedProto = peerTrusted ? options.incoming.get('x-forwarded-proto') : undefined
   // Only the two protocols a browser can use are accepted. A trusted proxy
@@ -192,5 +311,21 @@ export function resolveForwarding(options: {
         : options.tls
           ? 'https'
           : 'http'
-  return { peerAddress: options.peerAddress, peerTrusted, clientIp, proto, host }
+  return { peerAddress: options.peerAddress, peerTrusted, clientIp, chain, proto, host }
+}
+
+/**
+ * The index of the right-most address of a chain that is not a trusted
+ * proxy, or -1 when every entry is a trusted proxy.
+ *
+ * The chain is read from the right, because the entry that was added last
+ * is the closest to the gateway. A client that sends its own
+ * `x-forwarded-for` header can only add entries on the left, so the entries
+ * on the right are the ones the trusted proxies added.
+ */
+function rightmostUntrustedIndex(entries: string[], trustedProxies: string[]): number {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (!ipInRanges(entries[i]!, trustedProxies)) return i
+  }
+  return -1
 }

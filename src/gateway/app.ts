@@ -11,7 +11,7 @@ import { isReservedPath, isUuid, type RouteConfig } from '../config/schema'
 import { matchRoute } from '../config/matcher'
 import { redactUrl } from '../log/logger'
 import type { Runtime } from '../runtime/runtime'
-import { buildUpstreamHeaders, resolveForwarding } from './headers'
+import { buildClientHeaders, buildUpstreamHeaders, resolveForwarding, writtenIdentity } from './headers'
 import { checkCrossSite, checkCrossSiteNavigation } from './csrf'
 import { forwardRequest } from './proxy'
 import { rewriteLocation } from './redirect'
@@ -91,29 +91,44 @@ export function createGatewayApp(
   }
 
   /**
+   * The identity the gateway writes into the headers of a request.
+   *
+   * The roles of the caller are filtered: a role that contains a comma
+   * would make the comma separated list of the header ambiguous, so it is
+   * not written. The complete list is handed to the access service
+   * unfiltered, and the signature covers exactly the roles of the header,
+   * so an upstream can verify it with the values it received.
+   */
+  const identityOf = (
+    principal: Principal,
+    workspaceId: string | undefined
+  ): { subject: string; email?: string; roles: string[]; workspaceId?: string } =>
+    writtenIdentity({
+      subject: principal.subject,
+      email: principal.email,
+      roles: principal.roles,
+      workspaceId,
+    })
+
+  /**
    * The signature of the identity the gateway writes into the headers.
+   *
+   * The signature covers the request *as the upstream receives it*: the
+   * path and the query string of the url the gateway fetches, and the host
+   * the client used, which the gateway writes into `x-forwarded-host`. An
+   * upstream can therefore verify the signature with the values it has,
+   * without knowing anything about the routing of the gateway.
    *
    * An upstream that wants to be sure that the request went through the
    * gateway verifies it with the shared secret.
    */
   const identitySignature = (
-    principal: Principal,
-    workspaceId: string | undefined,
+    identity: { subject: string; email?: string; roles: string[]; workspaceId?: string },
     method: string,
     path: string,
     query: string,
     host: string
-  ): string =>
-    signIdentity(
-      {
-        subject: principal.subject,
-        email: principal.email,
-        roles: principal.roles,
-        workspaceId,
-      },
-      { method, path, query, host },
-      runtime.identityKey
-    )
+  ): string => signIdentity(identity, { method, path, query, host }, runtime.identityKey)
 
   app.use('*', async (c, next) => {
     const requestId = resolveRequestId(c)
@@ -259,12 +274,29 @@ export function createGatewayApp(
       tls: runtime.options.externalProto === 'https',
     })
 
-    const limit = await runtime.rateLimiter.check(forwarding.clientIp)
+    const match = matchRoute(state.routes, host, path)
+    const route: RouteConfig | undefined = match?.route.route
+
+    // The rate limit is per caller *and* per route: a caller that is busy
+    // on one route does not spend the budget of the other routes. The
+    // requests that match no route are counted in a bucket of their own.
+    //
+    // The global limit is the budget of the caller over all the routes. It
+    // is the protection against a flood, and it is the reason the per route
+    // budget can be generous: the sum of the budgets of the routes is
+    // bounded by the global one.
+    const global = await runtime.globalRateLimiter.check(`caller:${forwarding.clientIp}`)
+    const scoped = await runtime.rateLimiter.check(
+      route ? `route:${route.id}:${forwarding.clientIp}` : `none:${forwarding.clientIp}`
+    )
+    // The refusal of either limiter is the refusal of the request. When
+    // both allow it, the per route one carries the time to wait.
+    const limit = global.allowed ? scoped : global
     if (!limit.allowed) {
       logger.warn('the request rate limit was reached', {
         requestId,
         client: forwarding.clientIp,
-        routeId: null,
+        routeId: route?.id ?? null,
       })
       runtime.metrics.recordRateLimit(forwarding.clientIp)
       return new Response(
@@ -279,11 +311,9 @@ export function createGatewayApp(
       )
     }
 
-    const match = matchRoute(state.routes, host, path)
-    if (!match) {
+    if (!route || !match) {
       return jsonError(404, 'no_route', 'no route matches this request')
     }
-    const route: RouteConfig = match.route.route
 
     // ---------------------------------------------------------------- auth
     //
@@ -395,19 +425,23 @@ export function createGatewayApp(
         return jsonError(500, 'websocket_unavailable', 'websocket support is not available')
       }
       const upstreamUrl = buildWebsocketUrl(route.upstream, path, url.search)
+      // The signature covers the request as the upstream receives it: the
+      // path and the query string of the websocket url, and the host the
+      // client used.
+      const upstreamTarget = new URL(upstreamUrl)
+      const identity = principal ? identityOf(principal, workspaceId) : undefined
       const headers = buildUpstreamHeaders({
         incoming: c.req.raw.headers,
         forwarding,
-        identity: principal
-          ? {
-              subject: principal.subject,
-              email: principal.email,
-              roles: principal.roles,
-              workspaceId,
-            }
-          : undefined,
-        signature: principal
-          ? identitySignature(principal, workspaceId, method, path, url.search, host)
+        identity,
+        signature: identity
+          ? identitySignature(
+              identity,
+              method,
+              upstreamTarget.pathname,
+              upstreamTarget.search,
+              forwarding.host
+            )
           : undefined,
       })
       const forwardHeaders: Record<string, string> = {}
@@ -498,22 +532,6 @@ export function createGatewayApp(
     }
 
     // ----------------------------------------------------------------- http
-    const headers = buildUpstreamHeaders({
-      incoming: c.req.raw.headers,
-      forwarding,
-      identity: principal
-        ? {
-            subject: principal.subject,
-            email: principal.email,
-            roles: principal.roles,
-            workspaceId,
-          }
-        : undefined,
-      signature: principal
-        ? identitySignature(principal, workspaceId, method, path, url.search, host)
-        : undefined,
-    })
-
     // Every budget of the route wins over the budget of the configuration,
     // field by field: a route that only sets `connectMs` keeps the header
     // and the body budget of the configuration.
@@ -523,6 +541,25 @@ export function createGatewayApp(
     const maxBodyBytes =
       route.maxBodyBytes ?? state.config.defaults.maxBodyBytes ?? runtime.options.maxBodyBytes
     const upstreamUrl = buildUpstreamUrl(route.upstream, path, url.search)
+    // The signature covers the request as the upstream receives it: the
+    // path and the query string of the url the gateway fetches, and the
+    // host the client used. An upstream verifies it with the values it has.
+    const upstreamTarget = new URL(upstreamUrl)
+    const identity = principal ? identityOf(principal, workspaceId) : undefined
+    const headers = buildUpstreamHeaders({
+      incoming: c.req.raw.headers,
+      forwarding,
+      identity,
+      signature: identity
+        ? identitySignature(
+            identity,
+            method,
+            upstreamTarget.pathname,
+            upstreamTarget.search,
+            forwarding.host
+          )
+        : undefined,
+    })
 
     const result = await forwardRequest({
       request: c.req.raw,
@@ -562,11 +599,24 @@ export function createGatewayApp(
       if (status === 499) {
         return new Response(null, { status: 499 })
       }
-      return jsonError(status, status === 413 ? 'payload_too_large' : 'bad_gateway', result.error.message)
+      // The message of a network error names the internal host and the port
+      // of the upstream, so it is not given to the caller: it is in the
+      // log. The other messages are the ones of the gateway itself.
+      if (status === 413) {
+        return jsonError(413, 'payload_too_large', result.error.message)
+      }
+      if (status === 504) {
+        return jsonError(504, 'gateway_timeout', result.error.message)
+      }
+      return jsonError(502, 'bad_gateway', 'the upstream could not be reached')
     }
 
     const response = result.response!
-    const responseHeaders = new Headers(response.headers)
+    // The headers of the upstream are not forwarded as they are: the
+    // upstream is a different trust domain, and it must not be able to
+    // write an identity header, a forwarding header or a cookie of the
+    // gateway into the answer of the gateway.
+    const responseHeaders = buildClientHeaders(response.headers)
     responseHeaders.set('x-request-id', requestId)
 
     // The redirects of the upstream are rewritten so that they stay inside
