@@ -92,10 +92,6 @@ export interface RedisSessionStoreOptions extends Partial<SessionLifetime> {
   client: RedisSessionCommands
   /** Prefix of every key, so several environments can share one server. */
   keyPrefix?: string
-  /** How often a command is retried while the connection is not ready. */
-  connectAttempts?: number
-  /** The wait between two attempts; injected so the domain stays portable. */
-  sleep?: (ms: number) => Promise<void>
 }
 
 /**
@@ -109,8 +105,6 @@ export class RedisSessionStore implements SessionStore {
   #client: RedisSessionCommands
   #prefix: string
   #lifetime: SessionLifetime
-  #connectAttempts: number
-  #sleep: (ms: number) => Promise<void>
 
   constructor(options: RedisSessionStoreOptions) {
     this.#client = options.client
@@ -120,8 +114,6 @@ export class RedisSessionStore implements SessionStore {
       maxAgeMs: options.maxAgeMs ?? 24 * 60 * 60_000,
       touchIntervalMs: options.touchIntervalMs ?? 60_000,
     }
-    this.#connectAttempts = Math.max(1, options.connectAttempts ?? 3)
-    this.#sleep = options.sleep ?? defaultSleep
   }
 
   get ttlMs(): number {
@@ -139,13 +131,11 @@ export class RedisSessionStore implements SessionStore {
   async create(input: CreateSessionInput): Promise<SessionRecord> {
     const now = Date.now()
     const record = newSessionRecord(input, this.#lifetime, now)
-    await this.#run(() =>
-      this.#client.set(
-        this.#sessionKey(record.id),
-        serializeSessionRecord(record),
-        'PX',
-        this.#lifetime.ttlMs
-      )
+    await this.#client.set(
+      this.#sessionKey(record.id),
+      serializeSessionRecord(record),
+      'PX',
+      this.#lifetime.ttlMs
     )
     return record
   }
@@ -153,15 +143,13 @@ export class RedisSessionStore implements SessionStore {
   async get(id: string | undefined): Promise<SessionRecord | null> {
     if (!id) return null
     const now = Date.now()
-    const raw = await this.#run(() =>
-      this.#client.eval(
-        TOUCH_SCRIPT,
-        1,
-        this.#sessionKey(id),
-        this.#lifetime.ttlMs,
-        now,
-        this.#lifetime.touchIntervalMs
-      )
+    const raw = await this.#client.eval(
+      TOUCH_SCRIPT,
+      1,
+      this.#sessionKey(id),
+      this.#lifetime.ttlMs,
+      now,
+      this.#lifetime.touchIntervalMs
     )
     if (typeof raw !== 'string' || raw === '') return null
     const record = parseSessionRecord(raw, now)
@@ -178,12 +166,12 @@ export class RedisSessionStore implements SessionStore {
 
   async destroy(id: string | undefined): Promise<void> {
     if (!id) return
-    await this.#run(() => this.#client.del(this.#sessionKey(id)))
+    await this.#client.del(this.#sessionKey(id))
   }
 
   async ping(): Promise<boolean> {
     try {
-      await this.#run(() => this.#client.ping())
+      await this.#client.ping()
       return true
     } catch {
       return false
@@ -198,34 +186,4 @@ export class RedisSessionStore implements SessionStore {
   #sessionKey(id: string): string {
     return `${this.#prefix}:s:${id}`
   }
-
-  /**
-   * Runs a command against the server.
-   *
-   * A command that is sent before the connection is established is retried
-   * a couple of times: the store is reachable, the handshake is just not
-   * finished yet.
-   */
-  async #run<T>(command: () => Promise<T>): Promise<T> {
-    let lastError: unknown
-    const attempts = Math.max(1, this.#connectAttempts)
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      try {
-        return await command()
-      } catch (error) {
-        lastError = error
-        if (attempt < attempts - 1) {
-          await this.#sleep(25 * (attempt + 1))
-        }
-      }
-    }
-    throw lastError
-  }
-}
-
-/** The default wait between two attempts. */
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
 }

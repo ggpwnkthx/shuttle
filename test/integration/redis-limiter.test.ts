@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { RedisRateLimiter } from '../../src/domains/rate-limiting/adapters'
-import { createRedisClient } from '../../src/platform/redis'
+import { createRedisClient, withRetries } from '../../src/platform/redis'
 
 /**
  * The limiter of the shared state, against a real server.
@@ -15,9 +15,9 @@ const describeRedis = url ? describe : describe.skip
 
 describeRedis('the limiter of the shared state', () => {
   test('the counter of a window is exact when the requests are concurrent', async () => {
-    const client = createRedisClient({ url: url! })
+    const client = withRetries(createRedisClient({ url: url! }))
     const prefix = `test-rl-${Date.now()}`
-    const limiter = new RedisRateLimiter({ client, max: 1000, windowMs: 60_000, keyPrefix: prefix })
+    const limiter = new RedisRateLimiter({ client, max: 100, windowMs: 60_000, keyPrefix: prefix })
     const now = Date.now()
 
     // Two "replicas" count at the same time in the same window.
@@ -28,14 +28,15 @@ describeRedis('the limiter of the shared state', () => {
 
     const decision = await limiter.check('caller:1', now)
     // The hundred requests are counted: the hundred and first is the one
-    // that is refused, and the counter is exact.
+    // that is refused. A counter that lost an increment would let it
+    // through, so the refusal proves that the counter is exact.
     expect(decision.allowed).toBe(false)
     expect(decision.remaining).toBe(0)
     client.close()
   })
 
   test('the window of a caller expires on its own', async () => {
-    const client = createRedisClient({ url: url! })
+    const client = withRetries(createRedisClient({ url: url! }))
     const prefix = `test-rl-${Date.now()}`
     const limiter = new RedisRateLimiter({ client, max: 1, windowMs: 1_000, keyPrefix: prefix })
     const now = Date.now()
@@ -51,7 +52,7 @@ describeRedis('the limiter of the shared state', () => {
   })
 
   test('a server that is not there fails open', async () => {
-    const client = createRedisClient({ url: 'redis://127.0.0.1:1/0' })
+    const client = withRetries(createRedisClient({ url: 'redis://127.0.0.1:1/0' }))
     const errors: unknown[] = []
     const limiter = new RedisRateLimiter({
       client,

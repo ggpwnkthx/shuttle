@@ -29,7 +29,7 @@ import { BunHttpTransport } from '../platform/bun/http-transport'
 import { WsUpstreamHandshake } from '../platform/bun/upstream-websocket'
 import { startListener, type StartedListener } from '../platform/bun/listener'
 import { drain as drainRuntime } from './lifecycle'
-import { createRedisClient, isRedisUrl } from '../platform/redis'
+import { createRedisClient, isRedisUrl, withRetries } from '../platform/redis'
 import type { RuntimeSettings } from './env'
 
 /** The runtime of the gateway. */
@@ -83,7 +83,9 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
   // It lives in a Redis server when one is configured, and in the memory of
   // the process otherwise.
   const sharedClient = isRedisUrl(settings.sharedState.url)
-    ? createRedisClient({ url: settings.sharedState.url!, tlsCa: settings.sharedState.tlsCa })
+    ? withRetries(
+        createRedisClient({ url: settings.sharedState.url!, tlsCa: settings.sharedState.tlsCa })
+      )
     : undefined
   const onSharedStateError = (error: unknown): void => {
     logger.warn('the shared state is not reachable', { error })
@@ -94,10 +96,12 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
   // so the infrastructure only has to provide a single value.
   const sessions = isRedisUrl(settings.session.url)
     ? new RedisSessionStore({
-        client: createRedisClient({
-          url: settings.session.url,
-          tlsCa: settings.session.tlsCa,
-        }),
+        client: withRetries(
+          createRedisClient({
+            url: settings.session.url,
+            tlsCa: settings.session.tlsCa,
+          })
+        ),
         keyPrefix: settings.session.keyPrefix,
         ttlMs: settings.session.ttlMs,
         maxAgeMs: settings.session.maxAgeMs,

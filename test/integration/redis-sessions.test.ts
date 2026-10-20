@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { RedisSessionStore } from '../../src/domains/authentication/adapters'
-import { createRedisClient } from '../../src/platform/redis'
+import { createRedisClient, withRetries } from '../../src/platform/redis'
 
 /**
  * The store of the sessions, against a real server.
@@ -17,7 +17,7 @@ const describeRedis = url ? describe : describe.skip
 
 describeRedis('the store of the sessions', () => {
   test('a session that was created is read by another replica', async () => {
-    const client = createRedisClient({ url: url! })
+    const client = withRetries(createRedisClient({ url: url! }))
     const prefix = `test-session-${Date.now()}`
     const first = new RedisSessionStore({ client, keyPrefix: prefix, ttlMs: 60_000 })
     const second = new RedisSessionStore({ client, keyPrefix: prefix, ttlMs: 60_000 })
@@ -30,7 +30,7 @@ describeRedis('the store of the sessions', () => {
   })
 
   test('a logout is not undone by a read that happens at the same time', async () => {
-    const client = createRedisClient({ url: url! })
+    const client = withRetries(createRedisClient({ url: url! }))
     const prefix = `test-session-${Date.now()}`
     const store = new RedisSessionStore({ client, keyPrefix: prefix, ttlMs: 60_000 })
 
@@ -46,7 +46,7 @@ describeRedis('the store of the sessions', () => {
   })
 
   test('the refresh never reaches beyond the maximum age of the session', async () => {
-    const client = createRedisClient({ url: url! })
+    const client = withRetries(createRedisClient({ url: url! }))
     const prefix = `test-session-${Date.now()}`
     const store = new RedisSessionStore({
       client,
@@ -73,7 +73,7 @@ describeRedis('the store of the sessions', () => {
   })
 
   test('the expiry is not refreshed before the interval is over', async () => {
-    const client = createRedisClient({ url: url! })
+    const client = withRetries(createRedisClient({ url: url! }))
     const prefix = `test-session-${Date.now()}`
     const store = new RedisSessionStore({
       client,
@@ -90,7 +90,7 @@ describeRedis('the store of the sessions', () => {
   })
 
   test('a server that is not there denies the caller', async () => {
-    const client = createRedisClient({ url: 'redis://127.0.0.1:1/0' })
+    const client = withRetries(createRedisClient({ url: 'redis://127.0.0.1:1/0' }))
     const store = new RedisSessionStore({ client, keyPrefix: 'test-down', ttlMs: 60_000 })
     await expect(store.get('anything')).rejects.toThrow()
     expect(await store.ping()).toBe(false)

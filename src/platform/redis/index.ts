@@ -8,3 +8,6 @@
 
 export { createRedisClient, isConnectionError, isRedisUrl, runWithRetry } from './client'
 export type { RedisClientOptions } from './client'
+
+export { withRetries } from './commands'
+export type { RedisCommands } from './commands'
