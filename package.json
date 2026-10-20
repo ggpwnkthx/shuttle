@@ -1,0 +1,38 @@
+{
+  "name": "shuttle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A small application gateway: Hono for authentication and proxying.",
+  "scripts": {
+    "dev": "bun --watch scripts/dev.ts",
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint",
+    "load": "bun run scripts/load.ts"
+  },
+  "dependencies": {
+    "chokidar": "4",
+    "hono": "^4.13.13",
+    "ipaddr.js": "^2.5.0",
+    "jose": "^6.2.12",
+    "lru-cache": "^11.5.3",
+    "openid-client": "^6.8.8",
+    "path-to-regexp": "^8.4.2",
+    "pino": "^10.4.0",
+    "prom-client": "^15.1.3",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@types/bun": "^1.4.3",
+    "@types/ws": "^8.18.2",
+    "oidc-provider": "9",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.2.0"
+  }
+}
