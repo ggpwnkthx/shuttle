@@ -5,3 +5,6 @@ dist
 *.log
 coverage
 test
+scripts
+DECISIONS.md
+BUILD_STATUS.md

@@ -9,9 +9,50 @@ on:
 permissions:
   contents: read
 
+env:
+  # The version of the runtime the gateway is built and released with.
+  BUN_VERSION: '1.4.3'
+
 jobs:
-  test:
-    name: typecheck, lint and test
+  check:
+    name: types, lint, format and tests (bun ${{ matrix.bun }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The specification states Bun >= 1.2; the lane on 1.2.0 is the
+        # evidence for that claim.
+        bun: ['1.2.0', '1.4.3']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun }}
+
+      - name: install
+        run: bun install --frozen-lockfile
+
+      - name: types
+        run: bun run typecheck
+
+      - name: lint
+        run: bun run lint
+
+      - name: format
+        run: bun run format:check
+
+      - name: import boundaries
+        run: bun test test/architecture
+
+      - name: unit and contract tests
+        run: bun test src test/contract
+
+      - name: network tests
+        run: bun test test/network
+
+  redis:
+    name: the shared state against a real redis
     runs-on: ubuntu-latest
     services:
       redis:
@@ -28,39 +69,34 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: '1.4.3'
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: install
         run: bun install --frozen-lockfile
 
-      - name: typecheck
-        run: bun run typecheck
-
-      - name: lint
-        run: bun run lint
-
-      - name: test
-        run: bun test
+      - name: the atomic operations of the shared state
+        run: bun test test/integration
         env:
-          # The session contract of the redis store runs against a real
-          # server when this variable is set.
           SHUTTLE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
 
-  load:
-    name: load test
+  browser:
+    name: the browser behaviour
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: '1.4.3'
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: install
         run: bun install --frozen-lockfile
 
-      - name: measure
-        run: bun run load -- --requests 5000 --concurrency 50
+      - name: install the browser
+        run: bunx playwright install --with-deps chromium
+
+      - name: the cookies and the origins
+        run: bun test test/browser
 
   image:
     name: the production image
@@ -102,9 +138,6 @@ jobs:
 
       - name: the image refuses to start without an access service
         run: |
-          # The access service decides who may use a workspace. A
-          # deployment that forgets to configure it would deny every
-          # caller, so the gateway refuses to start.
           if docker run --rm \
             -e SHUTTLE_SESSION_SECRET=ci-secret \
             -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \

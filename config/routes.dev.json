@@ -2,7 +2,7 @@
   "version": 1,
   "defaults": {
     "auth": { "mode": "none" },
-    "timeouts": { "connectMs": 5000, "headersMs": 30000, "bodyMs": 300000 },
+    "timeouts": { "responseMs": 5000, "firstByteMs": 30000, "bodyMs": 300000 },
     "maxBodyBytes": 10485760
   },
   "trustedProxies": ["127.0.0.1/32", "::1/128"],

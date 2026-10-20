@@ -50,4 +50,4 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
   CMD bun -e "fetch('http://127.0.0.1:8080/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 ENTRYPOINT ["bun", "run"]
-CMD ["src/index.ts"]
+CMD ["src/main.ts"]
