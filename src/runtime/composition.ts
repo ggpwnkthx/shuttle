@@ -119,7 +119,11 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     audience: settings.oidc.audience,
     rolesClaim: settings.oidc.rolesClaim,
     allowInsecureIssuer: settings.oidc.allowInsecureIssuer,
-    allowPublicClient: settings.oidc.allowPublicClient,
+    // Outside a production deployment a public client is allowed: the
+    // development stack uses one. A production deployment has to name the
+    // secret of the client or to allow the public client explicitly, which
+    // the environment validates.
+    allowPublicClient: settings.oidc.allowPublicClient || !settings.production,
   })
 
   const auth = new AuthenticationService({
