@@ -47,6 +47,8 @@ does not expose the boundaries the specification relies on (see
 
 The last full run of the suite: **319 tests passed, 0 failed, 0 skipped**
 with Bun 1.4.3 and a Redis 7.0.15 (`SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0`).
+Without a server the suite skips the ten tests of the shared state and
+passes the other 309.
 The suite is 28 files: 14 unit test files of the domains and of the runtime,
 the architecture check, 3 network test files, 5 integration test files, 3
 contract test files, the browser test and the soak.
