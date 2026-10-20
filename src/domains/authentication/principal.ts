@@ -60,12 +60,17 @@ export interface CredentialInput {
  *
  * A header that is not a bearer token is not a credential at all.
  */
-export function parseBearerToken(header: string | undefined): string | null {
-  if (header === undefined) return null
+export type BearerToken =
+  | { kind: 'token'; token: string }
+  | { kind: 'not_a_bearer' }
+  | { kind: 'empty' }
+
+export function parseBearerToken(header: string | undefined): BearerToken {
+  if (header === undefined) return { kind: 'not_a_bearer' }
   const match = /^Bearer(?:\s+(.*))?$/i.exec(header.trim())
-  if (!match) return null
+  if (!match) return { kind: 'not_a_bearer' }
   const token = (match[1] ?? '').trim()
-  return token.length > 0 ? token : null
+  return token.length > 0 ? { kind: 'token', token } : { kind: 'empty' }
 }
 
 /**
@@ -92,16 +97,14 @@ export function selectCredential(mode: AuthMode, input: CredentialInput): Creden
   }
 
   if (input.authorization !== undefined) {
-    const trimmed = input.authorization.trim()
-    const bearer = /^Bearer(?:\s+(.*))?$/i.exec(trimmed)
-    if (!bearer) {
+    const bearer = parseBearerToken(input.authorization)
+    if (bearer.kind === 'not_a_bearer') {
       return { kind: 'reject', reason: 'not_a_bearer' }
     }
-    const token = (bearer[1] ?? '').trim()
-    if (token.length === 0) {
+    if (bearer.kind === 'empty') {
       return { kind: 'reject', reason: 'empty_bearer' }
     }
-    return { kind: 'bearer', token }
+    return { kind: 'bearer', token: bearer.token }
   }
 
   if (mode === 'any' && input.sessionCookie && input.sessionCookie.length > 0) {

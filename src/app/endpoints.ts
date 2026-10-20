@@ -8,7 +8,6 @@
 
 import type { Context } from 'hono'
 import { SessionStoreError } from '../domains/authentication'
-import { GATEWAY_ENDPOINTS } from '../domains/configuration'
 import { checkCrossSiteNavigation } from '../domains/forwarding'
 import { rateLimitKey } from '../domains/rate-limiting'
 import { readCookie } from './cookies'
@@ -184,9 +183,6 @@ export async function logoutHandler(
   context.set('cookies', [...context.get('cookies'), deletion])
   return new Response(null, { status: 302, headers: { location: '/' } })
 }
-
-/** The paths of the endpoints of the gateway. */
-export const ENDPOINT_PATHS = GATEWAY_ENDPOINTS
 
 /** Compares two tokens in constant time. */
 function sameToken(left: string, right: string): boolean {

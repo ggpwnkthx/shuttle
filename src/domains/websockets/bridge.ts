@@ -126,27 +126,38 @@ export class WebSocketBridge {
     if (this.#closed) return
     const size = typeof message === 'string' ? message.length : message.byteLength
 
-    // The upstream is slower than the caller: the messages of the caller
-    // are queued in the gateway. The queue is bounded, a connection that
-    // exceeds it is closed instead of growing the memory of the process.
+    // The upstream is slower than the caller: the queue of the upstream
+    // grows and the messages of the caller wait in the queue of the
+    // gateway. The queue is bounded, a connection that exceeds it is closed
+    // instead of growing the memory of the process.
     if (this.#upstream.bufferedAmount > this.#options.backpressureLimitBytes) {
       this.#options.onError?.('the upstream is too slow')
       this.close(CLOSE_TRY_AGAIN_LATER, 'the upstream is too slow')
       return
     }
 
-    if (
-      this.#buffer.length >= this.#options.maxBufferedMessages ||
-      this.#bufferedBytes + size > this.#options.maxBufferedBytes
-    ) {
-      this.#options.onError?.('the buffer of the connection is full')
-      this.close(CLOSE_TRY_AGAIN_LATER, 'buffer limit exceeded')
+    if (this.#upstream.bufferedAmount > 0) {
+      // The upstream is behind: the message waits for it.
+      if (
+        this.#buffer.length >= this.#options.maxBufferedMessages ||
+        this.#bufferedBytes + size > this.#options.maxBufferedBytes
+      ) {
+        this.#options.onError?.('the buffer of the connection is full')
+        this.close(CLOSE_TRY_AGAIN_LATER, 'buffer limit exceeded')
+        return
+      }
+      this.#buffer.push(message)
+      this.#bufferedBytes += size
       return
     }
 
-    this.#buffer.push(message)
-    this.#bufferedBytes += size
+    // The upstream caught up: the messages that waited for it go first.
     this.#flush()
+    try {
+      this.#upstream.send(message)
+    } catch (error) {
+      this.#options.onError?.(`the message could not be sent to the upstream: ${String(error)}`)
+    }
   }
 
   /** The caller answered a ping of the gateway. */

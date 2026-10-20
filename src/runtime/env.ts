@@ -13,6 +13,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
+import { isRedisUrl } from '../platform/redis'
 
 /** The level of the log. */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent'
@@ -437,10 +438,4 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
     },
     shutdownTimeoutMs: parsed.SHUTTLE_SHUTDOWN_TIMEOUT_MS,
   }
-}
-
-/** Reports whether an url names a Redis server. */
-export function isRedisUrl(url: string | undefined | null): boolean {
-  if (!url) return false
-  return url.startsWith('redis://') || url.startsWith('rediss://')
 }

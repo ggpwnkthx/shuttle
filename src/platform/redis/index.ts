@@ -6,7 +6,7 @@
  * the domains that own them.
  */
 
-export { createRedisClient, isConnectionError, isRedisUrl, runWithRetry } from './client'
+export { createRedisClient, isConnectionError, isRedisUrl } from './client'
 export type { RedisClientOptions } from './client'
 
 export { withRetries } from './commands'
