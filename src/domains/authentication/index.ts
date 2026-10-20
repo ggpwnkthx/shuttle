@@ -25,11 +25,7 @@ export {
   sessionCookie,
   sessionDeletionCookie,
 } from './cookies'
-export type {
-  CookieOptions,
-  GatewayCookie,
-  GatewayCookieAttributes,
-} from './cookies'
+export type { CookieOptions, GatewayCookie, GatewayCookieAttributes } from './cookies'
 
 export {
   SessionStoreError,
@@ -50,3 +46,37 @@ export type {
   SessionRecord,
   SessionStore,
 } from './session'
+
+export { parseBearerToken, selectCredential } from './principal'
+export type {
+  CredentialInput,
+  CredentialPlan,
+  CredentialRefusal,
+  Principal,
+} from './principal'
+
+export {
+  LOGIN_STATE_TTL_MS,
+  sanitizeRedirectTarget,
+  signLoginState,
+  verifyLoginState,
+} from './login-state'
+export type { LoginState } from './login-state'
+
+export {
+  ACCEPTED_ALGORITHMS,
+  CLOCK_TOLERANCE_SECONDS,
+  OidcClient,
+  OidcError,
+  extractRoles,
+} from './oidc'
+export type { OidcClientOptions, OidcPort, VerifiedIdentity } from './oidc'
+
+export { AuthenticationService } from './service'
+export type {
+  AuthenticationOutcome,
+  AuthenticationServiceOptions,
+  AuthLogger,
+  BeginLoginOutcome,
+  CompleteLoginOutcome,
+} from './service'
