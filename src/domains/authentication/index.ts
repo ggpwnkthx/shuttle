@@ -14,3 +14,39 @@ export {
   WorkspacePolicySchema,
 } from './policy'
 export type { AuthMode, AuthPolicy, WorkspacePolicy } from './policy'
+
+export {
+  GATEWAY_COOKIE_NAMES,
+  SESSION_COOKIE_NAME,
+  STATE_COOKIE_NAME,
+  loginStateCookie,
+  loginStateDeletionCookie,
+  serializeCookie,
+  sessionCookie,
+  sessionDeletionCookie,
+} from './cookies'
+export type {
+  CookieOptions,
+  GatewayCookie,
+  GatewayCookieAttributes,
+} from './cookies'
+
+export {
+  SessionStoreError,
+  cookieMaxAgeSeconds,
+  isPastIdleLifetime,
+  isPastMaximumAge,
+  newSessionId,
+  newSessionRecord,
+  parseSessionRecord,
+  remainingIdleMs,
+  remainingLifetimeMs,
+  serializeSessionRecord,
+  touchDue,
+} from './session'
+export type {
+  CreateSessionInput,
+  SessionLifetime,
+  SessionRecord,
+  SessionStore,
+} from './session'
