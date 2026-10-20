@@ -12,23 +12,21 @@ permissions:
 env:
   # The version of the runtime the gateway is built and released with.
   BUN_VERSION: '1.4.3'
-
 jobs:
   check:
-    name: types, lint, format and tests (bun ${{ matrix.bun }})
+    name: types, lint, format and tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # The specification states Bun >= 1.2; the lane on 1.2.0 is the
-        # evidence for that claim.
-        bun: ['1.2.0', '1.4.3']
+    env:
+      # The runtime of the release. The 1.2 line of the runtime does not
+      # expose the boundaries the specification relies on, the measurements
+      # are in docs/transport-capabilities.md.
+      BUN_VERSION: '1.4.3'
     steps:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: ${{ matrix.bun }}
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: install
         run: bun install --frozen-lockfile

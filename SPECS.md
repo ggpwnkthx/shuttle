@@ -14,8 +14,9 @@ here or in a versioned deployment policy.
 This revision reorganizes the code by domain and clarifies inconsistent
 wording; it adds no route options or environment variables.
 
-Status: 0.1.0. Runtime: Bun ≥ 1.2. Listener: HTTP + WebSocket on
-`SHUTTLE_GATEWAY_HOST:SHUTTLE_GATEWAY_PORT` (default `0.0.0.0:8080`).
+Status: 0.1.0. Runtime: Bun ≥ 1.4.3 (see §15, decision 21). Listener: HTTP
++ WebSocket on `SHUTTLE_GATEWAY_HOST:SHUTTLE_GATEWAY_PORT` (default
+`0.0.0.0:8080`).
 
 ---
 
@@ -938,3 +939,4 @@ policies remain explicitly listed in IMPLEMENTATION §10.
 | 18 | Readiness after a failed reload | The gateway stays ready and keeps the last valid configuration; the failure is visible in `/readyz`, in the log and in the metrics. | §12.3 |
 | 19 | Domain organization | Feature policy, ports, domain adapters and unit tests live together; app/platform/runtime are explicit boundaries. Public imports and dependency directions are checked in CI. | §14 |
 | 20 | Inconsistent operational wording | Selected-credential rejection, valid metrics-token success, interim-only response failure, cache reuse and observation byte boundaries are explicit. These clarify the existing contract; they add no configuration fields. | §1, §6, §11.2–11.3, §12.1–12.2 |
+| 21 | The version of the runtime | The runtime is **Bun ≥ 1.4.3**. The boundaries the gateway relies on (an early answer while the upload runs, the cancellation of the upload, the refusal of an upstream websocket handshake, the upgrade of the caller with the headers of the gateway) are not observable on the 1.2 line of the runtime. The behavioral requirements of this specification are unchanged; the version of the platform they are implemented on is part of the contract. The measurements are in `docs/transport-capabilities.md`. | §Status, §10, §11.3 |

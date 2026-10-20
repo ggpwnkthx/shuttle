@@ -5,15 +5,17 @@ was built, the checks that were actually executed, the decisions that were
 taken and what is still missing.
 
 **Runtime under test:** Bun 1.4.3 (`bun --version`), TypeScript 5.9.3, Hono
-4.13.13. The specification mentions Bun ≥ 1.2; only 1.4.3 was executed here
-(see [DECISIONS.md](DECISIONS.md), decision 1).
+4.13.13. The contract states **Bun ≥ 1.4.3**: the 1.2 line of the runtime
+does not expose the boundaries the specification relies on (see
+[DECISIONS.md](DECISIONS.md), decision 1, and
+[docs/transport-capabilities.md](docs/transport-capabilities.md)).
 
 ## The checkpoints
 
 | # | Commit | State | Evidence |
 | --- | --- | --- | --- |
-| 01 | `chore: establish domain boundaries and build checks` | done | `bun test test/architecture`, `bun x biome lint`, `bun x biome format --check .`, `bun run typecheck` |
-| 02 | `test: prove Bun transport capabilities` | pending | — |
+| 01 | `chore: establish domain boundaries and build checks` | done | `bun test test/architecture`, `bun x biome lint`, `bun x biome format .`, `bun run typecheck` |
+| 02 | `test: prove Bun transport capabilities` | done | `bun test test/network` (14 tests), `bun run typecheck`, `bun x biome lint`; the same network suite was executed with Bun 1.2.0 and 1.2.23 to measure the boundaries |
 | 03 | `feat: compile and publish route configuration` | pending | — |
 | 04 | `feat: enforce forwarding trust and identity policy` | pending | — |
 | 05 | `feat: add bounded request limiters` | pending | — |
