@@ -28,6 +28,7 @@ does not expose the boundaries the specification relies on (see
 | 12 | `feat: complete reload drain and lifecycle observation` | done | `bun test test/contract/lifecycle.test.ts` (5) |
 | 13 | `test: qualify the production deployment` | done | `bun test test/browser` (3 tests, Chromium), `bun test test/load` (2 tests), `bun run load` (the measurements of [docs/capacity.md](docs/capacity.md)) |
 | 14 | `fix: close the gaps of the coverage of the release` | done | the redaction of the logs and the bounded labels of the metrics (`src/observability/observability.test.ts`), the bridge of the websockets (`src/domains/websockets/bridge.test.ts`), the table of the failures of an exchange (`test/contract/failures.test.ts`), the refusals of the endpoints and the store that is not reachable (`test/contract/endpoints-failures.test.ts`), the cache of the decisions and the sessions of two replicas (`test/integration/redis-runtime.test.ts`) |
+| 15 | `chore: clean up the project and prepare the deployment` | done | the dead code is gone, the manifests of the deployment are checked by the test suite (`test/contract/manifests.test.ts`, 8 tests), the image carries the version and the revision and holds the dependencies of the gateway alone, the workflow `release.yml` builds the image of a tag and exports it |
 
 ## The checks of the project
 
@@ -46,12 +47,12 @@ does not expose the boundaries the specification relies on (see
 | Load | `bun run load` | run | run |
 | The image | `docker build` + the smoke tests | run in the CI (the job `the production image` of the workflow run #1) | run |
 
-The last full run of the suite: **358 tests passed, 0 failed, 0 skipped**
+The last full run of the suite: **366 tests passed, 0 failed, 0 skipped**
 with Bun 1.4.3 and a Redis 7.0.15 (`SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0`),
-over 33 files. The coverage of the lines of the source is **92.1 %** and the
+over 34 files. The coverage of the lines of the source is **92.1 %** and the
 coverage of the functions is **93.4 %** (`bun test --coverage`). Without a
 server the suite skips the ten tests of the shared state and passes the
-other 348.
+other 356.
 The suite is 28 files: 14 unit test files of the domains and of the runtime,
 the architecture check, 3 network test files, 5 integration test files, 3
 contract test files, the browser test and the soak.

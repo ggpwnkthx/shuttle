@@ -29,6 +29,7 @@ import { BunHttpTransport } from '../platform/bun/http-transport'
 import { WsUpstreamHandshake } from '../platform/bun/upstream-websocket'
 import { startListener, type StartedListener } from '../platform/bun/listener'
 import { drain as drainRuntime } from './lifecycle'
+import { VERSION } from './version'
 import { createRedisClient, isRedisUrl, withRetries } from '../platform/redis'
 import type { RuntimeSettings } from './env'
 
@@ -226,6 +227,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
   const state = { draining: false }
 
   const dependencies: GatewayDependencies = {
+    version: VERSION,
     config,
     auth,
     access,

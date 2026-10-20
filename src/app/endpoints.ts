@@ -21,10 +21,14 @@ import type { GatewayEnv } from './state'
  * It is always available: it says that the process answers, not that the
  * gateway can serve the traffic.
  */
-export function healthHandler(context: Context<GatewayEnv>): Response {
+export function healthHandler(
+  context: Context<GatewayEnv>,
+  dependencies: GatewayDependencies
+): Response {
   return context.json({
     status: 'ok',
     service: 'shuttle',
+    version: dependencies.version,
     uptimeMs: Date.now() - context.get('startedAt'),
   })
 }

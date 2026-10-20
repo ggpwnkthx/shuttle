@@ -49,6 +49,7 @@ export type {
 
 export { parseBearerToken, selectCredential } from './principal'
 export type {
+  BearerToken,
   CredentialInput,
   CredentialPlan,
   CredentialRefusal,

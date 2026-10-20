@@ -1,0 +1,96 @@
+name: release
+
+# The release of the image.
+#
+# The workflow runs on a tag: it builds the image of the release, it starts
+# it with the configuration of a deployment and it exports it as an artifact
+# of the run. The image is then pushed to the registry of the platform by the
+# pipeline that holds the credentials of the registry.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: the image of the release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: the version of the release
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          tags: ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.tag }}
+            REVISION=${{ github.sha }}
+          # The provenance of the image: what was built and from what.
+          provenance: true
+          sbom: true
+
+      - name: the image starts with the configuration of a deployment
+        run: |
+          docker run -d --name shuttle -p 8080:8080 \
+            -e SHUTTLE_SESSION_SECRET=release-secret \
+            -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
+            -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
+            -e SHUTTLE_OIDC_CLIENT_SECRET=release-client-secret \
+            -e SHUTTLE_OIDC_REDIRECT_URI=https://shuttle.example.com/auth/callback \
+            -e SHUTTLE_ACCESS_URL=https://access.example.com \
+            -e SHUTTLE_ACCESS_TOKEN=release-access-token \
+            -e SHUTTLE_METRICS_TOKEN=release-metrics-token \
+            -v "$PWD/config/routes.json:/etc/shuttle/routes.json:ro" \
+            "ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/healthz > /dev/null; then
+              echo "the gateway is healthy"
+              curl -fsS http://127.0.0.1:8080/healthz
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs shuttle
+          exit 1
+
+      - name: the image refuses to start without the secret of the sessions
+        run: |
+          if docker run --rm \
+            -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
+            -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
+            -e SHUTTLE_OIDC_CLIENT_SECRET=release-client-secret \
+            -e SHUTTLE_OIDC_REDIRECT_URI=https://shuttle.example.com/auth/callback \
+            -e SHUTTLE_ACCESS_URL=https://access.example.com \
+            -e SHUTTLE_ACCESS_TOKEN=release-access-token \
+            "ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}"; then
+            echo "the gateway started without the secret of the sessions"
+            exit 1
+          fi
+
+      - name: export the image
+        run: |
+          docker save "ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}" \
+            | gzip > shuttle-${{ steps.version.outputs.tag }}.tar.gz
+          # The digest of the image: it is what a deployment pins.
+          docker image inspect "ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}" \
+            --format '{{index .RepoDigests 0}}' || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shuttle-image-${{ steps.version.outputs.tag }}
+          path: shuttle-${{ steps.version.outputs.tag }}.tar.gz
+          retention-days: 30

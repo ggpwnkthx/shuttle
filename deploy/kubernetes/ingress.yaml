@@ -1,0 +1,37 @@
+# The ingress of the gateway.
+#
+# The settings that matter are the ones of the streaming and of the
+# websockets: the bodies are streamed to the upstream and the answers are
+# streamed to the caller, and a websocket is a connection that stays open.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shuttle
+  annotations:
+    # The bodies are not buffered by the ingress: the gateway streams them
+    # and the budgets of the phases only work when the bytes arrive as they
+    # were sent.
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    # A stream of events lasts longer than any timeout of the ingress.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # The websockets need the upgrade of the protocol.
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["shuttle.example.com"]
+      secretName: shuttle-tls
+  rules:
+    - host: shuttle.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: shuttle
+                port:
+                  name: http

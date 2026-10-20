@@ -201,6 +201,25 @@ The configuration is reloaded on the fly: a broken file never takes a
 running deployment out of the rotation, and a corrected file is picked up
 within a second.
 
+## The invalidation of the sessions
+
+The sessions of the callers live in the shared state, under the prefix of the
+deployment (`SHUTTLE_SESSION_KEY_PREFIX`). There are three ways to end them,
+and they have different consequences.
+
+| What is wanted | How | What it costs |
+| --- | --- | --- |
+| End the session of one caller | the session of the caller is removed from the state (`DEL <prefix>:s:<id>`) | the caller has to sign in again |
+| End the sessions of the callers of a deployment | the keys of the prefix are removed (`SCAN` + `DEL`, or `FLUSHDB` when the deployment has the state to itself) | every caller has to sign in again |
+| End every session of every deployment that shares the state | the keys of the prefix of the deployment are removed | the same |
+
+The rotation of the secret of the sessions has the same effect on the
+sessions that are in flight: the state of a login is signed with the old
+secret, so a caller that was in the middle of a login has to sign in again.
+
+The sessions of a caller can also be ended by the gateway itself: the logout
+destroys the session of the caller and deletes its cookie.
+
 ## The rotation of the secret of the sessions
 
 1. The new secret is added to the secret store.

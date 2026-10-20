@@ -50,7 +50,7 @@ export interface Logger {
 }
 
 /** Reports whether a header carries a credential. */
-export function isSensitiveHeader(name: string): boolean {
+function isSensitiveHeader(name: string): boolean {
   return SENSITIVE_HEADERS.has(name.toLowerCase())
 }
 

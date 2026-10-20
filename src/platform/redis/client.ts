@@ -54,28 +54,3 @@ export function isConnectionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /connection is closed|not connected|ECONNREFUSED|socket closed/i.test(message)
 }
-
-/**
- * Runs a command against the server.
- *
- * A command that is sent before the connection is established is retried a
- * couple of times: the store is reachable, the handshake is just not
- * finished yet. Every other error is passed on unchanged, so a store that
- * is really down is reported as such.
- */
-export async function runWithRetry<T>(command: () => Promise<T>, attempts = 3): Promise<T> {
-  let lastError: unknown
-  const total = Math.max(1, attempts)
-  for (let attempt = 0; attempt < total; attempt++) {
-    try {
-      return await command()
-    } catch (error) {
-      if (!isConnectionError(error)) throw error
-      lastError = error
-      if (attempt < total - 1) {
-        await Bun.sleep(25 * (attempt + 1))
-      }
-    }
-  }
-  throw lastError
-}

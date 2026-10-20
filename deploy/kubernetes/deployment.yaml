@@ -1,0 +1,164 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shuttle
+  labels:
+    app.kubernetes.io/name: shuttle
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: shuttle
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # The pods of a rollout are replaced one by one: the replicas that
+      # understand each other are needed, because the secret of the sessions
+      # signs the state of the login.
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: shuttle
+        app.kubernetes.io/component: gateway
+      annotations:
+        # The secret of the sessions changes with the rotation of the
+        # secrets: the pods are replaced when it changes.
+        checksum/secrets: "replaced-by-the-pipeline"
+    spec:
+      # The gateway closes its websockets and lets the requests that are in
+      # flight finish: the grace period is longer than its own deadline
+      # (SHUTTLE_SHUTDOWN_TIMEOUT_MS, 15 seconds by default).
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: ghcr.io/ggpwnkthx/shuttle:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SHUTTLE_CONFIG
+              value: /etc/shuttle/routes.json
+            - name: SHUTTLE_GATEWAY_HOST
+              value: 0.0.0.0
+            - name: SHUTTLE_GATEWAY_PORT
+              value: "8080"
+            - name: SHUTTLE_OIDC_ISSUER
+              value: https://dex.example.com/dex
+            - name: SHUTTLE_OIDC_CLIENT_ID
+              value: shuttle
+            - name: SHUTTLE_OIDC_REDIRECT_URI
+              value: https://shuttle.example.com/auth/callback
+            - name: SHUTTLE_OIDC_AUDIENCE
+              value: shuttle
+            - name: SHUTTLE_ACCESS_URL
+              value: https://access.example.com
+            # The clients of the provider and of the access service, the
+            # secret of the sessions, the url of the shared state and the
+            # token of the metrics come from the secret of the platform.
+            - name: SHUTTLE_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: shuttle-secrets
+                  key: SHUTTLE_OIDC_CLIENT_SECRET
+            - name: SHUTTLE_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: shuttle-secrets
+                  key: SHUTTLE_ACCESS_TOKEN
+            - name: SHUTTLE_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: shuttle-secrets
+                  key: SHUTTLE_SESSION_SECRET
+            - name: SHUTTLE_SESSION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: shuttle-secrets
+                  key: SHUTTLE_SESSION_URL
+            - name: SHUTTLE_SHARED_STATE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: shuttle-secrets
+                  key: SHUTTLE_SHARED_STATE_URL
+            - name: SHUTTLE_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: shuttle-secrets
+                  key: SHUTTLE_METRICS_TOKEN
+            # The protocol the callers use towards the gateway: the ingress
+            # terminates the tls.
+            - name: SHUTTLE_EXTERNAL_PROTO
+              value: https
+            - name: SHUTTLE_COOKIE_SECURE
+              value: "true"
+            # The ranges of the ingress: the forwarding headers of a request
+            # are only trusted from them.
+            - name: SHUTTLE_TRUSTED_PROXIES
+              value: 10.0.0.0/8
+            - name: SHUTTLE_LOG_LEVEL
+              value: info
+            - name: SHUTTLE_SHUTDOWN_TIMEOUT_MS
+              value: "15000"
+          # The gateway answers /healthz while it starts and /readyz when it
+          # can serve the traffic: the readiness fails while the
+          # configuration is missing or while the shared state cannot be
+          # reached.
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              # The gateway holds the sessions, the connections of the
+              # websockets and the buffers of the exchanges in memory: the
+              # limit of the pod has to leave room for them.
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: routes
+              mountPath: /etc/shuttle
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: routes
+          configMap:
+            name: shuttle-routes
+            items:
+              - key: routes.json
+                path: routes.json
+        - name: tmp
+          emptyDir: {}

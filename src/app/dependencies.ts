@@ -26,6 +26,8 @@ export interface BrowserSettings {
 
 /** Everything the application needs to answer a request. */
 export interface GatewayDependencies {
+  /** The version of the gateway, as the health endpoint reports it. */
+  version: string
   /** The running configuration. */
   config: ConfigurationStore
   /** The authentication of the callers. */

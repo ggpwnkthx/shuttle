@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: platform
+resources:
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  # The secret is not part of the manifests: it is applied from the secret
+  # store of the platform (sealed secrets, the external secrets operator or
+  # the equivalent of the platform).
+  - ingress.yaml
+images:
+  - name: ghcr.io/ggpwnkthx/shuttle
+    newTag: 0.1.0
+commonLabels:
+  app.kubernetes.io/part-of: platform

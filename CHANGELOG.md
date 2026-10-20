@@ -44,6 +44,28 @@ is thin, the platform owns the sockets and the runtime is the only place
 where the concrete pieces are assembled. The import boundaries are checked
 by `scripts/architecture.ts` and by the CI workflow.
 
+### The deployment
+
+- The image is built from a pinned runtime, it carries the version and the
+  revision of the build as labels, it runs as a non-root user and it holds
+  the dependencies of the gateway alone (the development dependencies of the
+  fixtures are not part of it).
+- The manifests of Kubernetes are in `deploy/kubernetes/`: the deployment
+  (the probes, the resources, the hardening, the grace period of the drain),
+  the service, the autoscaling, the budget of the disruptions, the network
+  policy, the ingress (without the buffering of the bodies) and the route
+  table. The secret of the deployment is applied from the secret store of
+  the platform, never from the repository.
+- The stack of a single host is in `deploy/compose.production.yaml`: the
+  gateway and the shared state, without the fixtures of the development.
+- The review of a deployment is in `docs/deployment-review.md`: the modes of
+  the authentication, the hosts, the trusted proxies, the access to the
+  upstreams, the protection of the metrics, the secrets, the limits and the
+  capacity.
+- The manifests are checked by the test suite: a manifest that does not
+  parse, a deployment without the probes, a secret written in a manifest or
+  an ingress that buffers the bodies fail the build.
+
 ### The decisions of the release
 
 They are recorded in [DECISIONS.md](DECISIONS.md). Two of them change the

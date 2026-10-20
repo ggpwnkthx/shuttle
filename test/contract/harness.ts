@@ -84,7 +84,7 @@ export interface LoginResult {
 }
 
 /** A very small cookie jar, so that the tests can follow the browser flow. */
-export class CookieJar {
+class CookieJar {
   #cookies = new Map<string, string>()
 
   capture(response: Response): void {
@@ -117,7 +117,7 @@ async function freePort(): Promise<number> {
 }
 
 /** The routes of the tests. */
-export function defaultRoutes(context: { upstreamA: string; upstreamB: string }): unknown[] {
+function defaultRoutes(context: { upstreamA: string; upstreamB: string }): unknown[] {
   return [
     {
       id: 'public-site',
@@ -157,7 +157,7 @@ export function defaultRoutes(context: { upstreamA: string; upstreamB: string })
 }
 
 /** The configuration of the tests. */
-export function defaultConfig(
+function defaultConfig(
   context: { upstreamA: string; upstreamB: string },
   options: { trustedProxies?: string[]; timeouts?: Record<string, unknown> } = {}
 ): unknown {

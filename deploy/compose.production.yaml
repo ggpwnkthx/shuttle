@@ -1,0 +1,81 @@
+# The production stack of Shuttle: the gateway and the shared state.
+#
+# The fixtures of the development stack (the identity provider, the access
+# service, the sample upstreams) are NOT here: a deployment brings its own.
+#
+#   docker compose -f deploy/compose.production.yaml up -d
+#
+# The secrets come from the environment of the shell (a secret store, a
+# vault agent, the secrets of the orchestrator). The file below holds no
+# credential: the values that are not set make the gateway refuse to start,
+# exactly like in a production deployment.
+name: shuttle
+
+services:
+  gateway:
+    image: ghcr.io/ggpwnkthx/shuttle:0.1.0
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SHUTTLE_CONFIG: /etc/shuttle/routes.json
+      SHUTTLE_GATEWAY_HOST: 0.0.0.0
+      SHUTTLE_GATEWAY_PORT: "8080"
+      SHUTTLE_OIDC_ISSUER: ${SHUTTLE_OIDC_ISSUER:?the issuer of the identity provider is required}
+      SHUTTLE_OIDC_CLIENT_ID: ${SHUTTLE_OIDC_CLIENT_ID:-shuttle}
+      SHUTTLE_OIDC_CLIENT_SECRET: ${SHUTTLE_OIDC_CLIENT_SECRET:?the secret of the client is required}
+      SHUTTLE_OIDC_REDIRECT_URI: ${SHUTTLE_OIDC_REDIRECT_URI:?the url of the callback is required}
+      SHUTTLE_ACCESS_URL: ${SHUTTLE_ACCESS_URL:?the access service is required}
+      SHUTTLE_ACCESS_TOKEN: ${SHUTTLE_ACCESS_TOKEN:?the token of the access service is required}
+      # The secret of the sessions: it signs the state of the login and it
+      # derives the key of the signature of the identity.
+      SHUTTLE_SESSION_SECRET: ${SHUTTLE_SESSION_SECRET:?the secret of the sessions is required}
+      SHUTTLE_SESSION_URL: redis://redis:6379/0
+      SHUTTLE_SHARED_STATE_URL: redis://redis:6379/1
+      SHUTTLE_METRICS_TOKEN: ${SHUTTLE_METRICS_TOKEN:?the token of the metrics is required}
+      SHUTTLE_EXTERNAL_PROTO: https
+      SHUTTLE_COOKIE_SECURE: "true"
+      SHUTTLE_TRUSTED_PROXIES: ${SHUTTLE_TRUSTED_PROXIES:-}
+      SHUTTLE_LOG_LEVEL: ${SHUTTLE_LOG_LEVEL:-info}
+      SHUTTLE_SHUTDOWN_TIMEOUT_MS: "15000"
+    volumes:
+      - ../config/routes.json:/etc/shuttle/routes.json:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    # The gateway closes its websockets and lets the requests that are in
+    # flight finish: the grace period is longer than its own deadline.
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://127.0.0.1:8080/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "1"
+      - --maxmemory-policy
+      - volatile-ttl
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:

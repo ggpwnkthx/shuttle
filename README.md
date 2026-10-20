@@ -113,5 +113,18 @@ docker build -t shuttle:0.1.0 .
 The operations guide (topology, ingress, TLS, secrets, metrics, recovery and
 rollback) is in [docs/operations.md](docs/operations.md), the targets of the
 deployment and the measurements of the capacity are in
-[docs/capacity.md](docs/capacity.md) and the boundaries of the runtime are
-in [docs/transport-capabilities.md](docs/transport-capabilities.md).
+[docs/capacity.md](docs/capacity.md), the review of a deployment is in
+[docs/deployment-review.md](docs/deployment-review.md) and the boundaries of
+the runtime are in [docs/transport-capabilities.md](docs/transport-capabilities.md).
+
+The artifacts of the deployment are in `deploy/`:
+
+| Artifact | Where |
+| --- | --- |
+| The manifests of Kubernetes | `deploy/kubernetes/` (the deployment, the service, the autoscaling, the budget of the disruptions, the network policy, the ingress, the route table and the template of the secret) |
+| The stack of a single host | `deploy/compose.production.yaml` |
+| The stack of the development | `deploy/compose.yaml` (with the fixtures) |
+
+The image of a release is built by the workflow `release.yml` when a tag is
+pushed: it builds the image, it starts it with the configuration of a
+deployment and it exports it as an artifact of the run.

@@ -35,6 +35,7 @@ export type { BridgeOptions } from './bridge'
 
 export { WebSocketService, offeredProtocols } from './service'
 export type {
+  WebSocketOutcome,
   WebSocketServiceOptions,
   WebSocketServicePort,
   WebSocketSettings,

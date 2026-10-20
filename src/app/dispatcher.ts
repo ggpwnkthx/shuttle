@@ -49,7 +49,7 @@ import { clientGoneResponse, jsonError } from './errors'
 import type { GatewayEnv } from './state'
 
 /** Reports whether a request wants to be upgraded to a websocket. */
-export function isUpgradeRequest(request: Request): boolean {
+function isUpgradeRequest(request: Request): boolean {
   return (request.headers.get('upgrade') ?? '').toLowerCase() === 'websocket'
 }
 

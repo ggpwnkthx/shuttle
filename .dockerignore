@@ -8,3 +8,6 @@ test
 scripts
 DECISIONS.md
 BUILD_STATUS.md
+docs
+deploy
+*.md

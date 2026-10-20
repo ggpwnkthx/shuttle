@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: shuttle
+  labels:
+    app.kubernetes.io/name: shuttle
+    app.kubernetes.io/component: gateway
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: shuttle
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# The autoscaling of the gateway.
+#
+# The metric is the number of the requests that are in flight: it is the
+# signal that follows the traffic, and it is the one the gateway already
+# exports. The CPU is the second signal, for the case where the traffic of
+# the gateway is not the traffic of the upstreams.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: shuttle
+  labels:
+    app.kubernetes.io/name: shuttle
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: shuttle
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Pods
+      pods:
+        metric:
+          name: shuttle_active_requests
+        target:
+          type: AverageValue
+          averageValue: "50"
+  behavior:
+    scaleDown:
+      # The gateway holds the sessions and the connections: a pod that is
+      # removed takes its websockets with it.
+      stabilizationWindowSeconds: 300
+---
+# The pods of a deployment are spread over the nodes: a node that fails
+# does not take the gateway with it.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: shuttle
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: shuttle
+---
+# The gateway only accepts the traffic of the ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shuttle
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: shuttle
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
+      ports:
+        - protocol: TCP
+          port: 8080

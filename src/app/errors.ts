@@ -7,7 +7,7 @@
  */
 
 /** The body of a refusal of the gateway. */
-export interface GatewayErrorBody {
+interface GatewayErrorBody {
   error: string
   message: string
   [key: string]: unknown

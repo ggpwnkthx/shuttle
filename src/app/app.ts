@@ -36,7 +36,7 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
  * valid is replaced by a generated one: the identifier ends up in a log
  * line and in a header, so it may not carry anything else.
  */
-export function resolveRequestId(request: Request): string {
+function resolveRequestId(request: Request): string {
   const incoming = request.headers.get('x-request-id')
   if (incoming && REQUEST_ID_PATTERN.test(incoming)) return incoming
   return randomUUID()
@@ -59,7 +59,7 @@ function initialState(request: Request): GatewayState {
  * The endpoints of the gateway compute it themselves: the limiter of the
  * logins is keyed by the address of the caller.
  */
-export function forwardingOf(
+function forwardingOf(
   context: Context<GatewayEnv>,
   dependencies: GatewayDependencies
 ): ReturnType<typeof resolveForwardingContext> {
@@ -125,7 +125,7 @@ export function createGatewayApp(dependencies: GatewayDependencies): Hono<Gatewa
 
   // The endpoints of the gateway. They are matched before the route table
   // is consulted.
-  app.get(GATEWAY_ENDPOINTS.health, (context) => healthHandler(context))
+  app.get(GATEWAY_ENDPOINTS.health, (context) => healthHandler(context, dependencies))
   app.get(GATEWAY_ENDPOINTS.ready, (context) => readyHandler(context, dependencies))
   app.get(GATEWAY_ENDPOINTS.metrics, (context) => metricsHandler(context, dependencies))
   app.get(GATEWAY_ENDPOINTS.login, async (context) => {
