@@ -70,6 +70,9 @@ The rules that the checker enforces:
    domains, the adapters, the platform and the observation layer.
 9. There are no catch-all directories (`utils`, `services`, `repositories`,
    `common`, …) and no import cycle, type-only imports included.
+10. The framework of the application (Hono) is only used by the application
+    and the api of the runtime (the listener, the sockets, the client of the
+    shared state) is only used by the platform.
 
 ## The lifecycle of the pieces
 

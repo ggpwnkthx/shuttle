@@ -73,7 +73,31 @@ describe('the rules of the import boundaries', () => {
     expect(violations.map((violation) => violation.rule)).toEqual([
       'domain-core-imports-framework',
       'domain-core-imports-boundary',
+      'hono-outside-app',
     ])
+  })
+
+  test('the framework of the application belongs to the application', () => {
+    const violations = checkArchitecture([
+      source('src/platform/bun/listener.ts', "import { Hono } from 'hono'\n"),
+    ])
+    expect(violations.map((violation) => violation.rule)).toEqual(['hono-outside-app'])
+  })
+
+  test('the api of the runtime belongs to the platform', () => {
+    const violations = checkArchitecture([
+      source('src/domains/proxying/exchange.ts', 'const server = Bun.serve({})\n'),
+      source('src/app/app.ts', 'export const app = 1\n'),
+    ])
+    expect(violations.map((violation) => violation.rule)).toEqual(['bun-api-outside-platform'])
+  })
+
+  test('the platform may use the api of the runtime', () => {
+    const violations = checkArchitecture([
+      source('src/platform/bun/listener.ts', 'const server = Bun.serve({})\n'),
+      source('src/platform/redis/client.ts', 'const client = new Bun.RedisClient(url)\n'),
+    ])
+    expect(violations).toEqual([])
   })
 
   test('a core domain file may use the observation interfaces', () => {
@@ -89,7 +113,7 @@ describe('the rules of the import boundaries', () => {
 
   test('an adapter of a domain may use a library', () => {
     const violations = checkArchitecture([
-      source('src/domains/proxying/adapters/bun.ts', "import { serve } from 'hono'\n"),
+      source('src/domains/proxying/adapters/bun.ts', "import { serve } from 'ws'\n"),
     ])
     expect(violations).toEqual([])
   })

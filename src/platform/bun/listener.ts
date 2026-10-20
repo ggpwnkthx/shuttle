@@ -6,18 +6,18 @@
  * drains.
  */
 
-import type { ExecutionContext } from 'hono'
 import type { WebSocketHandler } from 'bun'
 import { BunClientUpgrade } from './client-upgrade'
 
 /**
  * The application, as the listener sees it.
  *
- * The platform does not know the application: it knows that something
- * answers a request.
+ * The platform does not know the application and it does not know the
+ * framework of the application: it knows that something answers a request.
+ * The environment of the request is opaque here, the application builds it.
  */
 export interface RequestHandler {
-  fetch(request: Request, env: unknown, context: ExecutionContext): Response | Promise<Response>
+  handle(request: Request, env: never): Response | Promise<Response>
 }
 
 export interface ListenerOptions {
@@ -66,12 +66,6 @@ export interface StartedListener {
  * trusted.
  */
 export function startListener(options: ListenerOptions): StartedListener {
-  const executionCtx: ExecutionContext = {
-    waitUntil: () => undefined,
-    passThroughOnException: () => undefined,
-    props: {},
-  }
-
   const server = Bun.serve({
     port: options.port,
     hostname: options.host,
@@ -82,7 +76,7 @@ export function startListener(options: ListenerOptions): StartedListener {
       // The upgrade of a websocket connection is a capability of the
       // runtime: the application hands it to the domain of the websockets.
       const env = { upgrade: new BunClientUpgrade(bunServer as unknown as Bun.Server<unknown>) }
-      return options.app.fetch(request, env, executionCtx)
+      return options.app.handle(request, env as never)
     },
     ...(options.websocket
       ? {

@@ -29,6 +29,8 @@
  * 10. The observation layer is independent of everything else.
  * 11. The runtime is the composition root: it may assemble everything.
  * 12. There are no catch-all directories and no import cycles.
+ * 13. The framework of the application belongs to the application and the
+ *     api of the runtime belongs to the platform of the runtime.
  */
 
 import { readdir, readFile } from 'node:fs/promises'
@@ -352,7 +354,37 @@ export function checkArchitecture(files: SourceFile[]): Violation[] {
     )
   }
 
-  // (12) No import cycles.
+  // (13) Hono belongs to the application and the api of the runtime belongs
+  // to the platform of the runtime.
+  for (const file of files) {
+    const location = locate(file.path)
+    if (location.test) continue
+    if (location.layer !== 'app') {
+      for (const entry of importsOf(file)) {
+        const specifier = entry.specifier
+        if (specifier === 'hono' || specifier.startsWith('hono/')) {
+          violations.push({
+            file: file.path,
+            rule: 'hono-outside-app',
+            message: 'the framework of the application belongs to the application layer',
+            specifier,
+          })
+        }
+      }
+    }
+    // The platform is the boundary of the runtime: the api of the runtime
+    // (the listener, the sockets, the client of the shared state) belongs
+    // to it and to nothing else.
+    if (!file.path.startsWith('src/platform/') && usesBunApi(file)) {
+      violations.push({
+        file: file.path,
+        rule: 'bun-api-outside-platform',
+        message: 'the api of the runtime belongs to the platform of the runtime',
+      })
+    }
+  }
+
+  // (14) No import cycles.
   for (const cycle of findCycles(graph)) {
     violations.push({
       file: cycle[0]!,
@@ -362,6 +394,31 @@ export function checkArchitecture(files: SourceFile[]): Violation[] {
   }
 
   return violations
+}
+
+/**
+ * Reports whether a file uses the api of the runtime.
+ *
+ * The comments and the strings are not code: the scanner of the compiler
+ * only reports the identifiers that the program really uses.
+ */
+function usesBunApi(file: SourceFile): boolean {
+  const source = ts.createSourceFile(file.path, file.content, ts.ScriptTarget.ESNext, true)
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (ts.isIdentifier(node) && node.text === 'Bun') {
+      const parent = node.parent
+      // A property of an object (`foo.Bun`) is not the api of the runtime.
+      if (!parent || !ts.isPropertyAccessExpression(parent) || parent.name !== node) {
+        found = true
+        return
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  return found
 }
 
 /** Finds the cycles of a dependency graph. */

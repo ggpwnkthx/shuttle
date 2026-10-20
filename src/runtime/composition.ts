@@ -7,7 +7,7 @@
  * Everything else receives its dependencies.
  */
 
-import { createGatewayApp } from '../app/app'
+import { createGatewayApp, createGatewayHandler } from '../app/app'
 import type { GatewayDependencies } from '../app/dependencies'
 import { AuthenticationService } from '../domains/authentication'
 import { MemorySessionStore, RedisSessionStore } from '../domains/authentication/adapters'
@@ -243,7 +243,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
 
   const app = createGatewayApp(dependencies)
   const listener = startListener({
-    app,
+    app: createGatewayHandler(app),
     host: settings.network.host,
     port: settings.network.port,
     websocket: {

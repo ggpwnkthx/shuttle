@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { Hono, type Context } from 'hono'
+import { Hono, type Context, type ExecutionContext } from 'hono'
 import { serializeCookie } from '../domains/authentication'
 import { GATEWAY_ENDPOINTS } from '../domains/configuration'
 import { resolveForwardingContext } from '../domains/forwarding'
@@ -70,6 +70,31 @@ export function forwardingOf(
     trustedProxies: snapshot?.trustedProxies ?? [],
     externalProto: dependencies.externalProto,
   })
+}
+
+/**
+ * The application, as the listener of the platform sees it.
+ *
+ * The platform does not know the framework of the application: the
+ * application answers the requests itself and hands the platform the
+ * capabilities it needs.
+ */
+export interface GatewayHandler {
+  handle(request: Request, env: GatewayEnv['Bindings']): Response | Promise<Response>
+}
+
+/**
+ * Wraps the application of the gateway for the listener of the platform.
+ */
+export function createGatewayHandler(app: Hono<GatewayEnv>): GatewayHandler {
+  const executionCtx: ExecutionContext = {
+    waitUntil: () => undefined,
+    passThroughOnException: () => undefined,
+    props: {},
+  }
+  return {
+    handle: (request, env) => app.fetch(request, env, executionCtx),
+  }
 }
 
 /**
