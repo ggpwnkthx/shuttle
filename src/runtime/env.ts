@@ -197,12 +197,26 @@ const EnvSchema = z.object({
   SHUTTLE_OIDC_ROLES_CLAIM: z.string().default('roles'),
   SHUTTLE_OIDC_AUDIENCE: z.string().optional(),
   SHUTTLE_OIDC_ALLOW_INSECURE: boolEnv(),
+  /**
+   * Allows a client of the identity provider without a secret.
+   *
+   * The setting is the production validation of the deployment: without a
+   * secret the client is public, and the provider accepts the code of the
+   * browser without a proof that the caller is the gateway.
+   */
   SHUTTLE_OIDC_ALLOW_PUBLIC_CLIENT: boolEnv(),
 
   SHUTTLE_ACCESS_URL: z.string().optional(),
   SHUTTLE_ACCESS_TOKEN: z.string().optional(),
   SHUTTLE_ACCESS_TIMEOUT_MS: intEnv(3_000, { min: 1 }),
   SHUTTLE_ACCESS_CACHE_TTL_MS: intEnv(5_000, { min: 0 }),
+  /**
+   * Allows the gateway to call the access service without a token.
+   *
+   * The setting is the production validation of the deployment: the access
+   * service refuses a call without a token, so a deployment that does not
+   * allow it has to configure one.
+   */
   SHUTTLE_ACCESS_ALLOW_ANONYMOUS: boolEnv(),
 
   SHUTTLE_SESSION_SECRET: z.string().optional(),

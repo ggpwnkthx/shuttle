@@ -11,6 +11,7 @@ import { SessionStoreError } from '../domains/authentication'
 import { GATEWAY_ENDPOINTS } from '../domains/configuration'
 import { checkCrossSiteNavigation } from '../domains/forwarding'
 import { rateLimitKey } from '../domains/rate-limiting'
+import { readCookie } from './cookies'
 import type { GatewayDependencies } from './dependencies'
 import { jsonError } from './errors'
 import type { GatewayEnv } from './state'
@@ -186,19 +187,6 @@ export async function logoutHandler(
 
 /** The paths of the endpoints of the gateway. */
 export const ENDPOINT_PATHS = GATEWAY_ENDPOINTS
-
-/** Reads a cookie of a `Cookie` header. */
-function readCookie(header: string | undefined, name: string): string | undefined {
-  if (!header) return undefined
-  for (const part of header.split(';')) {
-    const trimmed = part.trim()
-    const index = trimmed.indexOf('=')
-    if (index === -1) continue
-    if (trimmed.slice(0, index).trim() !== name) continue
-    return trimmed.slice(index + 1).trim()
-  }
-  return undefined
-}
 
 /** Compares two tokens in constant time. */
 function sameToken(left: string, right: string): boolean {

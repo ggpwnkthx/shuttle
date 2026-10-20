@@ -123,6 +123,43 @@ describe('the reserved paths', () => {
   })
 })
 
+describe('the answer of an upstream', () => {
+  let harness: Harness
+
+  beforeAll(async () => {
+    harness = await createHarness()
+  })
+
+  afterAll(async () => {
+    await harness.stop()
+  })
+
+  test('a location that names the upstream becomes relative', async () => {
+    const response = await fetch(
+      `${harness.gatewayUrl}/redirect?to=${encodeURIComponent(`${harness.upstreamA.url}/login`)}`,
+      {
+        headers: { host: 'public.shuttle.test' },
+        redirect: 'manual',
+      }
+    )
+    expect(response.status).toBe(302)
+    // The internal hostname of the upstream never reaches the browser.
+    expect(response.headers.get('location')).toBe('/login')
+  })
+
+  test('a location that names another host is left alone', async () => {
+    const response = await fetch(
+      `${harness.gatewayUrl}/redirect?to=${encodeURIComponent('https://accounts.example.com/login')}`,
+      {
+        headers: { host: 'public.shuttle.test' },
+        redirect: 'manual',
+      }
+    )
+    expect(response.status).toBe(302)
+    expect(response.headers.get('location')).toBe('https://accounts.example.com/login')
+  })
+})
+
 describe('the workspace of a request', () => {
   let harness: Harness
 

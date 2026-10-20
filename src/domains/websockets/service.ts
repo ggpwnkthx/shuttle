@@ -63,20 +63,29 @@ export interface WebSocketServiceOptions {
   observer: Observer
 }
 
+/**
+ * The outcome of an upgrade.
+ *
+ * The domain decides what happened, the application renders the answer of
+ * the protocol: a typed outcome is mapped to a response at the boundary.
+ */
+export type WebSocketOutcome =
+  | { kind: 'upgraded' }
+  | { kind: 'refused'; status: number; code: string; message: string }
+
 /** The port the application uses to upgrade a caller. */
 export interface WebSocketServicePort {
   /**
    * Handles an upgrade request.
    *
-   * It answers the caller itself: the upgrade of the caller, the refusal of
-   * the handshake and the errors of the upstream are all answers of the
-   * gateway.
+   * The domain owns the handshake and the bridge; it reports the outcome and
+   * the application answers the caller.
    */
   handle(
     request: Request,
     context: WebSocketUpgradeContext,
     upgrade: ClientUpgradePort
-  ): Promise<Response>
+  ): Promise<WebSocketOutcome>
 }
 
 /** The headers of the client handshake that belong to the handshake itself. */
@@ -132,7 +141,7 @@ export class WebSocketService implements WebSocketServicePort {
     request: Request,
     context: WebSocketUpgradeContext,
     upgrade: ClientUpgradePort
-  ): Promise<Response> {
+  ): Promise<WebSocketOutcome> {
     // 1. The origin of the handshake. A handshake that carries the cookie
     // of the session is a handshake of a browser, and a browser always
     // sends the origin of the page.
@@ -151,7 +160,12 @@ export class WebSocketService implements WebSocketServicePort {
           reason: origin.reason,
         })
         this.#observer.recordWebsocketRefusal('cross_site')
-        return jsonError(403, 'cross_site_request', origin.reason ?? 'the handshake was refused')
+        return {
+          kind: 'refused',
+          status: 403,
+          code: 'cross_site_request',
+          message: origin.reason ?? 'the handshake was refused',
+        }
       }
     }
 
@@ -163,7 +177,12 @@ export class WebSocketService implements WebSocketServicePort {
         routeId: context.routeId,
       })
       this.#observer.recordWebsocketRefusal('connection_limit')
-      return jsonError(503, 'too_many_connections', 'the gateway has too many open connections')
+      return {
+        kind: 'refused',
+        status: 503,
+        code: 'too_many_connections',
+        message: 'the gateway has too many open connections',
+      }
     }
 
     // 3. The upstream is connected first: the caller learns the outcome of
@@ -189,7 +208,12 @@ export class WebSocketService implements WebSocketServicePort {
       this.#observer.recordWebsocketRefusal(
         outcome.kind === 'refused' ? 'upstream_refused' : 'upstream_unavailable'
       )
-      return jsonError(502, 'bad_gateway', 'the upstream did not accept the websocket connection')
+      return {
+        kind: 'refused',
+        status: 502,
+        code: 'bad_gateway',
+        message: 'the upstream did not accept the websocket connection',
+      }
     }
 
     // 4. The caller is upgraded with the headers of the gateway: the
@@ -208,7 +232,12 @@ export class WebSocketService implements WebSocketServicePort {
         routeId: context.routeId,
       })
       this.#observer.recordWebsocketRefusal('not_allowed')
-      return jsonError(400, 'websocket_upgrade_failed', 'the websocket upgrade was rejected')
+      return {
+        kind: 'refused',
+        status: 400,
+        code: 'websocket_upgrade_failed',
+        message: 'the websocket upgrade was rejected',
+      }
     }
 
     // 5. The two legs are bridged.
@@ -248,7 +277,7 @@ export class WebSocketService implements WebSocketServicePort {
       protocol: outcome.protocol,
     })
     // The answer of the upgrade was already sent by the runtime.
-    return new Response(null)
+    return { kind: 'upgraded' }
   }
 
   /** The headers of the handshake with the upstream. */
@@ -283,12 +312,4 @@ function closeUpstream(socket: UpstreamSocket): void {
   } catch {
     /* the connection is already gone */
   }
-}
-
-/** The answer of a refusal of the gateway. */
-function jsonError(status: number, code: string, message: string): Response {
-  return new Response(JSON.stringify({ error: code, message }), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  })
 }

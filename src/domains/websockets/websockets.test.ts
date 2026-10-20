@@ -52,6 +52,11 @@ function fakeUpstream(): UpstreamSocket & { sent: (string | Uint8Array)[] } {
   }
 }
 
+/** A request of an upgrade. */
+function newRequest(): Request {
+  return new Request('https://api.example.com/ws/123')
+}
+
 /** The context of an upgrade. */
 function context(overrides: Partial<WebSocketUpgradeContext> = {}): WebSocketUpgradeContext {
   return {
@@ -183,7 +188,7 @@ describe('the handshake of a websocket', () => {
 
   test('a handshake with the cookie of the session needs an allowed origin', async () => {
     const { service: websockets, upstream } = service()
-    const response = await websockets.handle(
+    const outcome = await websockets.handle(
       new Request('https://api.example.com/ws/123'),
       context({
         carriesSessionCookie: true,
@@ -191,32 +196,37 @@ describe('the handshake of a websocket', () => {
       }),
       { upgrade: async () => null }
     )
-    expect(response.status).toBe(403)
-    const body = (await response.json()) as { error: string }
-    expect(body.error).toBe('cross_site_request')
+    expect(outcome).toEqual({
+      kind: 'refused',
+      status: 403,
+      code: 'cross_site_request',
+      message: 'the origin "https://evil.example" is not allowed',
+    })
     // The upstream was not contacted: the check happens first.
     expect(upstream.connected).toBe(0)
   })
 
   test('a handshake without an origin is refused when the cookie is there', async () => {
     const { service: websockets, upstream } = service()
-    const response = await websockets.handle(
+    const outcome = await websockets.handle(
       new Request('https://api.example.com/ws/123'),
       context({ carriesSessionCookie: true }),
       { upgrade: async () => null }
     )
-    expect(response.status).toBe(403)
+    expect(outcome.kind).toBe('refused')
+    if (outcome.kind !== 'refused') return
+    expect(outcome.status).toBe(403)
     expect(upstream.connected).toBe(0)
   })
 
   test('a handshake of an api client does not need an origin', async () => {
     const { service: websockets, upstream } = service()
-    const response = await websockets.handle(
+    const outcome = await websockets.handle(
       new Request('https://api.example.com/ws/123'),
       context({ carriesSessionCookie: false }),
       { upgrade: async () => ({ leg: fakeLeg(), events: {} }) }
     )
-    expect(response.status).toBe(200)
+    expect(outcome.kind).toBe('upgraded')
     expect(upstream.connected).toBe(1)
   })
 
@@ -224,34 +234,36 @@ describe('the handshake of a websocket', () => {
     const { service: websockets } = service({
       outcome: { kind: 'refused', status: 403, headers: new Headers(), body: 'denied' },
     })
-    const response = await websockets.handle(
+    const outcome = await websockets.handle(
       new Request('https://api.example.com/ws/123'),
       context(),
       { upgrade: async () => null }
     )
-    expect(response.status).toBe(502)
+    expect(outcome.kind).toBe('refused')
+    if (outcome.kind !== 'refused') return
+    expect(outcome.status).toBe(502)
   })
 
   test('an upstream that does not answer is a bad gateway', async () => {
     const { service: websockets } = service({
       outcome: { kind: 'failed', reason: 'timeout', message: 'no answer' },
     })
-    const response = await websockets.handle(
+    const outcome = await websockets.handle(
       new Request('https://api.example.com/ws/123'),
       context(),
       { upgrade: async () => null }
     )
-    expect(response.status).toBe(502)
+    expect(outcome.kind).toBe('refused')
+    if (outcome.kind !== 'refused') return
+    expect(outcome.status).toBe(502)
   })
 
   test('an upgrade that the runtime refuses is a bad request', async () => {
     const { service: websockets } = service()
-    const response = await websockets.handle(
-      new Request('https://api.example.com/ws/123'),
-      context(),
-      { upgrade: async () => null }
-    )
-    expect(response.status).toBe(400)
+    const outcome = await websockets.handle(newRequest(), context(), { upgrade: async () => null })
+    expect(outcome.kind).toBe('refused')
+    if (outcome.kind !== 'refused') return
+    expect(outcome.status).toBe(400)
   })
 
   test('the limit of the connections is refused with a service unavailable', async () => {
@@ -309,14 +321,11 @@ describe('the handshake of a websocket', () => {
       upgrade: async () => ({ leg: fakeLeg(), events: {} }),
     })
     await Bun.sleep(20)
-    const second = await websockets.handle(
-      new Request('https://api.example.com/ws/123'),
-      context(),
-      { upgrade: async () => null }
-    )
+    const second = await websockets.handle(newRequest(), context(), { upgrade: async () => null })
+    expect(second.kind).toBe('refused')
+    if (second.kind !== 'refused') return
     expect(second.status).toBe(503)
-    const body = (await second.json()) as { error: string }
-    expect(body.error).toBe('too_many_connections')
+    expect(second.code).toBe('too_many_connections')
     release?.()
     await first
   })

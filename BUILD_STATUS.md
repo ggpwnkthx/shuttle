@@ -15,17 +15,17 @@ does not expose the boundaries the specification relies on (see
 | # | Commit | State | Evidence |
 | --- | --- | --- | --- |
 | 01 | `chore: establish domain boundaries and build checks` | done | `bun test test/architecture` (18 tests), `bun run typecheck`, `bun run lint`, `bun run format:check` |
-| 02 | `test: prove Bun transport capabilities` | done | `bun test test/network` (23 tests) with Bun 1.4.3; the same suite with Bun 1.2.0 and 1.2.23 to measure the boundaries |
-| 03 | `feat: compile and publish route configuration` | done | `bun test src/domains/routing src/domains/configuration src/runtime` (51 tests) |
-| 04 | `feat: enforce forwarding trust and identity policy` | done | `bun test src/domains/forwarding` (54 tests), the vector of the specification is pinned |
+| 02 | `test: prove Bun transport capabilities` | done | `bun test test/network` (14 tests of the transport, 9 of the exchange, 5 of the websockets) with Bun 1.4.3; the transport suite was also run with Bun 1.2.0 and 1.2.23 to measure the boundaries |
+| 03 | `feat: compile and publish route configuration` | done | `bun test src/domains/routing` (19), `src/domains/configuration` (20), `src/runtime/env.test.ts` (12) |
+| 04 | `feat: enforce forwarding trust and identity policy` | done | `bun test src/domains/forwarding` (54 tests: 13 of the signature, 15 of the headers, 8 of the target, 18 of the origins), the vector of the specification is pinned |
 | 05 | `feat: add bounded request limiters` | done | `bun test src/domains/rate-limiting` (14 tests), `bun test test/integration/redis-limiter.test.ts` (skipped here, run in CI) |
-| 06 | `feat: implement session storage and lifetime rules` | done | `bun test src/domains/authentication` (16 tests), `bun test test/integration/redis-sessions.test.ts` (skipped here, run in CI) |
-| 07 | `feat: implement OIDC and credential selection` | done | `bun test src/domains/authentication` (45 tests), `bun test test/integration/oidc.test.ts` (11 tests) |
+| 06 | `feat: implement session storage and lifetime rules` | done | `bun test src/domains/authentication/session.test.ts` (16), `bun test test/integration/redis-sessions.test.ts` (4 tests, skipped here, run in CI) |
+| 07 | `feat: implement OIDC and credential selection` | done | `bun test src/domains/authentication/principal.test.ts` (20), `login-state.test.ts` (9), `bun test test/integration/oidc.test.ts` (11) |
 | 08 | `feat: authorize workspace access through decision service` | done | `bun test src/domains/workspace-access` (18 tests), `bun test test/integration/access.test.ts` (4 tests) |
 | 09 | `feat: stream HTTP exchanges with bounded cleanup` | done | `bun test src/domains/proxying` (14 tests), `bun test test/network/exchange.test.ts` (9 tests) |
-| 10 | `feat: compose gateway endpoints and request pipeline` | done | `bun test test/contract` (37 tests) |
-| 11 | `feat: bridge WebSockets with bounded resources` | done | `bun test src/domains/websockets` (12 tests), `bun test test/network/websocket.test.ts` (5 tests) |
-| 12 | `feat: complete reload drain and lifecycle observation` | done | `bun test test/contract/lifecycle.test.ts` (5 tests) |
+| 10 | `feat: compose gateway endpoints and request pipeline` | done | `bun test test/contract/endpoints.test.ts` (14), `test/contract/pipeline.test.ts` (13) |
+| 11 | `feat: bridge WebSockets with bounded resources` | done | `bun test src/domains/websockets` (12), `bun test test/network/websocket.test.ts` (5) |
+| 12 | `feat: complete reload drain and lifecycle observation` | done | `bun test test/contract/lifecycle.test.ts` (5) |
 | 13 | `test: qualify the production deployment` | done | `bun test test/browser` (3 tests, Chromium), `bun test test/load` (2 tests), `bun run load` (the measurements of [docs/capacity.md](docs/capacity.md)) |
 
 ## The checks of the project
@@ -45,8 +45,11 @@ does not expose the boundaries the specification relies on (see
 | Load | `bun run load` | run | run |
 | The image | `docker build` | **not run** (no docker) | run |
 
-The last full run of the suite: **304 tests passed, 8 skipped (the Redis
-tests), 0 failed** with Bun 1.4.3.
+The last full run of the suite: **306 tests passed, 8 skipped (the Redis
+tests), 0 failed** with Bun 1.4.3. The suite is 27 files: 14 unit test files
+of the domains and of the runtime, the architecture check, 3 network test
+files, 4 integration test files, 3 contract test files, the browser test and
+the soak.
 
 ## The environment of this build
 

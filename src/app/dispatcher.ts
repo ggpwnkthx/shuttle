@@ -32,7 +32,9 @@ import {
   buildUpstreamTarget,
   checkCrossSite,
   resolveForwardingContext,
+  rewriteLocation,
   signIdentity,
+  upstreamOrigin,
   writtenIdentity,
   type CallerIdentity,
 } from '../domains/forwarding'
@@ -42,6 +44,7 @@ import type { ExchangeFailure } from '../domains/proxying'
 import { validateWorkspace } from '../domains/workspace-access'
 import { UNMATCHED_ROUTE, redactUrl } from '../observability'
 import type { GatewayDependencies } from './dependencies'
+import { readCookie } from './cookies'
 import { clientGoneResponse, jsonError } from './errors'
 import type { GatewayEnv } from './state'
 
@@ -264,7 +267,7 @@ export async function dispatch(
     if (!upgrade) {
       return jsonError(503, 'websocket_unavailable', 'the websockets are not available')
     }
-    return await dependencies.websockets.handle(
+    const outcome = await dependencies.websockets.handle(
       context.req.raw,
       {
         routeId: route.id,
@@ -295,6 +298,11 @@ export async function dispatch(
       },
       upgrade
     )
+    if (outcome.kind === 'upgraded') {
+      // The answer of the upgrade was already sent by the runtime.
+      return new Response(null)
+    }
+    return jsonError(outcome.status, outcome.code, outcome.message)
   }
 
   // The http path.
@@ -390,6 +398,15 @@ export async function dispatch(
   const responseHeaders = buildClientHeaders(result.response.headers, dependencies.gatewayCookies)
   responseHeaders.set('x-request-id', requestId)
 
+  // A location that names the upstream itself is made relative: the
+  // internal hostname of the upstream never reaches the browser. A location
+  // that names another host is left alone.
+  const location = responseHeaders.get('location')
+  if (location) {
+    const rewritten = rewriteLocation(location, { upstreamOrigin: upstreamOrigin(route.upstream) })
+    if (rewritten !== location) responseHeaders.set('location', rewritten)
+  }
+
   return new Response(result.response.body, {
     status: result.response.status,
     statusText: result.response.statusText,
@@ -424,23 +441,6 @@ function identityOf(principal: Principal, workspaceId: string | undefined): Call
 /** The reason of a denial, as the metric counts it. */
 function failureReasonOf(reason: string): 'missing_role' | 'access_denied' {
   return /role/i.test(reason) ? 'missing_role' : 'access_denied'
-}
-
-/**
- * Reads a cookie of a `Cookie` header.
- *
- * The names of the cookies are case sensitive.
- */
-export function readCookie(header: string | undefined, name: string): string | undefined {
-  if (!header) return undefined
-  for (const part of header.split(';')) {
-    const trimmed = part.trim()
-    const index = trimmed.indexOf('=')
-    if (index === -1) continue
-    if (trimmed.slice(0, index).trim() !== name) continue
-    return trimmed.slice(index + 1).trim()
-  }
-  return undefined
 }
 
 export { GATEWAY_COOKIE_NAMES, UNMATCHED_ROUTE }

@@ -78,6 +78,14 @@ export interface OidcClientOptions {
    * front of the identity provider.
    */
   allowInsecureIssuer?: boolean
+  /**
+   * Allows a client without a secret.
+   *
+   * A public client is a client that anyone can impersonate: the provider
+   * accepts the code of the browser without a proof that the caller is the
+   * gateway. It is refused unless the deployment allows it explicitly.
+   */
+  allowPublicClient?: boolean
 }
 
 /**
@@ -170,6 +178,12 @@ export class OidcClient implements OidcPort {
     this.issuer = normalizeIssuer(options.issuer)
     this.clientId = options.clientId
     this.clientSecret = options.clientSecret
+    if (!this.clientSecret && options.allowPublicClient === false) {
+      throw new OidcError(
+        'client_configuration_invalid',
+        'the client has no secret and the deployment does not allow a public client'
+      )
+    }
     this.redirectUri = options.redirectUri
     this.scopes = options.scopes ?? ['openid', 'profile', 'email']
     this.audience = options.audience ?? options.clientId

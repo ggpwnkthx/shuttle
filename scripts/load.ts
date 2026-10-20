@@ -217,6 +217,7 @@ async function main(): Promise<void> {
       SHUTTLE_GATEWAY_PORT: '0',
       SHUTTLE_OIDC_ISSUER: 'http://127.0.0.1:1',
       SHUTTLE_OIDC_CLIENT_ID: 'load',
+      SHUTTLE_OIDC_CLIENT_SECRET: 'load-test-secret',
       SHUTTLE_OIDC_REDIRECT_URI: 'http://127.0.0.1:1/auth/callback',
       SHUTTLE_OIDC_ALLOW_INSECURE: 'true',
       SHUTTLE_ACCESS_URL: 'http://127.0.0.1:1',

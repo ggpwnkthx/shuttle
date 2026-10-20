@@ -119,6 +119,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     audience: settings.oidc.audience,
     rolesClaim: settings.oidc.rolesClaim,
     allowInsecureIssuer: settings.oidc.allowInsecureIssuer,
+    allowPublicClient: settings.oidc.allowPublicClient,
   })
 
   const auth = new AuthenticationService({
