@@ -262,7 +262,7 @@ function matcherFor(route: CompiledRoute<unknown>): MatchFunction<ParamData> {
  * that matches wins.
  */
 export function matchRoute<TPayload>(
-  routes: CompiledRoute<TPayload>[],
+  routes: readonly CompiledRoute<TPayload>[],
   host: string,
   path: string
 ): RouteMatch<TPayload> | null {

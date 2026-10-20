@@ -1,0 +1,278 @@
+/**
+ * The metrics of the gateway.
+ *
+ * The exposition format is produced by `prom-client`, nothing here is
+ * hand-rolled: the library owns the format, the escaping and the histogram
+ * buckets. This module decides *what* is measured and keeps the number of
+ * label combinations bounded, so a busy gateway can never grow its memory
+ * without limit.
+ *
+ * The labels are bounded on purpose: the route (or a fixed value for the
+ * requests that matched no route), the method, the status and a closed set
+ * of reasons. A workspace, a subject, an url or a request id are never a
+ * label.
+ */
+
+import { Counter, Gauge, Histogram, Registry } from 'prom-client'
+
+/** The number of routes that are tracked individually. */
+const MAX_TRACKED_ROUTES = 500
+
+/** The label value used for the routes that do not fit any more. */
+const OVERFLOW_ROUTE = 'overflow'
+
+/** The label value used for the requests that matched no route. */
+export const UNMATCHED_ROUTE = 'unmatched'
+
+/** Upper bounds of the latency histogram, in seconds. */
+const DURATION_BUCKETS_SECONDS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60]
+
+/**
+ * The reasons a caller was rejected. They are a closed set on purpose.
+ *
+ * `missing_role` is not a decision of the gateway: Shuttle does not check
+ * roles itself. It is reported when the access service denies a caller
+ * because of a missing role.
+ */
+export type AuthFailureReason = 'unauthenticated' | 'missing_role' | 'access_denied'
+
+/** The reasons a websocket handshake was refused. */
+export type WebSocketRefusalReason =
+  | 'connection_limit'
+  | 'upstream_unavailable'
+  | 'upstream_refused'
+  | 'cross_site'
+  | 'not_allowed'
+
+/** The observation of a request that was handled. */
+export interface RequestObservation {
+  /** The id of the route, or the fixed value of the unmatched requests. */
+  routeId: string
+  method: string
+  status: number
+  durationMs: number
+  bytesIn: number
+  bytesOut: number
+}
+
+/**
+ * The interface the application uses to observe the gateway.
+ *
+ * The application knows the interface and not the implementation: the
+ * metrics are an observation, they are not a policy of the request.
+ */
+export interface Observer {
+  /** A request started. */
+  requestStarted(): void
+  /** A request is over. */
+  requestFinished(): void
+  /** A request was handled. */
+  recordRequest(observation: RequestObservation): void
+  /** A caller was rejected. */
+  recordAuthFailure(routeId: string, reason: AuthFailureReason): void
+  /** A websocket was accepted. */
+  recordWebsocket(routeId: string): void
+  /** A websocket handshake was refused. */
+  recordWebsocketRefusal(reason: WebSocketRefusalReason): void
+  /** A configuration was loaded. */
+  recordConfigReload(ok: boolean): void
+  /** A request was refused by the limiter. */
+  recordRateLimit(): void
+  /** A request was refused because it came from another site. */
+  recordCrossSiteRefusal(routeId: string): void
+  /** The state the replicas share was not reachable. */
+  recordSharedStateError(): void
+  /** The metrics, in the Prometheus text exposition format. */
+  render(): Promise<string>
+  /** The content type of the exposition format. */
+  readonly contentType: string
+}
+
+export class MetricsStore implements Observer {
+  #registry = new Registry()
+  #requests: Counter<'route' | 'method' | 'status'>
+  #errors: Counter<'route'>
+  #authFailures: Counter<'route' | 'reason'>
+  #websockets: Counter<'route'>
+  #duration: Histogram<'route'>
+  #bytesIn: Counter
+  #bytesOut: Counter
+  #active: Gauge
+  #configReloads: Counter<'result'>
+  #rateLimited: Counter
+  #crossSiteRefusals: Counter<'route'>
+  #websocketRefusals: Counter<'reason'>
+  #sharedStateErrors: Counter
+  /** The routes that are tracked individually. */
+  #routes = new Set<string>()
+
+  constructor() {
+    this.#requests = new Counter({
+      name: 'shuttle_requests_total',
+      help: 'Requests handled by the gateway.',
+      labelNames: ['route', 'method', 'status'],
+      registers: [this.#registry],
+    })
+    this.#errors = new Counter({
+      name: 'shuttle_request_errors_total',
+      help: 'Requests that failed with a server error.',
+      labelNames: ['route'],
+      registers: [this.#registry],
+    })
+    this.#authFailures = new Counter({
+      name: 'shuttle_auth_failures_total',
+      help: 'Callers that were rejected.',
+      labelNames: ['route', 'reason'],
+      registers: [this.#registry],
+    })
+    this.#websockets = new Counter({
+      name: 'shuttle_websocket_connections_total',
+      help: 'Accepted websocket upgrades.',
+      labelNames: ['route'],
+      registers: [this.#registry],
+    })
+    this.#duration = new Histogram({
+      name: 'shuttle_request_duration_seconds',
+      help: 'Latency of the proxied requests.',
+      labelNames: ['route'],
+      buckets: DURATION_BUCKETS_SECONDS,
+      registers: [this.#registry],
+    })
+    this.#bytesIn = new Counter({
+      name: 'shuttle_bytes_in_total',
+      help: 'Bytes received from the callers.',
+      registers: [this.#registry],
+    })
+    this.#bytesOut = new Counter({
+      name: 'shuttle_bytes_out_total',
+      help: 'Bytes sent to the callers.',
+      registers: [this.#registry],
+    })
+    this.#active = new Gauge({
+      name: 'shuttle_active_requests',
+      help: 'Requests that are currently in flight.',
+      registers: [this.#registry],
+    })
+    this.#configReloads = new Counter({
+      name: 'shuttle_config_reloads_total',
+      help: 'Configuration reloads by outcome.',
+      labelNames: ['result'],
+      registers: [this.#registry],
+    })
+    this.#rateLimited = new Counter({
+      name: 'shuttle_rate_limited_total',
+      help: 'Requests that were refused by the rate limiter.',
+      registers: [this.#registry],
+    })
+    this.#crossSiteRefusals = new Counter({
+      name: 'shuttle_cross_site_refusals_total',
+      help: 'Requests that were refused because they came from another site.',
+      labelNames: ['route'],
+      registers: [this.#registry],
+    })
+    this.#websocketRefusals = new Counter({
+      name: 'shuttle_websocket_refusals_total',
+      help: 'Websocket handshakes that were refused, by reason.',
+      labelNames: ['reason'],
+      registers: [this.#registry],
+    })
+    this.#sharedStateErrors = new Counter({
+      name: 'shuttle_shared_state_errors_total',
+      help: 'The times the state the replicas share was not reachable.',
+      registers: [this.#registry],
+    })
+  }
+
+  requestStarted(): void {
+    this.#active.inc()
+  }
+
+  requestFinished(): void {
+    this.#active.dec()
+  }
+
+  recordRequest(observation: RequestObservation): void {
+    const route = this.#route(observation.routeId)
+    this.#requests.inc({
+      route,
+      method: observation.method,
+      status: String(observation.status),
+    })
+    if (observation.status >= 500) this.#errors.inc({ route })
+    this.#bytesIn.inc(observation.bytesIn)
+    this.#bytesOut.inc(observation.bytesOut)
+    this.#duration.observe({ route }, observation.durationMs / 1000)
+  }
+
+  recordAuthFailure(routeId: string, reason: AuthFailureReason): void {
+    this.#authFailures.inc({ route: this.#route(routeId), reason })
+  }
+
+  recordWebsocket(routeId: string): void {
+    this.#websockets.inc({ route: this.#route(routeId) })
+  }
+
+  recordWebsocketRefusal(reason: WebSocketRefusalReason): void {
+    this.#websocketRefusals.inc({ reason })
+  }
+
+  recordConfigReload(ok: boolean): void {
+    this.#configReloads.inc({ result: ok ? 'ok' : 'failed' })
+  }
+
+  recordRateLimit(): void {
+    // The caller is not a label: an unbounded set of addresses would grow
+    // the metrics without limit.
+    this.#rateLimited.inc()
+  }
+
+  recordCrossSiteRefusal(routeId: string): void {
+    this.#crossSiteRefusals.inc({ route: this.#route(routeId) })
+  }
+
+  recordSharedStateError(): void {
+    this.#sharedStateErrors.inc()
+  }
+
+  async render(): Promise<string> {
+    return this.#registry.metrics()
+  }
+
+  get contentType(): string {
+    return this.#registry.contentType
+  }
+
+  /**
+   * The label value of a route.
+   *
+   * The routes beyond the cap are aggregated into a single `overflow`
+   * series, so the memory stays bounded.
+   */
+  #route(routeId: string): string {
+    if (this.#routes.has(routeId)) return routeId
+    if (this.#routes.size >= MAX_TRACKED_ROUTES) {
+      this.#routes.add(OVERFLOW_ROUTE)
+      return OVERFLOW_ROUTE
+    }
+    this.#routes.add(routeId)
+    return routeId
+  }
+}
+
+/** An observer that measures nothing; it is used by the tests. */
+export function createSilentObserver(): Observer {
+  return {
+    requestStarted: () => undefined,
+    requestFinished: () => undefined,
+    recordRequest: () => undefined,
+    recordAuthFailure: () => undefined,
+    recordWebsocket: () => undefined,
+    recordWebsocketRefusal: () => undefined,
+    recordConfigReload: () => undefined,
+    recordRateLimit: () => undefined,
+    recordCrossSiteRefusal: () => undefined,
+    recordSharedStateError: () => undefined,
+    render: async () => '',
+    contentType: 'text/plain; version=0.0.4',
+  }
+}

@@ -199,8 +199,7 @@ describe('the browser login', () => {
     })
     const begun = await auth.beginLogin('/dashboard')
     const outcome = await auth.completeLogin({
-      code: 'the-code',
-      state: 'the-state',
+      params: new URLSearchParams({ code: 'the-code', state: 'the-state' }),
       stateCookie: begun.stateCookie.value,
     })
     expect(outcome.redirect).toBe('/dashboard')
@@ -215,7 +214,9 @@ describe('the browser login', () => {
       exchange: { subject: 'user-1', roles: [] },
     })
     const begun = await auth.beginLogin('/')
-    await expect(auth.completeLogin({ code: 'the-code', state: 'the-state' })).rejects.toThrow()
+    await expect(
+      auth.completeLogin({ params: new URLSearchParams({ code: 'the-code', state: 'the-state' }) })
+    ).rejects.toThrow()
     expect(begun.stateCookie.name).toBe('shuttle_oidc_state')
   })
 
@@ -226,8 +227,7 @@ describe('the browser login', () => {
     const begun = await auth.beginLogin('/')
     await expect(
       auth.completeLogin({
-        code: 'the-code',
-        state: 'another-state',
+        params: new URLSearchParams({ code: 'the-code', state: 'another-state' }),
         stateCookie: begun.stateCookie.value,
       })
     ).rejects.toThrow(/state/)
@@ -235,7 +235,12 @@ describe('the browser login', () => {
 
   test('an answer of the provider that carries an error is refused', async () => {
     const { service: auth } = service()
-    await expect(auth.completeLogin({ error: 'access_denied', stateCookie: 'x' })).rejects.toThrow()
+    await expect(
+      auth.completeLogin({
+        params: new URLSearchParams({ error: 'access_denied' }),
+        stateCookie: 'x',
+      })
+    ).rejects.toThrow()
   })
 })
 

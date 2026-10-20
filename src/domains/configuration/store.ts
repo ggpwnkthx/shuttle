@@ -122,6 +122,11 @@ export class ConfigurationStore {
     return this.#snapshot
   }
 
+  /** True when a configuration was published at least once. */
+  get loaded(): boolean {
+    return this.#snapshot !== null
+  }
+
   /** The last error, or null when the last load was a success. */
   get lastError(): ConfigErrorState | null {
     return this.#error

@@ -191,30 +191,34 @@ export class AuthenticationService {
    * login attempt.
    */
   async completeLogin(input: {
-    code?: string
-    state?: string
-    error?: string
+    /** The parameters of the callback of the provider. */
+    params: URLSearchParams
+    /** The cookie of the state of the login. */
     stateCookie?: string
   }): Promise<CompleteLoginOutcome> {
-    if (input.error) {
-      throw new OidcError('login_failed', `identity provider returned an error: ${input.error}`)
+    const error = input.params.get('error')
+    if (error) {
+      throw new OidcError('login_failed', `identity provider returned an error: ${error}`)
     }
-    if (!input.code) {
+    const code = input.params.get('code')
+    if (!code) {
       throw new OidcError('login_failed', 'authorization code is missing')
     }
     const state = verifyLoginState(input.stateCookie, this.#secret)
     if (!state) {
       throw new OidcError('login_failed', 'the login request could not be verified')
     }
-    if (!input.state || input.state !== state.state) {
+    const returned = input.params.get('state')
+    if (!returned || returned !== state.state) {
       throw new OidcError('login_failed', 'the login state does not match')
     }
 
-    const identity = await this.oidc.exchangeCode(
-      new URLSearchParams({ code: input.code, state: input.state }),
-      state.verifier,
-      { nonce: state.nonce, state: state.state }
-    )
+    // The parameters of the callback are passed as they are: the library
+    // validates the whole answer of the provider, the issuer included.
+    const identity = await this.oidc.exchangeCode(input.params, state.verifier, {
+      nonce: state.nonce,
+      state: state.state,
+    })
 
     const session = await this.#createSession({
       subject: identity.subject,
