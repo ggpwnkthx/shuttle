@@ -42,10 +42,13 @@ export async function readyHandler(
 ): Promise<Response> {
   const status = dependencies.config.status()
   const sessionStore = await dependencies.auth.sessions.ping()
-  const ready = status.loaded && sessionStore
+  // A gateway that is draining does not accept new work: the readiness
+  // probe takes it out of the rotation.
+  const draining = dependencies.isDraining?.() ?? false
+  const ready = status.loaded && sessionStore && !draining
   return context.json(
     {
-      status: ready ? 'ready' : 'not-ready',
+      status: ready ? 'ready' : draining ? 'draining' : 'not-ready',
       config: status,
       sessionStore: sessionStore ? 'ok' : 'unavailable',
     },

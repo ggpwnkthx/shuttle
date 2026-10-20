@@ -57,6 +57,14 @@ export interface ExchangeRequest {
   timeouts: ExchangeTimeouts
   /** The limit of the body of the request, 0 disables it. */
   maxBodyBytes: number
+  /**
+   * Called exactly once, when the exchange is over.
+   *
+   * The application uses it to write the log line and the metrics of the
+   * request: the exchange is over when the body of the answer is over, not
+   * when the middleware returns.
+   */
+  onFinalize?: (result: ExchangeResult) => void
 }
 
 /** Why an exchange failed before the answer of the upstream was committed. */
@@ -208,6 +216,7 @@ export class HttpExchangeService {
       clearTimers()
       this.#active.delete(entry)
       this.#onFinalize?.(result)
+      request.onFinalize?.(result)
     }
 
     const arm = (ms: number, onTimeout: () => void): ReturnType<typeof setTimeout> => {

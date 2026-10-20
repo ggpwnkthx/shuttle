@@ -185,6 +185,31 @@ export class ConfigurationStore {
     }
   }
 
+  /**
+   * Validates the text of a configuration file and publishes it.
+   *
+   * A file that is not json is a configuration error like any other: it is
+   * recorded next to the last good generation, so the readiness probe can
+   * report it.
+   */
+  applyText(raw: string): ReloadResult {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch (error) {
+      const state: ConfigErrorState = {
+        message: `the configuration file is not valid json: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        details: [],
+        at: Date.now(),
+      }
+      this.#error = state
+      return { ok: false, error: state }
+    }
+    return this.apply(parsed)
+  }
+
   /** The state of the configuration, as the readiness probe reports it. */
   status(): ConfigStatus {
     return {

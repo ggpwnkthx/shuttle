@@ -56,6 +56,8 @@ export interface GatewayDependencies {
   logger: Logger
   /** The address of the peer of a request. */
   peerAddress: (request: Request) => string
+  /** True while the gateway is draining: it does not accept new work. */
+  isDraining?: () => boolean
   /** The websockets of the gateway, when the deployment has them. */
   websockets?: WebSocketServicePort
 }

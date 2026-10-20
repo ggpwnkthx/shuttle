@@ -218,6 +218,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     SHUTTLE_SESSION_TOUCH_INTERVAL_MS: '1000',
     SHUTTLE_COOKIE_SECURE: 'false',
     SHUTTLE_LOG_LEVEL: 'error',
+    SHUTTLE_SHUTDOWN_TIMEOUT_MS: '2000',
     SHUTTLE_METRICS_TOKEN: METRICS_TOKEN,
     SHUTTLE_MAX_BODY_BYTES: String(options.maxBodyBytes ?? 1024 * 1024),
     SHUTTLE_RATE_LIMIT_MAX: String(options.rateLimitMax ?? 0),

@@ -28,6 +28,7 @@ import { createWebSocketHandlers } from '../platform/bun/client-upgrade'
 import { BunHttpTransport } from '../platform/bun/http-transport'
 import { WsUpstreamHandshake } from '../platform/bun/upstream-websocket'
 import { startListener, type StartedListener } from '../platform/bun/listener'
+import { drain as drainRuntime } from './lifecycle'
 import { createRedisClient, isRedisUrl } from '../platform/redis'
 import type { RuntimeSettings } from './env'
 
@@ -47,6 +48,12 @@ export interface GatewayRuntime {
   exchanges: HttpExchangeService
   /** The websockets of the gateway. */
   websockets: WebSocketService
+  /** True while the gateway is draining. */
+  isDraining: () => boolean
+  /** Stops the admission of new work. */
+  setDraining: (draining: boolean) => void
+  /** Drains the gateway and closes everything it owns. */
+  drain: (reason: string) => Promise<void>
   /** The listener of the gateway. */
   listener: StartedListener
   /** Closes everything the runtime owns. */
@@ -206,6 +213,8 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
   // The address of the peer of a request is known by the listener, which is
   // built after the application: the holder is filled in below.
   const peer = { address: (_request: Request) => '0.0.0.0' }
+  // The gateway stops accepting new work when it drains.
+  const state = { draining: false }
 
   const dependencies: GatewayDependencies = {
     config,
@@ -227,6 +236,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     observer,
     logger,
     peerAddress: (request: Request) => peer.address(request),
+    isDraining: () => state.draining,
     websockets,
   }
 
@@ -245,6 +255,11 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
   })
   peer.address = listener.peerAddress
 
+  const closeResources = async (): Promise<void> => {
+    await access.close()
+    sharedClient?.close()
+  }
+
   return {
     settings,
     logger,
@@ -252,11 +267,29 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     config,
     auth,
     exchanges,
-    websockets,
-    listener,
-    close: async () => {
-      await access.close()
-      sharedClient?.close()
+    /** The gateway stops accepting new work when it drains. */
+    setDraining: (draining: boolean) => {
+      state.draining = draining
     },
+    websockets,
+    isDraining: () => state.draining,
+    listener,
+    drain: async (reason: string) => {
+      await drainRuntime(
+        {
+          logger,
+          timeoutMs: settings.shutdownTimeoutMs,
+          stopListener: (force) => listener.stop(force),
+          closeWebsockets: () => websockets.closeAll(),
+          abortExchanges: () => exchanges.abortAll(),
+          closeResources,
+          setDraining: (draining) => {
+            state.draining = draining
+          },
+        },
+        reason
+      )
+    },
+    close: closeResources,
   }
 }

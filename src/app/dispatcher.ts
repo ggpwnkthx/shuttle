@@ -38,8 +38,9 @@ import {
 } from '../domains/forwarding'
 import { rateLimitKey } from '../domains/rate-limiting'
 import { matchRoute } from '../domains/routing'
+import type { ExchangeFailure } from '../domains/proxying'
 import { validateWorkspace } from '../domains/workspace-access'
-import { UNMATCHED_ROUTE } from '../observability'
+import { UNMATCHED_ROUTE, redactUrl } from '../observability'
 import type { GatewayDependencies } from './dependencies'
 import { clientGoneResponse, jsonError } from './errors'
 import type { GatewayEnv } from './state'
@@ -327,26 +328,37 @@ export async function dispatch(
     signal: context.req.raw.signal,
     timeouts: route.timeouts,
     maxBodyBytes: route.maxBodyBytes,
+    onFinalize: (finalized) => {
+      // The metrics of a request are written when the exchange is over: the
+      // duration of a request is the time the caller waited and the bytes
+      // are the bytes that really went through.
+      const status = finalized.status ?? statusOfFailure(finalized.failure)
+      dependencies.observer.recordRequest({
+        routeId: route.id,
+        method,
+        status,
+        durationMs: Date.now() - started,
+        bytesIn: finalized.bytesIn,
+        bytesOut: finalized.bytesOut,
+      })
+      if (finalized.status === undefined) return
+      logger.info('request proxied', {
+        requestId,
+        routeId: route.id,
+        method,
+        path: redactUrl(`${path}${url.search}`),
+        status: finalized.status,
+        durationMs: Date.now() - started,
+        bytesIn: finalized.bytesIn,
+        bytesOut: finalized.bytesOut,
+        outcome: finalized.outcome,
+      })
+    },
   })
 
   if (!result.response) {
     const failure = result.failure
-    const status =
-      failure?.kind === 'too_large'
-        ? 413
-        : failure?.kind === 'timeout'
-          ? 504
-          : failure?.kind === 'aborted'
-            ? 499
-            : 502
-    observer.recordRequest({
-      routeId: route.id,
-      method,
-      status,
-      durationMs: Date.now() - started,
-      bytesIn: result.bytesIn,
-      bytesOut: 0,
-    })
+    const status = statusOfFailure(failure)
     logger.warn('the upstream request failed', {
       requestId,
       routeId: route.id,
@@ -383,6 +395,20 @@ export async function dispatch(
     statusText: result.response.statusText,
     headers: responseHeaders,
   })
+}
+
+/** The status of a failure of an exchange. */
+function statusOfFailure(failure: ExchangeFailure | null): number {
+  switch (failure?.kind) {
+    case 'too_large':
+      return 413
+    case 'timeout':
+      return 504
+    case 'aborted':
+      return 499
+    default:
+      return 502
+  }
 }
 
 /** The identity of the caller, as the forwarding domain wants it. */

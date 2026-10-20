@@ -8,7 +8,7 @@
  */
 import { readEnv } from './runtime/env'
 import { createRuntime } from './runtime/composition'
-import { drain, watchConfiguration } from './runtime/lifecycle'
+import { watchConfiguration } from './runtime/lifecycle'
 
 async function main(): Promise<void> {
   const settings = readEnv(process.env)
@@ -33,12 +33,13 @@ async function main(): Promise<void> {
     runtime.observer.recordConfigReload(true)
   }
 
-  const stopWatching = watchConfiguration({
+  const watcher = watchConfiguration({
     store: runtime.config,
     logger: runtime.logger,
     observer: runtime.observer,
     path: settings.configPath,
   })
+  await watcher.ready
 
   // The session store is shared by every replica: report right away when it
   // cannot be reached, the readiness probe takes the task out of the
@@ -57,20 +58,11 @@ async function main(): Promise<void> {
   const stop = (signal: string): void => {
     if (stopping) return
     stopping = true
-    void drain(
-      {
-        logger: runtime.logger,
-        timeoutMs: settings.shutdownTimeoutMs,
-        stopListener: (force) => runtime.listener.stop(force),
-        abortExchanges: () => runtime.exchanges.abortAll(),
-        closeResources: async () => {
-          stopWatching()
-          await runtime.close()
-        },
-        setDraining: () => undefined,
-      },
-      signal
-    ).then(() => process.exit(0))
+    void runtime.drain(signal).then(async () => {
+      watcher.stop()
+      await runtime.close()
+      process.exit(0)
+    })
   }
 
   process.on('SIGTERM', () => stop('SIGTERM'))

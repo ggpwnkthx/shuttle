@@ -25,13 +25,23 @@ export interface WatchOptions {
 }
 
 /**
+ * The watcher of the configuration file.
+ */
+export interface ConfigurationWatcher {
+  /** Resolves when the watcher is ready: the changes before that are missed. */
+  ready: Promise<void>
+  /** Stops the watcher. */
+  stop: () => void
+}
+
+/**
  * Watches the configuration file.
  *
  * The watcher follows the file itself, so an editor that replaces the file
  * instead of writing it is noticed as well. The loads are serialized: an
  * older read that arrives late must not overwrite a newer generation.
  */
-export function watchConfiguration(options: WatchOptions): () => void {
+export function watchConfiguration(options: WatchOptions): ConfigurationWatcher {
   const debounceMs = options.debounceMs ?? 250
   let timer: ReturnType<typeof setTimeout> | undefined
   let queue: Promise<void> = Promise.resolve()
@@ -49,15 +59,7 @@ export function watchConfiguration(options: WatchOptions): () => void {
         options.observer.recordConfigReload(false)
         return
       }
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(raw)
-      } catch (error) {
-        options.logger.error('the configuration file is not valid json', { error })
-        options.observer.recordConfigReload(false)
-        return
-      }
-      const result = options.store.apply(parsed)
+      const result = options.store.applyText(raw)
       if (!result.ok) {
         // The last good configuration stays active: a file that is broken
         // on disk must not take a running deployment out of rotation.
@@ -76,8 +78,13 @@ export function watchConfiguration(options: WatchOptions): () => void {
   }
 
   let watcher: FSWatcher | null = null
+  let markReady: () => void = () => undefined
+  const ready = new Promise<void>((resolve) => {
+    markReady = resolve
+  })
   try {
     watcher = chokidar.watch(options.path, { ignoreInitial: true })
+    watcher.on('ready', () => markReady())
     watcher.on('all', (event) => {
       if (event !== 'change' && event !== 'add' && event !== 'unlink') return
       if (timer) clearTimeout(timer)
@@ -89,10 +96,13 @@ export function watchConfiguration(options: WatchOptions): () => void {
     watcher = null
   }
 
-  return () => {
-    closed = true
-    if (timer) clearTimeout(timer)
-    void watcher?.close()
+  return {
+    ready,
+    stop: () => {
+      closed = true
+      if (timer) clearTimeout(timer)
+      void watcher?.close()
+    },
   }
 }
 
