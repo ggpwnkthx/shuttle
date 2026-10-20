@@ -93,8 +93,13 @@ export function createUpstream(options: UpstreamOptions = {}): StartedUpstream {
       }
 
       // The websocket endpoints are answered before the http ones: the
-      // upgrade is not a request of the application.
-      if (url.pathname === '/ws' || url.pathname === '/ws-refuse') {
+      // upgrade is not a request of the application. Every path accepts a
+      // websocket handshake, so a test can mount the application under a
+      // prefix.
+      if (
+        url.pathname === '/ws-refuse' ||
+        request.headers.get('upgrade')?.toLowerCase() === 'websocket'
+      ) {
         if (url.pathname === '/ws-refuse') {
           // The refusal of an upstream is a normal answer: the caller of
           // the gateway deserves to see the status and the body.

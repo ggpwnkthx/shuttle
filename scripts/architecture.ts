@@ -235,15 +235,11 @@ export function checkArchitecture(files: SourceFile[]): Violation[] {
 
       const target = locate(resolved)
 
-      // (7) Core domain code imports no application, platform, runtime or
-      // observation layer.
+      // (7) Core domain code imports no application, platform or runtime
+      // layer. The observation interfaces are allowed: a domain receives
+      // the observation as it needs it.
       if (location.layer === 'domain' && !location.adapter && !location.test) {
-        if (
-          target.layer === 'app' ||
-          target.layer === 'platform' ||
-          target.layer === 'runtime' ||
-          target.layer === 'observability'
-        ) {
+        if (target.layer === 'app' || target.layer === 'platform' || target.layer === 'runtime') {
           report(
             'domain-core-imports-boundary',
             `a core domain file may not import the ${target.layer} layer ("${specifier}")`

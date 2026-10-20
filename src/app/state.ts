@@ -9,6 +9,7 @@
 import type { GatewayCookie } from '../domains/authentication'
 import type { ConfigurationSnapshot } from '../domains/configuration'
 import type { ForwardingContext } from '../domains/forwarding'
+import type { ClientUpgradePort } from '../domains/websockets'
 
 /** The state of a request. */
 export interface GatewayState {
@@ -29,8 +30,16 @@ export interface GatewayState {
   cookies: GatewayCookie[]
 }
 
-/** The environment of the application. */
+/**
+ * The environment of the application.
+ *
+ * The bindings are the capabilities of the runtime: the upgrade of a
+ * websocket connection, which the platform builds for every request.
+ */
 export interface GatewayEnv {
-  Bindings: Record<string, never>
+  Bindings: {
+    /** The upgrade of a websocket connection, when the deployment has one. */
+    upgrade?: ClientUpgradePort
+  }
   Variables: GatewayState
 }

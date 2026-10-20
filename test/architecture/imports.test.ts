@@ -76,6 +76,17 @@ describe('the rules of the import boundaries', () => {
     ])
   })
 
+  test('a core domain file may use the observation interfaces', () => {
+    const violations = checkArchitecture([
+      source(
+        'src/domains/proxying/exchange.ts',
+        "import type { Observer } from '../../observability'\n"
+      ),
+      source('src/observability/index.ts', 'export type Observer = unknown\n'),
+    ])
+    expect(violations).toEqual([])
+  })
+
   test('an adapter of a domain may use a library', () => {
     const violations = checkArchitecture([
       source('src/domains/proxying/adapters/bun.ts', "import { serve } from 'hono'\n"),

@@ -18,12 +18,15 @@ import { HttpExchangeService } from '../domains/proxying'
 import { MemoryRateLimiter } from '../domains/rate-limiting'
 import { RedisRateLimiter } from '../domains/rate-limiting/adapters'
 import { AccessClient } from '../domains/workspace-access'
+import { ReservationManager, WebSocketService } from '../domains/websockets'
 import { MemoryDecisionCache } from '../domains/workspace-access/adapters'
 import { RedisDecisionCache } from '../domains/workspace-access/adapters'
 import { createLogger, type Logger } from '../observability'
 import { MetricsStore, type Observer } from '../observability'
 import { FetchAccessTransport } from '../platform/bun/access-transport'
+import { createWebSocketHandlers } from '../platform/bun/client-upgrade'
 import { BunHttpTransport } from '../platform/bun/http-transport'
+import { WsUpstreamHandshake } from '../platform/bun/upstream-websocket'
 import { startListener, type StartedListener } from '../platform/bun/listener'
 import { createRedisClient, isRedisUrl } from '../platform/redis'
 import type { RuntimeSettings } from './env'
@@ -42,6 +45,8 @@ export interface GatewayRuntime {
   auth: AuthenticationService
   /** The exchanges with the upstreams. */
   exchanges: HttpExchangeService
+  /** The websockets of the gateway. */
+  websockets: WebSocketService
   /** The listener of the gateway. */
   listener: StartedListener
   /** Closes everything the runtime owns. */
@@ -177,6 +182,27 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
 
   const exchanges = new HttpExchangeService({ transport: new BunHttpTransport() })
 
+  // The websockets. The domain owns the reservations, the handshake and the
+  // bridge; the platform owns the sockets.
+  const reservations = new ReservationManager({
+    maxConnections: settings.websockets.maxConnections,
+  })
+  const websockets = new WebSocketService({
+    upstream: new WsUpstreamHandshake(),
+    reservations,
+    settings: {
+      maxConnections: settings.websockets.maxConnections,
+      maxBufferedBytes: settings.websockets.maxBufferedBytes,
+      maxBufferedMessages: settings.websockets.maxBufferedMessages,
+      backpressureLimitBytes: settings.websockets.backpressureLimitBytes,
+      pingIntervalMs: settings.websockets.pingIntervalMs,
+      pongTimeoutMs: settings.websockets.pongTimeoutMs,
+      handshakeTimeoutMs: settings.websockets.handshakeTimeoutMs,
+    },
+    logger,
+    observer,
+  })
+
   // The address of the peer of a request is known by the listener, which is
   // built after the application: the holder is filled in below.
   const peer = { address: (_request: Request) => '0.0.0.0' }
@@ -201,6 +227,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     observer,
     logger,
     peerAddress: (request: Request) => peer.address(request),
+    websockets,
   }
 
   const app = createGatewayApp(dependencies)
@@ -208,6 +235,12 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     app,
     host: settings.network.host,
     port: settings.network.port,
+    websocket: {
+      handlers: createWebSocketHandlers(),
+      maxPayloadLength: settings.websockets.maxPayloadBytes,
+      backpressureLimitBytes: settings.websockets.backpressureLimitBytes,
+      idleTimeoutSeconds: settings.websockets.idleTimeoutSeconds,
+    },
     onError: (error) => logger.error('the listener reported an error', { error }),
   })
   peer.address = listener.peerAddress
@@ -219,6 +252,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     config,
     auth,
     exchanges,
+    websockets,
     listener,
     close: async () => {
       await access.close()

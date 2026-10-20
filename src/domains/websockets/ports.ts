@@ -95,6 +95,31 @@ export interface ClientLeg {
 }
 
 /**
+ * The handlers of the events of the connection of the caller.
+ *
+ * The domain fills them in, the runtime calls them: the platform does not
+ * know what the domain does with the events.
+ */
+export interface ClientEventHandlers {
+  /** A message of the caller. */
+  message?: (message: WebSocketMessage) => void
+  /** The connection of the caller is over. */
+  close?: (code: number, reason: string) => void
+  /** The caller answered a ping of the gateway. */
+  pong?: () => void
+  /** The caller caught up with the messages of the gateway. */
+  drain?: () => void
+}
+
+/** The result of the upgrade of the caller. */
+export interface ClientUpgradeResult {
+  /** The leg of the caller. */
+  leg: ClientLeg
+  /** The handlers of the events of the connection. */
+  events: ClientEventHandlers
+}
+
+/**
  * The port of the upgrade of the caller.
  *
  * The upgrade is the answer of the gateway to the handshake of the caller:
@@ -111,5 +136,5 @@ export interface ClientUpgradePort {
   upgrade(
     request: Request,
     options: { headers?: Record<string, string> }
-  ): Promise<ClientLeg | null>
+  ): Promise<ClientUpgradeResult | null>
 }

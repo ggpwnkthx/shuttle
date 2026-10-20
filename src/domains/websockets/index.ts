@@ -6,8 +6,10 @@
  */
 
 export type {
+  ClientEventHandlers,
   ClientLeg,
   ClientUpgradePort,
+  ClientUpgradeResult,
   UpstreamHandshakeOutcome,
   UpstreamHandshakePort,
   UpstreamHandshakeRequest,
@@ -15,3 +17,25 @@ export type {
   UpstreamSocketEvents,
   WebSocketMessage,
 } from './ports'
+
+export type { WebSocketUpgradeContext } from './context'
+
+export { ReservationManager } from './reservation'
+export type { ReservationOptions } from './reservation'
+
+export {
+  CLOSE_GOING_AWAY,
+  CLOSE_NORMAL,
+  CLOSE_TRY_AGAIN_LATER,
+  MAX_CLOSE_REASON_BYTES,
+  WebSocketBridge,
+  truncateCloseReason,
+} from './bridge'
+export type { BridgeOptions } from './bridge'
+
+export { WebSocketService, offeredProtocols } from './service'
+export type {
+  WebSocketServiceOptions,
+  WebSocketServicePort,
+  WebSocketSettings,
+} from './service'

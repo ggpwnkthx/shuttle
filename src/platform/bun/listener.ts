@@ -8,6 +8,7 @@
 
 import type { ExecutionContext } from 'hono'
 import type { WebSocketHandler } from 'bun'
+import { BunClientUpgrade } from './client-upgrade'
 
 /**
  * The application, as the listener sees it.
@@ -26,8 +27,17 @@ export interface ListenerOptions {
   host: string
   /** The port the listener binds to. */
   port: number
-  /** The websocket handler of the runtime, when the deployment has one. */
-  websocket?: WebSocketHandler<unknown>
+  /** The websockets of the runtime, when the deployment has them. */
+  websocket?: {
+    /** The handlers of the connections. */
+    handlers: WebSocketHandler<unknown>
+    /** The maximum size of a message of a connection. */
+    maxPayloadLength: number
+    /** The number of bytes that may be queued for a caller that does not read. */
+    backpressureLimitBytes: number
+    /** How long a connection may stay silent, in seconds. */
+    idleTimeoutSeconds: number
+  }
   /** Called when the runtime of the server reports an error. */
   onError?: (error: unknown) => void
 }
@@ -69,9 +79,25 @@ export function startListener(options: ListenerOptions): StartedListener {
     // streams (the events of an upstream) keep the connection busy.
     idleTimeout: 120,
     fetch(request, bunServer) {
-      return options.app.fetch(request, bunServer as unknown as Record<string, never>, executionCtx)
+      // The upgrade of a websocket connection is a capability of the
+      // runtime: the application hands it to the domain of the websockets.
+      const env = { upgrade: new BunClientUpgrade(bunServer as unknown as Bun.Server<unknown>) }
+      return options.app.fetch(request, env, executionCtx)
     },
-    ...(options.websocket ? { websocket: options.websocket } : {}),
+    ...(options.websocket
+      ? {
+          websocket: {
+            ...options.websocket.handlers,
+            // The size of a message and the queue of a caller that does not
+            // read are bounded: the memory of the process stays bounded,
+            // whatever the client and the upstream do.
+            maxPayloadLength: options.websocket.maxPayloadLength,
+            backpressureLimit: options.websocket.backpressureLimitBytes,
+            closeOnBackpressureLimit: true,
+            idleTimeout: options.websocket.idleTimeoutSeconds,
+          },
+        }
+      : {}),
     error(error) {
       options.onError?.(error)
     },

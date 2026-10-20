@@ -22,6 +22,7 @@ import {
   GATEWAY_COOKIE_NAMES,
   SESSION_COOKIE_NAME,
   selectCredential,
+  serializeCookie,
   type Principal,
 } from '../domains/authentication'
 import { isReservedPath } from '../domains/configuration'
@@ -258,29 +259,41 @@ export async function dispatch(
     const identity = principal ? writtenIdentity(identityOf(principal, workspaceId)) : undefined
     const target = buildUpstreamTarget(route.upstream, path, url.search)
     const targetUrl = new URL(target)
-    return await dependencies.websockets.handle(context.req.raw, {
-      routeId: route.id,
-      upstream: route.upstream,
-      path,
-      search: url.search,
-      method,
-      headers: context.req.raw.headers,
-      identity,
-      signature: identity
-        ? signIdentity(
-            identity,
-            {
-              method,
-              path: targetUrl.pathname,
-              query: targetUrl.search,
-              host: forwarding.host,
-            },
-            dependencies.identityKey
-          )
-        : undefined,
-      requestId,
-      cookies: context.get('cookies').map((cookie) => cookie.value),
-    })
+    const upgrade = context.env.upgrade
+    if (!upgrade) {
+      return jsonError(503, 'websocket_unavailable', 'the websockets are not available')
+    }
+    return await dependencies.websockets.handle(
+      context.req.raw,
+      {
+        routeId: route.id,
+        upstream: route.upstream,
+        path,
+        search: url.search,
+        method,
+        headers: context.req.raw.headers,
+        identity,
+        signature: identity
+          ? signIdentity(
+              identity,
+              {
+                method,
+                path: targetUrl.pathname,
+                query: targetUrl.search,
+                host: forwarding.host,
+              },
+              dependencies.identityKey
+            )
+          : undefined,
+        requestId,
+        cookies: context.get('cookies').map((cookie) => serializeCookie(cookie)),
+        carriesSessionCookie: sessionCookie !== undefined,
+        host: forwarding.host,
+        externalProto: forwarding.proto,
+        allowedOrigins: dependencies.browser.allowedOrigins,
+      },
+      upgrade
+    )
   }
 
   // The http path.

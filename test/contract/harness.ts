@@ -137,6 +137,22 @@ export function defaultRoutes(context: { upstreamA: string; upstreamB: string })
       upstream: context.upstreamB,
       auth: { mode: 'any', workspace: { param: 'workspaceId', requireUuid: true } },
     },
+    {
+      id: 'workspace-socket',
+      match: { host: 'socket.shuttle.test', path: '/socket/' },
+      upstream: context.upstreamB,
+      auth: { mode: 'any' },
+      websocket: true,
+    },
+    {
+      id: 'public-socket',
+      // The websocket client of a browser cannot set the host of the
+      // request, so the route of the tests matches every host.
+      match: { host: '*', path: '/socket/' },
+      upstream: context.upstreamB,
+      auth: { mode: 'none' },
+      websocket: true,
+    },
   ]
 }
 
