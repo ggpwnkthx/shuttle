@@ -111,4 +111,7 @@ docker build -t shuttle:0.1.0 .
 ```
 
 The operations guide (topology, ingress, TLS, secrets, metrics, recovery and
-rollback) is in [docs/operations.md](docs/operations.md).
+rollback) is in [docs/operations.md](docs/operations.md), the targets of the
+deployment and the measurements of the capacity are in
+[docs/capacity.md](docs/capacity.md) and the boundaries of the runtime are
+in [docs/transport-capabilities.md](docs/transport-capabilities.md).

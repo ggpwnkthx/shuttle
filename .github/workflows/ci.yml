@@ -49,6 +49,9 @@ jobs:
       - name: network tests
         run: bun test test/network
 
+      - name: the soak
+        run: bun test test/load
+
   redis:
     name: the shared state against a real redis
     runs-on: ubuntu-latest
@@ -76,6 +79,25 @@ jobs:
         run: bun test test/integration
         env:
           SHUTTLE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+
+  load:
+    name: the capacity of the gateway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: install
+        run: bun install --frozen-lockfile
+
+      - name: measure
+        run: bun run load -- --requests 20000 --concurrency 100
+
+      - name: the websockets
+        run: bun run load -- --websockets 500
 
   browser:
     name: the browser behaviour
