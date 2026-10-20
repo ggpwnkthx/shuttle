@@ -44,7 +44,7 @@ does not expose the boundaries the specification relies on (see
 | Browser tests | `bun test test/browser` | run (Chromium 156) | run (`playwright install chromium`) |
 | Soak | `bun test test/load` | run | run |
 | Load | `bun run load` | run | run |
-| The image | `docker build` | **not run** (no docker) | run |
+| The image | `docker build` + the smoke tests | run in the CI (the job `the production image` of the workflow run #1) | run |
 
 The last full run of the suite: **358 tests passed, 0 failed, 0 skipped**
 with Bun 1.4.3 and a Redis 7.0.15 (`SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0`),
@@ -55,6 +55,22 @@ other 348.
 The suite is 28 files: 14 unit test files of the domains and of the runtime,
 the architecture check, 3 network test files, 5 integration test files, 3
 contract test files, the browser test and the soak.
+
+## The evidence of the workflow
+
+The commits were pushed to `main` and the workflow ran on them.
+
+| | |
+| --- | --- |
+| The run | [the workflow run #1](https://github.com/ggpwnkthx/shuttle/actions/runs/39476915395) of the commit `ffbfa42` (the push of the 18:41) |
+| The result | **completed, success** — every job and every step is green |
+| The jobs | `types, lint, format and tests` (the types, the lint, the format, the import boundaries, the unit and the contract tests, the network tests, the soak), `the shared state against a real redis` (the atomic operations of the shared state, against `redis:7-alpine`), `the capacity of the gateway` (20 000 requests and 500 websockets), `the browser behaviour` (the Chromium of Playwright), `the production image` (the build of the image, the start of the gateway with the configuration of a deployment, the three refusals of a production deployment and the absence of the fixtures in the image) |
+| The annotations | two notices of the platform (the deprecation of the runtime of `actions/checkout@v4` and the migration of the label `ubuntu-latest`), no failure |
+
+The `image` job closes the last check that could not be executed in the
+build environment: the image is built from the pinned lockfile, the gateway
+starts inside it and refuses to start without the secret of the sessions,
+without the access service and without the identity provider.
 
 ## The environment of this build
 
@@ -78,12 +94,12 @@ standard `forwarded` header.
 
 ## What is not claimed
 
-- The image was not built here: there is no docker in the build
-  environment. The CI workflow builds it and starts it with the
-  configuration of a deployment.
 - The capacity behind an ingress, with TLS and with several replicas was
   not measured: the measurements of [docs/capacity.md](docs/capacity.md) are
-  the ones of the gateway alone, in one process.
+  the ones of the gateway alone, in one process. The workflow measures the
+  same thing on its runner, without an ingress either.
+- The soak of the workflow is the short one (the resources settle after the
+  traffic); a soak of hours belongs to the deployment of the release.
 - The minimum version of the runtime (1.2.x) does not expose the
   boundaries the specification needs: the contract states 1.4.3 and the CI
   matrix runs it.
