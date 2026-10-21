@@ -13,9 +13,18 @@
  *
  * The signed payload is the identity itself plus the request it belongs to,
  * so a signature cannot be moved to another request or to another route.
+ *
+ * The signature is a **JWS** (RFC 7515) signed with `HS256` and a derived
+ * key. The payload is **detached**: it is not transmitted, because the
+ * upstream rebuilds it from the request and from the identity headers it
+ * received. The upstream rebuilds the compact serialization around its own
+ * payload and verifies it with the library, so a signature that does not
+ * belong to the request is refused by the verification itself and not by a
+ * comparison that could be written wrong.
  */
 
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { CompactSign, base64url, compactVerify } from 'jose'
+import { createHmac } from 'node:crypto'
 
 /** The identity of a caller, as the authentication domain knows it. */
 export interface CallerIdentity {
@@ -50,13 +59,25 @@ export const MAX_IDENTITY_VALUE_LENGTH = 512
 /**
  * The version of the signature format.
  *
- * `v3` binds the whole request target: the method, the path, the query
- * string and the host, as the upstream receives them.
+ * `v4` binds the whole request target: the method, the path, the query
+ * string and the host, as the upstream receives them. It is a JWS with a
+ * detached payload, so an upstream verifies it with a standard library.
  */
-export const IDENTITY_SIGNATURE_VERSION = 'v3'
+export const IDENTITY_SIGNATURE_VERSION = 'v4'
 
 /** The header the signature is written to. */
 export const IDENTITY_SIGNATURE_HEADER = 'x-shuttle-signature'
+
+/**
+ * The type of the protected header of the signature.
+ *
+ * It names what the signature is about, so an upstream that receives a
+ * signature of another kind does not try to verify it.
+ */
+const IDENTITY_SIGNATURE_TYPE = 'shuttle-identity'
+
+/** The algorithm of the signature. */
+const IDENTITY_SIGNATURE_ALGORITHM = 'HS256'
 
 /** The request the signature belongs to. */
 export interface SignedRequest {
@@ -181,43 +202,51 @@ export function writtenIdentity(identity: CallerIdentity): WrittenIdentity {
 /**
  * The canonical form of the signed payload.
  *
- * The payload is a json array: the escaping of json keeps every value in
+ * The payload is a json object: the escaping of json keeps every value in
  * its own field, so a value that contains a newline, a comma or a quote
- * cannot be moved from one field into another. The roles are sorted, their
- * order is not part of the meaning.
+ * cannot be moved from one field into another. The names of the fields are
+ * explicit, so an upstream that rebuilds the payload cannot confuse two
+ * fields of it. The roles are sorted, their order is not part of the
+ * meaning.
  */
 export function canonicalIdentityPayload(
   identity: WrittenIdentity,
   request: SignedRequest
 ): string {
-  return JSON.stringify([
-    IDENTITY_SIGNATURE_VERSION,
-    request.method.toUpperCase(),
-    request.path,
-    request.query,
-    request.host.toLowerCase(),
-    identity.subject,
-    identity.workspaceId ?? '',
-    identity.email ?? '',
-    [...identity.roles].sort(),
-  ])
+  return JSON.stringify({
+    v: IDENTITY_SIGNATURE_VERSION,
+    method: request.method.toUpperCase(),
+    path: request.path,
+    query: request.query,
+    host: request.host.toLowerCase(),
+    subject: identity.subject,
+    workspaceId: identity.workspaceId ?? '',
+    email: identity.email ?? '',
+    roles: [...identity.roles].sort(),
+  })
 }
 
 /**
  * Signs the identity of a request.
  *
- * The result is `v3=<hex>`, the version is part of the value so the format
- * can change later without breaking the verification.
+ * The result is `v4=<the detached JWS>`: the version is part of the value,
+ * so the format can change later without breaking the verification.
+ *
+ * The payload is detached: it is not part of the value. An upstream
+ * rebuilds it from the request and from the identity headers, rebuilds the
+ * compact serialization around it and verifies the signature.
  */
-export function signIdentity(
+export async function signIdentity(
   identity: WrittenIdentity,
   request: SignedRequest,
   key: Buffer
-): string {
-  const signature = createHmac('sha256', key)
-    .update(canonicalIdentityPayload(identity, request))
-    .digest('hex')
-  return `${IDENTITY_SIGNATURE_VERSION}=${signature}`
+): Promise<string> {
+  const payload = new TextEncoder().encode(canonicalIdentityPayload(identity, request))
+  const jws = await new CompactSign(payload)
+    .setProtectedHeader({ alg: IDENTITY_SIGNATURE_ALGORITHM, typ: IDENTITY_SIGNATURE_TYPE })
+    .sign(key)
+  const [protectedHeader, , signature] = jws.split('.')
+  return `${IDENTITY_SIGNATURE_VERSION}=${protectedHeader}..${signature}`
 }
 
 /**
@@ -225,17 +254,30 @@ export function signIdentity(
  *
  * It is the counterpart of `signIdentity` and it exists so that the format
  * can be tested, and so that an upstream has a reference implementation.
- * The comparison is done in constant time.
+ *
+ * The payload of the upstream is the one it rebuilt from the request and
+ * from the identity headers: a signature that does not belong to them is
+ * refused by the verification of the signature itself.
  */
-export function verifyIdentity(
+export async function verifyIdentity(
   identity: WrittenIdentity,
   request: SignedRequest,
   key: Buffer,
   signature: string | null | undefined
-): boolean {
+): Promise<boolean> {
   if (!signature) return false
-  const expected = Buffer.from(signIdentity(identity, request, key))
-  const actual = Buffer.from(signature)
-  if (expected.length !== actual.length) return false
-  return timingSafeEqual(expected, actual)
+  const prefix = `${IDENTITY_SIGNATURE_VERSION}=`
+  if (!signature.startsWith(prefix)) return false
+  const parts = signature.slice(prefix.length).split('.')
+  if (parts.length !== 3) return false
+  const [protectedHeader, , detachedSignature] = parts
+  if (!protectedHeader || !detachedSignature) return false
+  const payload = new TextEncoder().encode(canonicalIdentityPayload(identity, request))
+  const compact = `${protectedHeader}.${base64url.encode(payload)}.${detachedSignature}`
+  try {
+    await compactVerify(compact, key)
+    return true
+  } catch {
+    return false
+  }
 }

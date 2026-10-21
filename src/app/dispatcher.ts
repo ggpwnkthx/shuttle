@@ -354,7 +354,7 @@ export async function dispatch(
       forwarding,
       identity,
       signature: identity
-        ? signIdentity(
+        ? await signIdentity(
             identity,
             {
               method,
@@ -415,7 +415,7 @@ export async function dispatch(
     forwarding,
     identity,
     signature: identity
-      ? signIdentity(
+      ? await signIdentity(
           identity,
           {
             method,
