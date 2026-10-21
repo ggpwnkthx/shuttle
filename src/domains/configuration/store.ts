@@ -18,6 +18,7 @@ import {
   GATEWAY_RESERVED_PATHS,
   effectivePolicy,
   parseConfig,
+  type CrossSitePolicy,
   type RouteFile,
   type Timeouts,
 } from './schema'
@@ -32,6 +33,22 @@ export interface EffectiveRoute {
   /** The limit of the body of a request, 0 disables it. */
   maxBodyBytes: number
   websocket: boolean
+  /**
+   * The policy of the cross site requests of the route.
+   *
+   * `strict` refuses a navigation from another site as well.
+   */
+  crossSite: CrossSitePolicy
+  /**
+   * Whether the `Authorization` header of the caller is forwarded to the
+   * upstream of the route.
+   */
+  forwardAuthorization: boolean
+  /**
+   * The lifetime of a cached decision of the access service for the route,
+   * in milliseconds. Undefined means the lifetime of the environment.
+   */
+  accessCacheTtlMs?: number
 }
 
 /**
@@ -235,6 +252,9 @@ export class ConfigurationStore {
           timeouts: policy.timeouts,
           maxBodyBytes: policy.maxBodyBytes,
           websocket: route.websocket,
+          crossSite: policy.crossSite,
+          forwardAuthorization: policy.forwardAuthorization,
+          accessCacheTtlMs: policy.accessCacheTtlMs,
         }
       )
     })
@@ -247,6 +267,9 @@ type RouteFileDefaults = {
   auth: AuthPolicy
   timeouts: Timeouts
   maxBodyBytes?: number
+  crossSite: CrossSitePolicy
+  forwardAuthorization: boolean
+  accessCacheTtlMs?: number
 }
 
 /**

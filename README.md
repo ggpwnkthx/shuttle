@@ -75,6 +75,14 @@ fails.
 }
 ```
 
+Three policies belong to a route rather than to the deployment, and they
+replace the value of the defaults: `crossSite` (`navigation` or `strict`)
+refuses the navigations from another site on that route,
+`forwardAuthorization` (`true` or `false`) decides whether the token of the
+caller reaches its upstream, and `accessCacheTtlMs` is the lifetime of the
+cached decisions of the access service on that route — the latency of a
+revocation there. They are described in [docs/operations.md](docs/operations.md).
+
 The environment is described in [.env.example](.env.example). Every variable
 has a default, except the ones a production deployment has to set: the
 session secret, the identity provider, the access service, the shared state

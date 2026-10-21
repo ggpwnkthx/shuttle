@@ -65,6 +65,20 @@ const UpstreamSchema = z
     message: 'an upstream may not carry a fragment',
   })
 
+/**
+ * The policy of the cross site requests of a route.
+ *
+ * - `navigation` a navigation from another site is allowed. It is the
+ *   default: a link in an e-mail or in a chat points at the application
+ *   from another site, and refusing it breaks every deep link.
+ * - `strict` a navigation from another site is refused as well. It is the
+ *   policy of a route that may only be reached from the site itself, for
+ *   example a route whose upstream changes the state of something on a
+ *   `GET`.
+ */
+export const CrossSiteSchema = z.enum(['navigation', 'strict'])
+export type CrossSitePolicy = z.infer<typeof CrossSiteSchema>
+
 /** A route of the configuration file. */
 export const RouteSchema = z.strictObject({
   id: RouteIdSchema,
@@ -86,6 +100,28 @@ export const RouteSchema = z.strictObject({
   websocket: z.boolean().default(false),
   /** Maximum accepted request body size in bytes (0 disables the limit). */
   maxBodyBytes: z.number().int().min(0).max(MAX_BODY_BYTES_LIMIT).optional(),
+  /**
+   * The policy of the cross site requests of the route.
+   *
+   * It replaces the policy of the defaults: it is not merged with it.
+   */
+  crossSite: CrossSiteSchema.optional(),
+  /**
+   * Whether the `Authorization` header of the caller is forwarded to the
+   * upstream of the route.
+   *
+   * It replaces the value of the defaults.
+   */
+  forwardAuthorization: z.boolean().optional(),
+  /**
+   * How long a decision of the access service is cached for the route, in
+   * milliseconds.
+   *
+   * It is the latency of a revocation on that route: a value of zero asks
+   * the access service for every request, so a revocation is immediate.
+   * It replaces the value of the defaults.
+   */
+  accessCacheTtlMs: z.number().int().min(0).max(600_000).optional(),
 })
 export type RouteFile = z.infer<typeof RouteSchema>
 
@@ -98,6 +134,20 @@ export const DefaultsSchema = z.strictObject({
    * environment (`SHUTTLE_MAX_BODY_BYTES`) is used.
    */
   maxBodyBytes: z.number().int().min(0).max(MAX_BODY_BYTES_LIMIT).optional(),
+  /** The default policy of the cross site requests of the routes. */
+  crossSite: CrossSiteSchema.default('navigation'),
+  /**
+   * Whether the `Authorization` header of the caller is forwarded to the
+   * upstreams of the routes that do not say otherwise.
+   */
+  forwardAuthorization: z.boolean().default(true),
+  /**
+   * The default lifetime of a cached decision of the access service.
+   *
+   * When it is not set, the lifetime of the environment
+   * (`SHUTTLE_ACCESS_CACHE_TTL_MS`) is used.
+   */
+  accessCacheTtlMs: z.number().int().min(0).max(600_000).optional(),
 })
 export type Defaults = z.infer<typeof DefaultsSchema>
 
@@ -203,6 +253,9 @@ export function effectivePolicy(
   auth: AuthPolicy
   timeouts: Timeouts
   maxBodyBytes: number
+  crossSite: CrossSitePolicy
+  forwardAuthorization: boolean
+  accessCacheTtlMs?: number
 } {
   return {
     auth: route.auth ?? defaults.auth,
@@ -212,5 +265,8 @@ export function effectivePolicy(
       bodyMs: route.timeouts?.bodyMs ?? defaults.timeouts.bodyMs,
     },
     maxBodyBytes: route.maxBodyBytes ?? defaults.maxBodyBytes ?? environmentMaxBodyBytes,
+    crossSite: route.crossSite ?? defaults.crossSite,
+    forwardAuthorization: route.forwardAuthorization ?? defaults.forwardAuthorization,
+    accessCacheTtlMs: route.accessCacheTtlMs ?? defaults.accessCacheTtlMs,
   }
 }

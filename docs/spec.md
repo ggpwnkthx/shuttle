@@ -156,6 +156,9 @@ configuration nobody can reason about.
 | `defaults.auth` | The policy of the routes that declare none (§5). |
 | `defaults.timeouts` | The budgets of the routes that declare none (§11.2). |
 | `defaults.maxBodyBytes` | The body limit of the routes that declare none. |
+| `defaults.crossSite` | The policy of the cross site requests of the routes that declare none (§8). The default is `navigation`. |
+| `defaults.forwardAuthorization` | Whether the routes that declare none forward the `Authorization` header of the caller to their upstream (§7.1). The default is `true`. |
+| `defaults.accessCacheTtlMs` | The lifetime of a cached decision of the access service for the routes that declare none (§6). The default is the one of the environment. |
 | `trustedProxies` | The ranges whose forwarding headers are honoured (§7.3). The ranges of the environment are added to them. |
 | `reservedPaths` | The paths the gateway keeps for itself, on top of §2.2. |
 | `routes` | At least one route. |
@@ -171,6 +174,9 @@ A route:
 | `auth` | The policy of the route. It replaces `defaults.auth`; it is not merged with it. |
 | `timeouts` | The budgets of the route. Merged field by field with `defaults.timeouts`. |
 | `maxBodyBytes` | The body limit of the route. It wins over `defaults.maxBodyBytes`, which wins over `SHUTTLE_MAX_BODY_BYTES`. |
+| `crossSite` | The policy of the cross site requests of the route: `navigation` (the default) or `strict` (§8). It replaces `defaults.crossSite`. |
+| `forwardAuthorization` | Whether the `Authorization` header of the caller is forwarded to the upstream of the route (§7.1). It replaces `defaults.forwardAuthorization`. |
+| `accessCacheTtlMs` | The lifetime of a cached decision of the access service for the route, in milliseconds (§6). It replaces `defaults.accessCacheTtlMs`. `0` asks the service for every request. |
 | `websocket` | Whether the route accepts WebSocket upgrades. Default `false`. |
 
 An unknown key is a configuration error, not a setting that is silently
@@ -334,6 +340,13 @@ it.
 The **latency of a revocation is the TTL of the cache**. It is the knob an
 operator turns when a revocation has to be immediate.
 
+A route may set its own lifetime with `accessCacheTtlMs`: it replaces
+`defaults.accessCacheTtlMs` and the lifetime of the environment. A route
+that sets `0` asks the access service for every request, so a revocation on
+that route is immediate. The routes of a deployment usually share one
+lifetime; the route that carries the sensitive workspace is the one that
+needs another.
+
 ---
 
 ## 7. The header policy
@@ -354,6 +367,12 @@ The `Authorization` header of the caller is forwarded to the upstream as it
 is. It is not one of the identity headers of the gateway, and the upstream
 is an application of the same platform that the operator chose. The identity
 of the caller travels in the headers below and in the signature.
+
+The header is a credential of the caller: forwarding it places the upstream
+in the trust domain of that credential. A route that does not need it says
+so with `forwardAuthorization: false`, and the header is then not forwarded.
+The identity of the caller still reaches the upstream, in the headers below
+and in the signature.
 
 `Cookie` is rewritten: the cookies of the gateway (`shuttle_session`,
 `shuttle_oidc_state`) are removed, the cookies of the application are kept.
@@ -500,6 +519,13 @@ application. `SHUTTLE_CSRF_STRICT=true` refuses it as well; it is the mode
 for a deployment where the upstreams never change the state of anything on
 a `GET`.
 
+A route may refuse the navigations from another site on its own, with
+`crossSite: "strict"`. It is the policy of a route whose upstream changes
+the state of something on a `GET`: such a route may only be reached from
+the site itself. The policy of the deployment applies to the routes that do
+not declare one, and a route may declare `crossSite: "navigation"` to keep
+the navigations allowed even in a strict deployment.
+
 The allowed origins are the origin of the gateway itself and the origins of
 `SHUTTLE_ALLOWED_ORIGINS`. The origin of the gateway is computed from the
 **effective host** (§7.3) and the effective protocol.
@@ -612,7 +638,6 @@ for `SHUTTLE_WS_IDLE_TIMEOUT_SECONDS`. The handshake of the upstream has
 ### 11.1 The url of the upstream
 
 The upstream url is built from the base url of the route and the request:
-
 1. The **base path** of the upstream is taken, its trailing slashes removed.
 2. The **path of the request** is appended (it always starts with `/`).
 3. The **query string of the request** is used. The query string of the
@@ -900,10 +925,13 @@ lists are numbered independently.
 | 18 | The readiness after a failed reload | The gateway stays ready and keeps the last valid configuration; the failure is visible in `/readyz`, in the log and in the metrics (§12.3). |
 | 19 | The organization of the code | The policy, the use cases, the ports and the adapters live together; the app, the platform and the runtime are explicit boundaries. The public imports and the dependency directions are checked in CI (§14). |
 | 20 | The version of the runtime | The runtime is **Bun ≥ 1.4.3**. The boundaries the gateway relies on are not observable on the 1.2 line. The measurements are in [runtime.md](runtime.md). |
-| 21 | The forwarding headers of a client | The standard `forwarded` header is removed in both directions. The `Authorization` header of the caller is forwarded to the upstream as it is (§7.1). |
+| 21 | The forwarding headers of a client | The standard `forwarded` header is removed in both directions. The `Authorization` header of the caller is forwarded to the upstream as it is, unless the route says otherwise (§7.1). |
 | 22 | The host of a request | The effective host is the `x-forwarded-host` of a trusted proxy, and the `Host` header otherwise. It decides the route, the origin and the signature (§7.3). |
 | 23 | The limits | Four scopes: the deployment, the caller over all the routes, the caller on one route and the authenticated caller on one route. A scope keyed by an address cannot bound a flood that spreads over many addresses, and it cannot tell two tenants behind the same address apart (§9). |
 | 24 | The metrics of the requests | Every answer of the gateway is counted, the refusals included. The labels are bounded: `unmatched` for the requests that matched no route, `other` for a method or a status that is not tracked (§12.1). |
 | 25 | The revalidation of a WebSocket | An open connection is revalidated: the route, the session and the access are checked again, and the connection is closed with `1008` when one of them fails (§10). |
 | 26 | The number of exchanges at the same time | The exchanges are bounded by `SHUTTLE_MAX_CONCURRENT_REQUESTS`, so a client that opens a request and never sends its body cannot hold the resources of the process (§11.2). |
 | 27 | The state of a deployment | The state of a production deployment is shared: `SHUTTLE_SESSION_URL` and `SHUTTLE_SHARED_STATE_URL` must name a Redis server, or `SHUTTLE_ALLOW_MEMORY_STATE=true` says explicitly that the deployment is a single node that accepts the in-process state (§4). |
+| 28 | The policy of the cross site requests | It is a property of the route: `crossSite` refuses the navigations from another site on the routes that declare it, and the policy of the deployment applies to the others (§8). |
+| 29 | The `Authorization` header of the caller | It is forwarded to the upstream by default, and a route that does not need it says so with `forwardAuthorization: false` (§7.1). |
+| 30 | The latency of a revocation | It is a property of the route: `accessCacheTtlMs` is the lifetime of the cached decisions of that route, and `0` makes the revocation on it immediate (§6). |

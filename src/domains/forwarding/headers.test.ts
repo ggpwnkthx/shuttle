@@ -256,3 +256,34 @@ describe('the headers of an answer', () => {
     expect(cookies).toEqual(['upstream_session=abc; Path=/'])
   })
 })
+
+describe('the authorization of the caller', () => {
+  test('the header of the caller is forwarded by default', () => {
+    const headers = buildUpstreamHeaders({
+      incoming: new Headers({ authorization: 'Bearer the-token' }),
+      forwarding: context(),
+      gatewayCookies: GATEWAY_COOKIES,
+    })
+    expect(headers.get('authorization')).toBe('Bearer the-token')
+  })
+
+  test('a route that does not need it does not receive it', () => {
+    const headers = buildUpstreamHeaders({
+      incoming: new Headers({ authorization: 'Bearer the-token' }),
+      forwarding: context(),
+      gatewayCookies: GATEWAY_COOKIES,
+      forwardAuthorization: false,
+    })
+    expect(headers.get('authorization')).toBeNull()
+    // The identity of the caller still travels to the upstream.
+    const withIdentity = buildUpstreamHeaders({
+      incoming: new Headers({ authorization: 'Bearer the-token' }),
+      forwarding: context(),
+      identity: writtenIdentity({ subject: 'user-1', roles: [] }),
+      gatewayCookies: GATEWAY_COOKIES,
+      forwardAuthorization: false,
+    })
+    expect(withIdentity.get('authorization')).toBeNull()
+    expect(withIdentity.get('x-shuttle-user')).toBe('user-1')
+  })
+})

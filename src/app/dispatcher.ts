@@ -244,6 +244,10 @@ export async function dispatch(
   // cookie of the session: a browser attaches the cookie on its own, so a
   // request that carries it is a request of a browser, even when a bearer
   // token is the credential that authenticated it.
+  //
+  // A route may refuse the navigations from another site as well: a route
+  // whose upstream changes the state of something on a `GET` may only be
+  // reached from the site itself.
   if (sessionCookie) {
     const crossSite = checkCrossSite({
       method,
@@ -251,7 +255,7 @@ export async function dispatch(
       host,
       externalProto: forwarding.proto,
       allowedOrigins: dependencies.browser.allowedOrigins,
-      strict: dependencies.browser.csrfStrict,
+      strict: dependencies.browser.csrfStrict || route.crossSite === 'strict',
     })
     if (!crossSite.allowed) {
       logger.warn('a cross site request was refused', {
@@ -285,12 +289,18 @@ export async function dispatch(
     }
     workspaceId = validation.workspaceId
     if (principal) {
-      const decision = await dependencies.access.decide({
-        subject: principal.subject,
-        workspaceId,
-        routeId: route.id,
-        roles: principal.roles,
-      })
+      const decision = await dependencies.access.decide(
+        {
+          subject: principal.subject,
+          workspaceId,
+          routeId: route.id,
+          roles: principal.roles,
+        },
+        // The lifetime of the cached decision is the latency of a
+        // revocation on this route: a route that asks for zero asks the
+        // access service for every request.
+        { cacheTtlMs: route.accessCacheTtlMs }
+      )
       if (!decision.allow) {
         observer.recordAuthFailure(route.id, failureReasonOf(decision.reason))
         logger.warn('workspace access denied', {
@@ -406,6 +416,7 @@ export async function dispatch(
         )
       : undefined,
     gatewayCookies: dependencies.gatewayCookies,
+    forwardAuthorization: route.forwardAuthorization,
   })
 
   const result = await dependencies.exchanges.execute({

@@ -223,6 +223,119 @@ describe('the effective policy of a route', () => {
     )
     expect(withoutDefaults.snapshot!.routes[0]!.payload.maxBodyBytes).toBe(1_048_576)
   })
+
+  test('the policy of the cross site requests comes from the route, then the defaults', () => {
+    const configuration = store()
+    configuration.apply(
+      baseConfig({
+        defaults: { auth: { mode: 'none' }, crossSite: 'strict' },
+        routes: [
+          {
+            id: 'a',
+            match: { host: '*', path: '/' },
+            upstream: 'http://upstream:3000',
+            crossSite: 'navigation',
+          },
+          {
+            id: 'b',
+            match: { host: 'b.example.com', path: '/' },
+            upstream: 'http://upstream:3000',
+          },
+        ],
+      })
+    )
+    const snapshot = configuration.snapshot!
+    expect(snapshot.routes.find((route) => route.id === 'a')!.payload.crossSite).toBe('navigation')
+    expect(snapshot.routes.find((route) => route.id === 'b')!.payload.crossSite).toBe('strict')
+  })
+
+  test('the policy of the cross site requests is navigation by default', () => {
+    const configuration = store()
+    configuration.apply(baseConfig())
+    expect(configuration.snapshot!.routes[0]!.payload.crossSite).toBe('navigation')
+  })
+
+  test('the authorization of the caller comes from the route, then the defaults', () => {
+    const configuration = store()
+    configuration.apply(
+      baseConfig({
+        defaults: { auth: { mode: 'none' }, forwardAuthorization: false },
+        routes: [
+          {
+            id: 'a',
+            match: { host: '*', path: '/' },
+            upstream: 'http://upstream:3000',
+            forwardAuthorization: true,
+          },
+          {
+            id: 'b',
+            match: { host: 'b.example.com', path: '/' },
+            upstream: 'http://upstream:3000',
+          },
+        ],
+      })
+    )
+    const snapshot = configuration.snapshot!
+    expect(snapshot.routes.find((route) => route.id === 'a')!.payload.forwardAuthorization).toBe(
+      true
+    )
+    expect(snapshot.routes.find((route) => route.id === 'b')!.payload.forwardAuthorization).toBe(
+      false
+    )
+  })
+
+  test('the lifetime of a cached decision comes from the route, then the defaults', () => {
+    const configuration = store()
+    configuration.apply(
+      baseConfig({
+        defaults: { auth: { mode: 'none' }, accessCacheTtlMs: 1000 },
+        routes: [
+          {
+            id: 'a',
+            match: { host: '*', path: '/' },
+            upstream: 'http://upstream:3000',
+            accessCacheTtlMs: 0,
+          },
+          {
+            id: 'b',
+            match: { host: 'b.example.com', path: '/' },
+            upstream: 'http://upstream:3000',
+          },
+        ],
+      })
+    )
+    const snapshot = configuration.snapshot!
+    // Zero asks the access service for every request: the revocation of
+    // that route is immediate.
+    expect(snapshot.routes.find((route) => route.id === 'a')!.payload.accessCacheTtlMs).toBe(0)
+    expect(snapshot.routes.find((route) => route.id === 'b')!.payload.accessCacheTtlMs).toBe(1000)
+
+    // Nothing is set: the lifetime of the environment is used.
+    const withoutDefaults = store()
+    withoutDefaults.apply(
+      baseConfig({
+        routes: [{ id: 'a', match: { host: '*', path: '/' }, upstream: 'http://upstream:3000' }],
+      })
+    )
+    expect(withoutDefaults.snapshot!.routes[0]!.payload.accessCacheTtlMs).toBeUndefined()
+  })
+
+  test('an unknown policy of the cross site requests is a configuration error', () => {
+    expect(() =>
+      parseConfig(
+        baseConfig({
+          routes: [
+            {
+              id: 'a',
+              match: { host: '*', path: '/' },
+              upstream: 'http://upstream:3000',
+              crossSite: 'maybe',
+            },
+          ],
+        })
+      )
+    ).toThrow()
+  })
 })
 
 describe('the publication of a configuration', () => {

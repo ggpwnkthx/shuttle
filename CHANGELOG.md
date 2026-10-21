@@ -38,6 +38,23 @@ refuses to release a tag that does not name the version of the package, and
 it starts the image against a real Redis and waits for the readiness of the
 gateway, the way a deployment runs.
 
+### The policies of a route
+
+Three policies are properties of a route rather than of the deployment, and
+they replace the value of the defaults:
+
+- `crossSite` refuses the navigations from another site on that route. It
+  is the policy of a route whose upstream changes the state of something on
+  a `GET`: such a route may only be reached from the site itself.
+- `forwardAuthorization` decides whether the `Authorization` header of the
+  caller is forwarded to the upstream of the route. The header is a
+  credential of the caller: forwarding it places the upstream in the trust
+  domain of that credential. The identity of the caller reaches the
+  upstream either way, in the headers of the gateway and in the signature.
+- `accessCacheTtlMs` is the lifetime of the cached decisions of the access
+  service on that route. It is the latency of a revocation there: a route
+  that sets `0` asks the service for every request.
+
 ### The host of a request
 
 The `x-forwarded-host` of a **trusted proxy** is now honoured. It is the

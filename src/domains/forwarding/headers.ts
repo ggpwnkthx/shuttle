@@ -180,6 +180,15 @@ export interface UpstreamHeadersOptions {
   signature?: string
   /** The names of the cookies the gateway owns. */
   gatewayCookies: readonly string[]
+  /**
+   * Whether the `Authorization` header of the caller is forwarded.
+   *
+   * The header is a credential of the caller: forwarding it places the
+   * upstream in the trust domain of that credential. A route that does not
+   * need it says so, and the identity of the caller travels in the headers
+   * of the gateway and in the signature.
+   */
+  forwardAuthorization?: boolean
 }
 
 /**
@@ -193,7 +202,14 @@ export interface UpstreamHeadersOptions {
  * - the authenticated identity is written using the configured header names
  */
 export function buildUpstreamHeaders(options: UpstreamHeadersOptions): Headers {
-  const { incoming, forwarding, identity, signature, gatewayCookies } = options
+  const {
+    incoming,
+    forwarding,
+    identity,
+    signature,
+    gatewayCookies,
+    forwardAuthorization = true,
+  } = options
   const headers = new Headers()
   const nominated = connectionNominatedHeaders(incoming)
 
@@ -201,6 +217,7 @@ export function buildUpstreamHeaders(options: UpstreamHeadersOptions): Headers {
     const lower = key.toLowerCase()
     if (isStrippedRequestHeader(lower)) continue
     if (nominated.includes(lower)) continue
+    if (!forwardAuthorization && lower === 'authorization') continue
     if (lower === 'cookie') {
       const kept = stripGatewayCookies(value, gatewayCookies)
       if (kept) headers.set('cookie', kept)

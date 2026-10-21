@@ -215,6 +215,49 @@ describe('the cache of the decisions', () => {
     expect(calls).toBe(2)
   })
 
+  test('a route that asks for no cache asks the service for every request', async () => {
+    let calls = 0
+    const { client: access } = client({
+      body: '{"allow":true}',
+      onRequest: () => {
+        calls += 1
+      },
+    })
+    const request = {
+      subject: 'user-1',
+      workspaceId: 'workspace-1',
+      routeId: 'route',
+      roles: ['a'],
+    }
+    // The lifetime of the route is zero: the revocation on that route is
+    // immediate, so the service is asked for every request.
+    expect((await access.decide(request, { cacheTtlMs: 0 })).cached).toBe(false)
+    expect((await access.decide(request, { cacheTtlMs: 0 })).cached).toBe(false)
+    expect(calls).toBe(2)
+  })
+
+  test('the lifetime of the route replaces the lifetime of the deployment', async () => {
+    let calls = 0
+    const { client: access } = client({
+      body: '{"allow":true}',
+      cacheTtlMs: 60_000,
+      onRequest: () => {
+        calls += 1
+      },
+    })
+    const request = {
+      subject: 'user-1',
+      workspaceId: 'workspace-1',
+      routeId: 'route',
+      roles: ['a'],
+    }
+    expect((await access.decide(request, { cacheTtlMs: 0 })).cached).toBe(false)
+    // The decision of the route was not cached, so the next request asks
+    // the service again.
+    expect((await access.decide(request, { cacheTtlMs: 0 })).cached).toBe(false)
+    expect(calls).toBe(2)
+  })
+
   test('the order of the roles is not part of the key', () => {
     const first = decisionKey({ subject: 'u', workspaceId: 'w', routeId: 'r', roles: ['a', 'b'] })
     const second = decisionKey({ subject: 'u', workspaceId: 'w', routeId: 'r', roles: ['b', 'a'] })

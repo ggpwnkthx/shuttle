@@ -108,8 +108,16 @@ export class AccessClient {
    * asked for again. It is used by the revalidation of an open connection,
    * where a decision that was cached a moment ago is exactly the decision
    * that has to be checked.
+   *
+   * The `cacheTtlMs` option is the lifetime of the cached decision. It is
+   * the latency of a revocation on the route that asked for the decision:
+   * a route that asks for zero asks the service for every request, so a
+   * revocation on that route is immediate.
    */
-  async decide(request: AccessRequest, options: { fresh?: boolean } = {}): Promise<AccessDecision> {
+  async decide(
+    request: AccessRequest,
+    options: { fresh?: boolean; cacheTtlMs?: number } = {}
+  ): Promise<AccessDecision> {
     const key = decisionKey(request)
     if (!options.fresh) {
       const cached = await this.#readCache(key)
@@ -134,12 +142,17 @@ export class AccessClient {
       }
     }
 
-    if (this.#cacheTtlMs > 0) {
-      await this.#writeCache(key, {
-        allow: decision.allow,
-        reason: decision.reason,
-        decidedAt: decision.decidedAt,
-      })
+    const ttlMs = options.cacheTtlMs ?? this.#cacheTtlMs
+    if (ttlMs > 0) {
+      await this.#writeCache(
+        key,
+        {
+          allow: decision.allow,
+          reason: decision.reason,
+          decidedAt: decision.decidedAt,
+        },
+        ttlMs
+      )
     }
     return decision
   }
@@ -165,9 +178,9 @@ export class AccessClient {
   }
 
   /** Caches a decision; a cache that cannot be reached is not an error. */
-  async #writeCache(key: string, decision: CachedDecision): Promise<void> {
+  async #writeCache(key: string, decision: CachedDecision, ttlMs: number): Promise<void> {
     try {
-      await this.#cache.set(key, decision, this.#cacheTtlMs)
+      await this.#cache.set(key, decision, ttlMs)
     } catch (error) {
       this.#onError?.(error)
     }

@@ -8,6 +8,7 @@
 
 export {
   ConfigValidationError,
+  CrossSiteSchema,
   DefaultsSchema,
   GATEWAY_ENDPOINTS,
   GATEWAY_RESERVED_PATHS,
@@ -20,6 +21,7 @@ export {
   parseConfig,
 } from './schema'
 export type {
+  CrossSitePolicy,
   Defaults,
   RouteFile,
   RouteTimeouts,

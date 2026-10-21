@@ -55,6 +55,31 @@ the shared state. A replica can be replaced at any moment.
 The full list, with the default of every value, is in
 [.env.example](../.env.example).
 
+## The policies of the routes
+
+Three policies are properties of a route rather than of the deployment. They
+are in the route table, and they replace the value of the defaults.
+
+| Key | Default | What it decides |
+| --- | --- | --- |
+| `crossSite` | `navigation` | `strict` refuses the navigations from another site on that route. Use it for a route whose upstream changes the state of something on a `GET`. |
+| `forwardAuthorization` | `true` | `false` does not forward the `Authorization` header of the caller to that upstream. The identity of the caller still reaches it, in the headers of the gateway and in the signature. |
+| `accessCacheTtlMs` | the value of the environment | The lifetime of the cached decisions of the access service on that route. `0` asks the service for every request, so a revocation on that route is immediate. |
+
+```jsonc
+{
+  "id": "workspace-api",
+  "match": { "host": "api.example.com", "path": "/ws/{workspaceId}/" },
+  "upstream": "http://upstream-b:3000",
+  "auth": { "mode": "any", "workspace": { "param": "workspaceId", "requireUuid": true } },
+  // The upstream of this route changes the state of something on a `GET`:
+  // it may only be reached from the site itself.
+  "crossSite": "strict",
+  // The upstream does not need the token of the caller.
+  "forwardAuthorization": false
+}
+```
+
 ## The secrets
 
 | Secret | Where it comes from | What it protects | How it is rotated |
@@ -475,6 +500,6 @@ deployment:
 | --- | --- |
 | The TLS of the clients | An ingress in front of the gateway. |
 | The upstream is static per route | A router in front of the pods, when the workspace decides the pod. |
-| The revocation of an access takes the TTL of the cache | The TTL is the knob: `SHUTTLE_ACCESS_CACHE_TTL_MS`. |
+| The revocation of an access takes the TTL of the cache | The TTL is the knob: `SHUTTLE_ACCESS_CACHE_TTL_MS`, and `accessCacheTtlMs` on the route that has to be revoked at once. |
 | The latency of a decision that is not cached | The control plane has to be fast. The cache absorbs the rest. |
 | One hostname per product surface | Subdomains, or one host with distinct path prefixes. |
