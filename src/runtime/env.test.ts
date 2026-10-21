@@ -126,6 +126,20 @@ describe('the environment of a production deployment', () => {
     expect(settings.browser.cookieSecure).toBe(true)
   })
 
+  test('the check of the type of a bearer token is on by default', () => {
+    const settings = readEnv({})
+    expect(settings.oidc.rejectNonceTokens).toBe(true)
+    expect(settings.oidc.requiredTokenClaims).toEqual([])
+    // A provider whose access tokens carry a nonce turns the check off.
+    const lenient = readEnv({ SHUTTLE_OIDC_REJECT_NONCE_TOKEN: 'false' })
+    expect(lenient.oidc.rejectNonceTokens).toBe(false)
+  })
+
+  test('the claims a bearer token has to carry are read from the environment', () => {
+    const settings = readEnv({ SHUTTLE_OIDC_REQUIRED_TOKEN_CLAIMS: 'scp, token_use' })
+    expect(settings.oidc.requiredTokenClaims).toEqual(['scp', 'token_use'])
+  })
+
   test('at least one rate limit is required', () => {
     expect(() => readEnv({ ...production, SHUTTLE_RATE_LIMIT_MAX: '0' })).toThrow(
       /at least one rate limit/

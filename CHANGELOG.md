@@ -35,6 +35,27 @@ answers `503 access_unavailable` with a `retry-after`, so the caller knows
 it may come back, and the outage is counted on
 `shuttle_access_unavailable_total` and not among the denials.
 
+### An id token is not an access token
+
+The gateway accepted the id token of the provider as a bearer credential:
+it validated the signature, the issuer, the audience, the expiry and the
+subject, and many providers publish an id token and an access token for the
+same client and the same audience. An id token travels through the browser —
+it lands in the history, in the logs and in the referrers — and accepting
+one hands a credential that was meant for the browser to every route that
+accepts a bearer token.
+
+A bearer token has to be an access token now. The browser flow of the
+gateway always asks for a nonce, so the id token of this client always
+carries a `nonce` claim and an access token never does: a bearer token that
+carries a nonce is refused. A provider that publishes a claim that names the
+type of the token names it in `SHUTTLE_OIDC_REQUIRED_TOKEN_CLAIMS`, and a
+token that does not carry it is refused as well.
+
+The check of the nonce is on by default and
+`SHUTTLE_OIDC_REJECT_NONCE_TOKEN=false` turns it off for a provider whose
+access tokens carry a nonce anyway.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the

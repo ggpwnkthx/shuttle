@@ -65,6 +65,24 @@ export interface OidcClientOptions {
   audience?: string
   /** The claim that carries the roles. */
   rolesClaim?: string
+  /**
+   * The claims a bearer token has to carry.
+   *
+   * The gateway validates the signature, the issuer, the audience, the
+   * expiry and the subject of a bearer token, and nothing else: many
+   * providers do not publish a claim that says the token is an access
+   * token. A provider that does publish one is named here, and a token that
+   * does not carry it is refused.
+   */
+  requiredTokenClaims?: string[]
+  /**
+   * Refuses a bearer token that carries a nonce.
+   *
+   * The browser flow of the gateway always asks for a nonce, so an id token
+   * of this client always carries one, and an access token never does. A
+   * provider whose access tokens carry a nonce anyway turns this off.
+   */
+  rejectNonceTokens?: boolean
   /** How long the metadata of the provider is cached, in milliseconds. */
   discoveryTtlMs?: number
   /** The timeout of a call to the provider, in milliseconds. */
@@ -169,6 +187,8 @@ export class OidcClient implements OidcPort {
   #discoveryTtlMs: number
   #requestTimeoutMs: number
   #allowInsecureIssuer: boolean
+  #requiredTokenClaims: string[]
+  #rejectNonceTokens: boolean
   #metadata: Configuration | null = null
   #metadataFetchedAt = 0
   #metadataPromise: Promise<Configuration> | null = null
@@ -188,6 +208,8 @@ export class OidcClient implements OidcPort {
     this.scopes = options.scopes ?? ['openid', 'profile', 'email']
     this.audience = options.audience ?? options.clientId
     this.rolesClaim = options.rolesClaim ?? 'roles'
+    this.#requiredTokenClaims = options.requiredTokenClaims ?? []
+    this.#rejectNonceTokens = options.rejectNonceTokens ?? true
     this.#fetch = options.fetchImpl ?? (fetch as unknown as CustomFetch)
     this.#discoveryTtlMs = options.discoveryTtlMs ?? 10 * 60_000
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 5_000
@@ -353,6 +375,20 @@ export class OidcClient implements OidcPort {
   /**
    * Validates a bearer token: its signature, its issuer, its audience and
    * its expiry.
+   *
+   * It also refuses a token that is not an access token. Many providers
+   * publish an id token and an access token for the same client and the
+   * same audience, and an id token travels through the browser: it lands in
+   * the history, in the logs and in the referrers. Accepting one as a
+   * bearer credential hands a token that was meant for the browser to every
+   * route that accepts a bearer token.
+   *
+   * The id token of this client always carries a nonce — the browser flow
+   * always asks for one — and an access token never does, so a bearer
+   * token that carries a nonce is refused. A provider that publishes a
+   * claim that names the type of the token is named in
+   * `requiredTokenClaims`, and a token that does not carry it is refused
+   * as well.
    */
   async verifyToken(token: string, options: { nonce?: string } = {}): Promise<VerifiedIdentity> {
     const configuration = await this.metadata()
@@ -376,9 +412,27 @@ export class OidcClient implements OidcPort {
       throw new OidcError('token_invalid', 'token does not contain a subject')
     }
     // A nonce is not required for an API token (it is not bound to a login
-    // attempt); when one is passed, it has to match.
+    // attempt); when one is passed, it has to match. A token that is
+    // verified against a nonce is an id token and not a bearer token, so
+    // the check of the type of the token does not apply to it.
     if (options.nonce && payload.nonce !== options.nonce) {
       throw new OidcError('token_invalid', 'token nonce does not match the authentication request')
+    }
+    if (!options.nonce) {
+      if (this.#rejectNonceTokens && payload.nonce !== undefined) {
+        throw new OidcError(
+          'token_invalid',
+          'the token carries a nonce: it is an id token and not an access token'
+        )
+      }
+      for (const claim of this.#requiredTokenClaims) {
+        if (payload[claim] === undefined) {
+          throw new OidcError(
+            'token_invalid',
+            `the token does not carry the claim "${claim}" the deployment requires`
+          )
+        }
+      }
     }
     return {
       subject: payload.sub,

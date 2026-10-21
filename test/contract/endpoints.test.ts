@@ -259,4 +259,18 @@ describe('the workspace of a request', () => {
     expect(body.headers['x-shuttle-user']).toBe('user-alice')
     expect(body.headers['x-shuttle-workspace']).toBe(WORKSPACE_ID)
   })
+
+  test('an id token is refused as a bearer token', async () => {
+    // The id token of the gateway always carries a nonce: the browser flow
+    // always asks for one. It travels through the browser, so it must not
+    // authenticate an api client.
+    const idToken = await harness.idp.mintAccessToken({
+      subject: 'user-alice',
+      nonce: 'the-nonce-of-a-login',
+    })
+    const response = await fetch(`${harness.gatewayUrl}/ws/${WORKSPACE_ID}/`, {
+      headers: { host: 'api.shuttle.test', authorization: `Bearer ${idToken}` },
+    })
+    expect(response.status).toBe(401)
+  })
 })

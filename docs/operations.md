@@ -39,6 +39,8 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_OIDC_ISSUER` | `https://dex.example.com/dex` | The identity provider. |
 | `SHUTTLE_OIDC_CLIENT_ID` / `_CLIENT_SECRET` | `shuttle` | The client of the gateway. The secret is in the secret store. |
 | `SHUTTLE_OIDC_REDIRECT_URI` | `https://<the public url of the gateway>/auth/callback` | Where the provider sends the browser back to. |
+| `SHUTTLE_OIDC_REQUIRED_TOKEN_CLAIMS` | — | The claims a bearer token has to carry. A provider that publishes a claim that names the type of the token names it here. |
+| `SHUTTLE_OIDC_REJECT_NONCE_TOKEN` | `true` | Refuses a bearer token that carries a nonce. The id token of the gateway always carries one and an access token never does. A provider whose access tokens carry a nonce turns it off. |
 | `SHUTTLE_ACCESS_URL` / `_ACCESS_TOKEN` | `https://access.example.com` | The access service. The token is in the secret store. |
 | `SHUTTLE_SESSION_SECRET` | A random value of at least 32 bytes | It signs the state of the login and the signature of the identity. It has to be the **same on every replica**. |
 | `SHUTTLE_SESSION_URL` | `rediss://:<password>@<redis>:6379/0` | The sessions of the callers. It has to name a server whose state is shared in production: a Redis server or a Postgres server. |

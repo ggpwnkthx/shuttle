@@ -325,6 +325,25 @@ The bearer token is validated against the same provider: the signature
 accepted algorithms are `RS256`, `ES256`, `RS384`, `RS512`, `ES384` and
 `PS256`. The tolerance of the clock is five seconds.
 
+A bearer token has to be an **access token**, and not the id token of the
+gateway. Many providers publish an id token and an access token for the same
+client and the same audience, and an id token travels through the browser: it
+lands in the history, in the logs and in the referrers.
+
+Two rules keep them apart:
+
+- The browser flow of the gateway always asks for a nonce, so the id token of
+  this client **always** carries a `nonce` claim and an access token never
+  does. A bearer token that carries a nonce is refused. The rule is on by
+  default and `SHUTTLE_OIDC_REJECT_NONCE_TOKEN=false` turns it off for a
+  provider whose access tokens carry a nonce anyway.
+- A provider that publishes a claim that names the type of the token names
+  it in `SHUTTLE_OIDC_REQUIRED_TOKEN_CLAIMS`, and a bearer token that does
+  not carry it is refused.
+
+A token that is verified **against a nonce** is an id token and not a bearer
+token, so the rule of the nonce does not apply to it.
+
 ### 5.5 The cookies
 
 | Cookie | Attributes |

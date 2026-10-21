@@ -1,7 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { calculatePKCECodeChallenge, randomPKCECodeVerifier } from 'openid-client'
 import { readEnv } from '../../src/runtime/env'
 import { createRuntime, type GatewayRuntime } from '../../src/runtime/composition'
 import {
@@ -334,40 +333,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       idp.users.find((user) => user.email === email)
     if (!account) throw new Error(`the identity provider does not know ${email}`)
 
-    const verifier = randomPKCECodeVerifier()
-    const challenge = await calculatePKCECodeChallenge(verifier)
-    const redirectUri = `${gatewayUrl}/auth/callback`
-    const authorizeUrl =
-      `${idp.url}/auth?client_id=${encodeURIComponent(idp.clientId)}` +
-      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-      '&response_type=code&scope=openid%20profile%20email' +
-      `&state=${Math.random().toString(36).slice(2)}&nonce=${Math.random().toString(36).slice(2)}` +
-      `&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256`
-
-    const callbackUrl = await signInAtProvider(authorizeUrl, {
-      email: account.email,
-      password: account.password,
-    })
-    const code = new URL(callbackUrl).searchParams.get('code') ?? ''
-
-    const response = await fetch(`${idp.url}/token`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded',
-        authorization: `Basic ${Buffer.from(`${idp.clientId}:${idp.clientSecret}`).toString('base64')}`,
-      },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-        code_verifier: verifier,
-      }),
-    })
-    const body = (await response.json()) as { id_token?: string; error?: string }
-    if (!body.id_token) {
-      throw new Error(`unable to obtain a token: ${body.error ?? 'unknown error'}`)
-    }
-    return body.id_token
+    // The credential of an api client is an access token, and not the id
+    // token of a browser: the gateway refuses a bearer token that carries
+    // a nonce, and the id token of the gateway always carries one.
+    return await idp.mintAccessToken({ subject: account.sub, email: account.email })
   }
 
   const stop = async (): Promise<void> => {

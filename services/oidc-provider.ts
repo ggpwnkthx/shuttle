@@ -17,7 +17,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import { freePort } from './port'
 import Provider from 'oidc-provider'
-import { exportJWK, generateKeyPair, type JWK } from 'jose'
+import { SignJWT, exportJWK, generateKeyPair, importJWK, type JWK } from 'jose'
 import { assertFixtureAllowed, FixtureInProductionError } from './fixture-guard'
 
 export interface OidcUser {
@@ -54,6 +54,27 @@ export interface StartedOidcProvider {
    * subject.
    */
   privateJwk: JWK
+  /**
+   * Mints an access token for an api client.
+   *
+   * The access token of the provider is opaque, and the gateway validates
+   * a bearer token as a json web token: its signature, its issuer, its
+   * audience and its expiry. The fixture signs one with the key of the
+   * provider, so it is validated exactly like a token the provider issued.
+   *
+   * The token carries **no nonce**: an access token is not bound to a
+   * login attempt, and the gateway refuses a bearer token that carries
+   * one — that is what an id token of the gateway looks like.
+   */
+  mintAccessToken: (options?: {
+    subject?: string
+    email?: string
+    roles?: string[]
+    audience?: string
+    expiresIn?: string
+    /** The nonce of an id token of the gateway. */
+    nonce?: string
+  }) => Promise<string>
   /** Replaces the signing key of the provider, as a rotation does. */
   rotateKeys: () => Promise<void>
   stop: () => Promise<void>
@@ -325,6 +346,24 @@ export async function startOidcProvider(
     clientSecret,
     users,
     privateJwk: currentJwk!,
+    mintAccessToken: async (options = {}) => {
+      const account = findUser(options.subject ?? options.email ?? '')
+      const subject = options.subject ?? account?.sub ?? 'user-alice'
+      const key = await importJWK(currentJwk!, 'RS256')
+      return await new SignJWT({
+        email: options.email ?? account?.email ?? `${subject}@shuttle.test`,
+        name: account?.name ?? subject,
+        roles: options.roles ?? account?.roles ?? [],
+        ...(options.nonce === undefined ? {} : { nonce: options.nonce }),
+      })
+        .setProtectedHeader({ alg: 'RS256', kid: currentJwk!.kid })
+        .setSubject(subject)
+        .setIssuer(issuer)
+        .setAudience(options.audience ?? clientId)
+        .setIssuedAt()
+        .setExpirationTime(options.expiresIn ?? '5m')
+        .sign(key)
+    },
     rotateKeys: async () => {
       await generateKey(`shuttle-dev-key-${Date.now()}`)
     },

@@ -101,6 +101,59 @@ describe('the identity provider', () => {
     await provider.stop()
   })
 
+  test('an id token is refused as a bearer token', async () => {
+    await start()
+    // The browser flow of the gateway always asks for a nonce, so an id
+    // token of this client always carries one. An id token travels through
+    // the browser: it must not authenticate an api client.
+    const token = await sign({ sub: 'user-1', nonce: 'the-nonce-of-the-login' })
+    await expect(client.verifyToken(token)).rejects.toThrow(OidcError)
+    await expect(client.verifyToken(token)).rejects.toThrow(/id token/)
+    await provider.stop()
+  })
+
+  test('an id token is accepted when it is verified against its nonce', async () => {
+    await start()
+    const token = await sign({ sub: 'user-1', nonce: 'the-nonce-of-the-login' })
+    const identity = await client.verifyToken(token, { nonce: 'the-nonce-of-the-login' })
+    expect(identity.subject).toBe('user-1')
+    await provider.stop()
+  })
+
+  test('a provider whose access tokens carry a nonce turns the check off', async () => {
+    await start()
+    const lenient = new OidcClient({
+      issuer: provider.issuer,
+      clientId: provider.clientId,
+      clientSecret: provider.clientSecret,
+      redirectUri: 'http://localhost:8080/auth/callback',
+      allowInsecureIssuer: true,
+      rejectNonceTokens: false,
+    })
+    const token = await sign({ sub: 'user-1', nonce: 'a-nonce' })
+    const identity = await lenient.verifyToken(token)
+    expect(identity.subject).toBe('user-1')
+    await provider.stop()
+  })
+
+  test('a token that does not carry a required claim is refused', async () => {
+    await start()
+    const strict = new OidcClient({
+      issuer: provider.issuer,
+      clientId: provider.clientId,
+      clientSecret: provider.clientSecret,
+      redirectUri: 'http://localhost:8080/auth/callback',
+      allowInsecureIssuer: true,
+      requiredTokenClaims: ['scp'],
+    })
+    const without = await sign({ sub: 'user-1' })
+    await expect(strict.verifyToken(without)).rejects.toThrow(OidcError)
+    await expect(strict.verifyToken(without)).rejects.toThrow(/scp/)
+    const with_ = await sign({ sub: 'user-1', scp: 'read' })
+    expect((await strict.verifyToken(with_)).subject).toBe('user-1')
+    await provider.stop()
+  })
+
   test('a token that was signed by another key is refused', async () => {
     await start()
     const key = await importJWK(provider.privateJwk, 'RS256')

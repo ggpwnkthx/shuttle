@@ -26,6 +26,16 @@ export interface OidcSettings {
   redirectUri: string
   scopes: string[]
   rolesClaim: string
+  /** The claims a bearer token has to carry. */
+  requiredTokenClaims: string[]
+  /**
+   * Refuses a bearer token that carries a nonce.
+   *
+   * The browser flow always asks for a nonce, so an id token of this client
+   * always carries one and an access token never does. A provider whose
+   * access tokens carry a nonce anyway turns the check off.
+   */
+  rejectNonceTokens: boolean
   audience?: string
   /** Allows a provider that is not served over https. */
   allowInsecureIssuer: boolean
@@ -312,6 +322,25 @@ const EnvSchema = z.object({
   SHUTTLE_OIDC_REDIRECT_URI: z.string().optional(),
   SHUTTLE_OIDC_SCOPES: listEnv(),
   SHUTTLE_OIDC_ROLES_CLAIM: z.string().default('roles'),
+  /**
+   * The claims a bearer token has to carry.
+   *
+   * The gateway validates the signature, the issuer, the audience, the
+   * expiry and the subject of a bearer token, and nothing else: many
+   * providers do not publish a claim that says the token is an access
+   * token. A provider that does publish one is named here, and a token
+   * that does not carry it is refused.
+   */
+  SHUTTLE_OIDC_REQUIRED_TOKEN_CLAIMS: listEnv(),
+  /**
+   * Refuses a bearer token that carries a nonce.
+   *
+   * The check is on by default: the id token of this client always carries
+   * a nonce and an access token never does, and an id token travels through
+   * the browser. A provider whose access tokens carry a nonce anyway turns
+   * the check off explicitly.
+   */
+  SHUTTLE_OIDC_REJECT_NONCE_TOKEN: boolEnv(),
   SHUTTLE_OIDC_AUDIENCE: z.string().optional(),
   SHUTTLE_OIDC_ALLOW_INSECURE: boolEnv(),
   /**
@@ -624,6 +653,10 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
         `http://localhost:${parsed.SHUTTLE_GATEWAY_PORT}/auth/callback`,
       scopes,
       rolesClaim: parsed.SHUTTLE_OIDC_ROLES_CLAIM,
+      requiredTokenClaims: parsed.SHUTTLE_OIDC_REQUIRED_TOKEN_CLAIMS,
+      // The check is on unless the deployment turns it off: a setting that
+      // looks active but is not is a security hole.
+      rejectNonceTokens: parsed.SHUTTLE_OIDC_REJECT_NONCE_TOKEN ?? true,
       audience: parsed.SHUTTLE_OIDC_AUDIENCE,
       // A provider that is not served over https is only allowed outside a
       // production environment: a deployment terminates TLS in front of it.
