@@ -43,6 +43,9 @@ jobs:
       - name: import boundaries
         run: bun test test/architecture
 
+      - name: the versions of the project agree
+        run: bun run versions
+
       - name: unit and contract tests
         run: bun test src test/contract
 

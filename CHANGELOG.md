@@ -22,6 +22,13 @@ The gateway refuses to start when `SHUTTLE_SESSION_URL` or
 is a single node and that accepts the in-process state says so explicitly
 with `SHUTTLE_ALLOW_MEMORY_STATE=true`.
 
+### The version of the release
+
+The version is written in the package, in the image, in the manifests of the
+deployment and in the changelog. They named different releases. They all
+name `0.2.0` now, and `bun run versions` fails the build when they drift
+apart again.
+
 ### The host of a request
 
 The `x-forwarded-host` of a **trusted proxy** is now honoured. It is the

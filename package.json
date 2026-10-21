@@ -1,6 +1,6 @@
 {
   "name": "shuttle",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Shuttle: an application gateway that authenticates a caller, asks an access service and forwards the request to a single upstream.",
@@ -19,6 +19,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "architecture": "bun run scripts/architecture.ts",
+    "versions": "bun run scripts/version.ts",
     "load": "bun run scripts/load.ts"
   },
   "dependencies": {

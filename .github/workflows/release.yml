@@ -2,18 +2,23 @@ name: release
 
 # The release of the image.
 #
-# The workflow runs on a tag: it builds the image of the release, it starts
-# it with the configuration of a deployment and it exports it as an artifact
-# of the run. The image is then pushed to the registry of the platform by
-# the pipeline that holds the credentials of the registry.
+# The workflow runs on a tag: it checks that the tag names the version of
+# the package, it builds the image of the release, it starts it with the
+# configuration of a deployment and it exports it as an artifact of the run.
+# The image is then pushed to the registry of the platform by the pipeline
+# that holds the credentials of the registry.
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+#   git tag v0.2.0 && git push origin v0.2.0
 on:
   push:
     tags: ['v*']
 
 permissions:
   contents: read
+
+env:
+  # The version of the runtime the gateway is built and released with.
+  BUN_VERSION: '1.4.3'
 
 jobs:
   image:
@@ -34,9 +39,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
       - name: the version of the release
         id: version
         run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: the tag names the version of the package
+        run: |
+          expected=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$expected" ]; then
+            echo "the tag $GITHUB_REF_NAME does not name the version $expected of the package"
+            exit 1
+          fi
+          echo "version=$expected" >> "$GITHUB_OUTPUT"
+
+      - name: the versions of the project agree
+        run: bun run versions
 
       - uses: docker/setup-buildx-action@v3
 
@@ -46,9 +68,11 @@ jobs:
           context: .
           file: Dockerfile
           load: true
-          tags: ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}
+          tags: |
+            ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}
+            ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.version }}
           build-args: |
-            VERSION=${{ steps.version.outputs.tag }}
+            VERSION=${{ steps.version.outputs.version }}
             REVISION=${{ github.sha }}
           # The provenance of the image: what was built and from what.
           provenance: true
