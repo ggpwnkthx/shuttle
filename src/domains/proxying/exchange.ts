@@ -45,8 +45,14 @@ export interface ExchangeTimeouts {
 export interface ExchangeRequest {
   /** The method of the request. */
   method: string
-  /** The absolute url of the upstream. */
-  url: string
+  /**
+   * The absolute urls of the upstreams, in the order they are tried.
+   *
+   * The first one that answers handles the request. The next one is tried
+   * when the connection to the first one fails, and only when the request
+   * may be sent again (§11.4 of the specification).
+   */
+  urls: string[]
   /** The headers of the request, already filtered. */
   headers: Headers
   /** The body of the request, or null when the request has none. */
@@ -142,6 +148,26 @@ class PayloadTooLargeError extends Error {
     this.name = 'PayloadTooLargeError'
     this.limit = limit
   }
+}
+
+/**
+ * The methods a request may be sent twice.
+ *
+ * They are the idempotent methods of HTTP: sending them again has the
+ * same effect as sending them once.
+ */
+const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE', 'PUT', 'DELETE'])
+
+/**
+ * Reports whether a request may be sent to another upstream.
+ *
+ * A request that changes the state of an upstream may not be sent twice,
+ * and a request that has a body cannot be replayed: the bytes are already
+ * on their way to the first upstream.
+ */
+function isRetryable(request: ExchangeRequest): boolean {
+  if (request.body) return false
+  return IDEMPOTENT_METHODS.has(request.method.toUpperCase())
 }
 
 /** The statuses of a final answer that carry no body. */
@@ -390,18 +416,46 @@ export class HttpExchangeService {
     // upstream is measured from here to the final headers of the answer.
     const sentAt = Date.now()
 
-    const answered = this.#transport
-      .send({
-        url: request.url,
-        method: request.method,
-        headers: request.headers,
-        body: uploadBody,
-        signal: abort.signal,
-      })
-      .then(
-        (response) => ({ kind: 'response' as const, response }),
-        (error: unknown) => ({ kind: 'error' as const, error })
-      )
+    // The upstreams are tried in the order of the route. The next one is
+    // tried when the connection to the first one fails, and only when the
+    // request may be sent again: a request that has a body cannot be
+    // replayed, and a request that changes the state of an upstream may
+    // not be sent twice.
+    const retryable = isRetryable(request)
+    const urls = request.urls.length > 0 ? request.urls : ['']
+    let attempt = 0
+
+    const send = async (): Promise<
+      { kind: 'response'; response: UpstreamResponse } | { kind: 'error'; error: unknown }
+    > => {
+      for (;;) {
+        const url = urls[attempt]!
+        attempt += 1
+        try {
+          const response = await this.#transport.send({
+            url,
+            method: request.method,
+            headers: request.headers,
+            body: uploadBody,
+            signal: abort.signal,
+          })
+          return { kind: 'response', response }
+        } catch (error) {
+          // The failure of the connection is the only one that may be
+          // tried again: a timeout means the upstream answered too late,
+          // and the answer may be on its way.
+          const next = attempt < urls.length
+          if (!next || !retryable || result.failure || headersArrived) {
+            return { kind: 'error', error }
+          }
+        }
+      }
+    }
+
+    const answered = send().then(
+      (outcome) => outcome,
+      (error: unknown) => ({ kind: 'error' as const, error })
+    )
 
     const raced = await Promise.race([
       answered,

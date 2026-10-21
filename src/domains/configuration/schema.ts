@@ -73,6 +73,16 @@ const UpstreamSchema = z
   })
 
 /**
+ * The upstreams of a route.
+ *
+ * A route may name one upstream or several: the gateway tries them in the
+ * order of the list, and it tries the next one when the connection to the
+ * first one fails. The order is the order of the file, so the behaviour of
+ * a route does not depend on anything else.
+ */
+const UpstreamsSchema = z.union([UpstreamSchema, z.array(UpstreamSchema).min(1)])
+
+/**
  * The policy of the cross site requests of a route.
  *
  * - `navigation` a navigation from another site is allowed. It is the
@@ -95,7 +105,7 @@ export const RouteSchema = z.strictObject({
     /** Path template, may contain `{param}` placeholders. */
     path: PathTemplateSchema,
   }),
-  upstream: UpstreamSchema,
+  upstream: UpstreamsSchema,
   /**
    * The path the route forwards to its upstream.
    *
@@ -287,8 +297,12 @@ export function effectivePolicy(
   crossSite: CrossSitePolicy
   forwardAuthorization: boolean
   accessCacheTtlMs?: number
+  upstreams: string[]
 } {
   return {
+    // A route may name one upstream or several: they are tried in the
+    // order of the list.
+    upstreams: Array.isArray(route.upstream) ? route.upstream : [route.upstream],
     auth: route.auth ?? defaults.auth,
     timeouts: {
       responseMs: route.timeouts?.responseMs ?? defaults.timeouts.responseMs,

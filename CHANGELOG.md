@@ -205,6 +205,29 @@ The test of the example signs with the key of the gateway and verifies with
 the implementation of the upstream: a change of the format that breaks the
 contract of the upstreams fails the build.
 
+### A route may name several upstreams
+
+A route named one upstream, so the restart of that upstream was an outage
+of the route.
+
+A route may name several now, and the gateway tries them in the order of
+the list:
+
+```jsonc
+{ "id": "workspace-api", "upstream": ["http://upstream-a:3000", "http://upstream-b:3000"] }
+```
+
+The next one is tried when the **connection** to the first one fails, and
+only when the request may be sent again: a request that changes the state
+of an upstream may not be sent twice, and a request that has a body cannot
+be replayed because the bytes are already on their way to the first
+upstream.
+
+The budget of the answer is the budget of the whole exchange, so a list of
+upstreams does not make the timeout of a route longer. The handshake of a
+websocket goes to the first upstream: a handshake is not a request that may
+be sent twice.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the

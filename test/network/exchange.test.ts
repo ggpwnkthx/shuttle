@@ -36,7 +36,7 @@ function request(
 ) {
   return {
     method: options.method ?? 'GET',
-    url: `${upstream.url}${path}`,
+    urls: [`${upstream.url}${path}`],
     headers: options.headers ?? new Headers(),
     body: options.body ?? null,
     signal: options.signal ?? new AbortController().signal,
@@ -148,7 +148,7 @@ describe('the exchanges of a real upstream', () => {
     })
     const result = await service().execute({
       method: 'GET',
-      url: `${server.url}/`,
+      urls: [`${server.url}/`],
       headers: new Headers(),
       body: null,
       signal: new AbortController().signal,

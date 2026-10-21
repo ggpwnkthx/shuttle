@@ -189,6 +189,31 @@ describe('the schema of the configuration', () => {
     ).toThrow()
   })
 
+  test('a route may name several upstreams', () => {
+    const configuration = parseConfig(
+      baseConfig({
+        routes: [
+          {
+            id: 'a',
+            match: { host: '*', path: '/' },
+            upstream: ['http://first:3000', 'http://second:3000'],
+          },
+        ],
+      })
+    )
+    expect(configuration.routes[0]?.upstream).toEqual(['http://first:3000', 'http://second:3000'])
+  })
+
+  test('a list of upstreams may not be empty', () => {
+    expect(() =>
+      parseConfig(
+        baseConfig({
+          routes: [{ id: 'a', match: { host: '*', path: '/' }, upstream: [] }],
+        })
+      )
+    ).toThrow()
+  })
+
   test('a rewrite that names a placeholder of the path is accepted', () => {
     const configuration = parseConfig(
       baseConfig({

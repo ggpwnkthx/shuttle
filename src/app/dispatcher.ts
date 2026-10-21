@@ -375,7 +375,9 @@ export async function dispatch(
     const identity = principal ? writtenIdentity(identityOf(principal, workspaceId)) : undefined
     // The path the route forwards: the path of the request, or the path
     // the route rewrites it to.
-    const target = buildUpstreamTarget(route.upstream, match.path, url.search)
+    // The handshake of a websocket goes to the first upstream of the
+    // route: a handshake is not a request that may be sent twice.
+    const target = buildUpstreamTarget(route.upstreams[0]!, match.path, url.search)
     const targetUrl = new URL(target)
     const upgrade = context.env.upgrade
     if (!upgrade) {
@@ -409,7 +411,7 @@ export async function dispatch(
       context.req.raw,
       {
         routeId: route.id,
-        upstream: route.upstream,
+        upstream: route.upstreams[0]!,
         // The path the route forwards: the path of the request, or the
         // path the route rewrites it to.
         path: match.path,
@@ -447,8 +449,12 @@ export async function dispatch(
 
   // The http path.
   // The path the route forwards: the path of the request, or the path the
-  // route rewrites it to.
-  const target = buildUpstreamTarget(route.upstream, match.path, url.search)
+  // route rewrites it to. The upstreams of the route are tried in the
+  // order of the list.
+  const targets = route.upstreams.map((upstream) =>
+    buildUpstreamTarget(upstream, match.path, url.search)
+  )
+  const target = targets[0]!
   const targetUrl = new URL(target)
   const identity = principal ? writtenIdentity(identityOf(principal, workspaceId)) : undefined
   const headers = buildUpstreamHeaders({
@@ -474,7 +480,7 @@ export async function dispatch(
 
   const result = await dependencies.exchanges.execute({
     method,
-    url: target,
+    urls: targets,
     headers,
     body: context.req.raw.body,
     signal: context.req.raw.signal,
@@ -561,7 +567,7 @@ export async function dispatch(
   // that names another host is left alone.
   const location = responseHeaders.get('location')
   if (location) {
-    const rewritten = rewriteLocation(location, { upstreamOrigin: upstreamOrigin(route.upstream) })
+    const rewritten = rewriteLocation(location, { upstreamOrigin: upstreamOrigin(target) })
     if (rewritten !== location) responseHeaders.set('location', rewritten)
   }
 

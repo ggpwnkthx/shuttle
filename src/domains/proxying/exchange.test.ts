@@ -45,7 +45,7 @@ describe('the answer of an upstream', () => {
     const service = new HttpExchangeService({ transport: transport({}) })
     const result = await service.execute({
       method: 'GET',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: null,
       signal: new AbortController().signal,
@@ -71,7 +71,7 @@ describe('the answer of an upstream', () => {
     })
     const result = await service.execute({
       method: 'GET',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: null,
       signal: new AbortController().signal,
@@ -101,7 +101,7 @@ describe('the answer of an upstream', () => {
     })
     const result = await service.execute({
       method: 'POST',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: bodyOf(['abc', 'de']),
       signal: new AbortController().signal,
@@ -126,7 +126,7 @@ describe('the limit of the body', () => {
     })
     const result = await service.execute({
       method: 'POST',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers({ 'content-length': '100' }),
       body: bodyOf(['x']),
       signal: new AbortController().signal,
@@ -152,7 +152,7 @@ describe('the limit of the body', () => {
     })
     const result = await service.execute({
       method: 'POST',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: bodyOf(['aaaaa', 'bbbbb', 'ccccc']),
       signal: new AbortController().signal,
@@ -177,7 +177,7 @@ describe('the limit of the body', () => {
     })
     const result = await service.execute({
       method: 'POST',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: bodyOf(['a'.repeat(1000)]),
       signal: new AbortController().signal,
@@ -201,7 +201,7 @@ describe('the budgets of the phases', () => {
     })
     const result = await service.execute({
       method: 'GET',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: null,
       signal: new AbortController().signal,
@@ -233,7 +233,7 @@ describe('the budgets of the phases', () => {
     })
     const result = await service.execute({
       method: 'POST',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: stalled,
       signal: new AbortController().signal,
@@ -268,7 +268,7 @@ describe('the budgets of the phases', () => {
     })
     const result = await service.execute({
       method: 'POST',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: slowUpload,
       signal: new AbortController().signal,
@@ -293,7 +293,7 @@ describe('the budgets of the phases', () => {
     })
     const result = await service.execute({
       method: 'GET',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: null,
       signal: new AbortController().signal,
@@ -325,7 +325,7 @@ describe('the cancellation of an exchange', () => {
     const controller = new AbortController()
     const pending = service.execute({
       method: 'GET',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: null,
       signal: controller.signal,
@@ -345,7 +345,7 @@ describe('the cancellation of an exchange', () => {
     })
     const result = await service.execute({
       method: 'GET',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: null,
       signal: new AbortController().signal,
@@ -374,7 +374,7 @@ describe('the finalization of an exchange', () => {
     })
     const result = await service.execute({
       method: 'GET',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: null,
       signal: new AbortController().signal,
@@ -398,7 +398,7 @@ describe('the finalization of an exchange', () => {
     })
     void service.execute({
       method: 'GET',
-      url: 'http://upstream.test/',
+      urls: ['http://upstream.test/'],
       headers: new Headers(),
       body: null,
       signal: new AbortController().signal,
@@ -410,5 +410,101 @@ describe('the finalization of an exchange', () => {
     expect(service.abortAll()).toBe(1)
     await Bun.sleep(20)
     expect(service.activeCount).toBe(0)
+  })
+})
+
+describe('the upstreams of a route', () => {
+  /** A transport that records the urls it was asked for. */
+  function recorder(options: { failOn: (url: string) => boolean }) {
+    const urls: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        urls.push(request.url)
+        if (options.failOn(request.url)) throw new Error('the connection is refused')
+        return { status: 200, statusText: 'OK', headers: new Headers(), body: null }
+      },
+    }
+    return { urls, transport }
+  }
+
+  test('the next upstream is tried when the connection to the first one fails', async () => {
+    const upstream = recorder({ failOn: (url) => url.includes('first') })
+    const service = new HttpExchangeService({ transport: upstream.transport })
+    const result = await service.execute({
+      method: 'GET',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers(),
+      body: null,
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+    })
+    expect(upstream.urls).toEqual(['http://first.test/', 'http://second.test/'])
+    expect(result.response?.status).toBe(200)
+    expect(result.failure).toBeNull()
+  })
+
+  test('a request that changes the state of an upstream is not sent twice', async () => {
+    const upstream = recorder({ failOn: (url) => url.includes('first') })
+    const service = new HttpExchangeService({ transport: upstream.transport })
+    const result = await service.execute({
+      method: 'POST',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers(),
+      body: null,
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+    })
+    expect(upstream.urls).toEqual(['http://first.test/'])
+    expect(result.failure?.kind).toBe('network')
+  })
+
+  test('a request that has a body is not sent twice', async () => {
+    const upstream = recorder({ failOn: (url) => url.includes('first') })
+    const service = new HttpExchangeService({ transport: upstream.transport })
+    const result = await service.execute({
+      method: 'GET',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers(),
+      body: bodyOf(['hello']),
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+    })
+    expect(upstream.urls).toEqual(['http://first.test/'])
+    expect(result.failure?.kind).toBe('network')
+  })
+
+  test('an upstream that answers is not followed by another one', async () => {
+    const upstream = recorder({ failOn: () => false })
+    const service = new HttpExchangeService({ transport: upstream.transport })
+    await service.execute({
+      method: 'GET',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers(),
+      body: null,
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+    })
+    expect(upstream.urls).toEqual(['http://first.test/'])
+  })
+
+  test('the last upstream that fails is the failure of the request', async () => {
+    const upstream = recorder({ failOn: () => true })
+    const service = new HttpExchangeService({ transport: upstream.transport })
+    const result = await service.execute({
+      method: 'GET',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers(),
+      body: null,
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+    })
+    expect(upstream.urls).toEqual(['http://first.test/', 'http://second.test/'])
+    expect(result.failure?.kind).toBe('network')
+    expect(result.response).toBeNull()
   })
 })

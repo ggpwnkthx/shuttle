@@ -174,7 +174,7 @@ A route:
 | `match.host` | `example.com`, `*.example.com` (the subdomains, not the domain itself), or `*` for any host. |
 | `match.path` | A list of segments. A segment is a literal or a `{placeholder}`. |
 | `rewrite` | The path the route forwards to its upstream. A list of segments; the placeholders of the path of the route are the values the caller sent, and `{rest}` is the part of the path that follows the prefix the route matched. A route without one forwards the path of the request (§11.1). |
-| `upstream` | An `http` or `https` url. It may not carry a query string or a fragment. |
+| `upstream` | An `http` or `https` url, or a list of them. A url may not carry a query string or a fragment. The upstreams are tried in the order of the list (§11.4). |
 | `auth` | The policy of the route. It replaces `defaults.auth`; it is not merged with it. |
 | `timeouts` | The budgets of the route. Merged field by field with `defaults.timeouts`. |
 | `maxBodyBytes` | The body limit of the route. It wins over `defaults.maxBodyBytes`, which wins over `SHUTTLE_MAX_BODY_BYTES`. |
@@ -908,6 +908,34 @@ The WebSocket url is built the same way, with `http` → `ws` and `https` →
 `wss`. An upstream of a websocket is served over plain http: a `wss`
 upstream is refused (§11.1.2).
 
+### 11.4 The upstreams of a route
+
+A route may name one upstream or several:
+
+```jsonc
+{
+  "id": "workspace-api",
+  "upstream": ["http://upstream-a:3000", "http://upstream-b:3000"]
+}
+```
+
+The upstreams are tried in the order of the list. The next one is tried
+when the **connection** to the first one fails, and only when the request
+may be sent again:
+
+| The request | It is tried again |
+| --- | --- |
+| `GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT` or `DELETE` without a body | Yes. |
+| Any other method | No: it may change the state of an upstream. |
+| A request with a body | No: the bytes are already on their way to the first upstream. |
+
+The budget of the answer is the budget of the **whole** exchange: the
+upstreams that are tried share it, so a list of upstreams does not make
+the timeout of a route longer.
+
+The handshake of a websocket goes to the **first** upstream of the route: a
+handshake is not a request that may be sent twice.
+
 ### 11.1.2 The TLS of the connections to the upstreams
 
 An upstream that is served over `https` is reached over TLS. The gateway
@@ -1168,7 +1196,8 @@ Shuttle does not:
   rewrite the body, the query string or the headers);
 - buffer or cache responses;
 - aggregate WebSockets;
-- support more than one upstream per route;
+- support more than one upstream per route with a health check: the
+  upstreams are tried in the order of the list and there is no probe (§11.4);
 - retry a failed request or break the circuit of a failing upstream.
 
 ---

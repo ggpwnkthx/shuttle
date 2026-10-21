@@ -26,8 +26,12 @@ import {
 /** The policy that applies to a route. */
 export interface EffectiveRoute {
   id: string
-  /** The base url of the upstream. */
-  upstream: string
+  /**
+   * The base urls of the upstreams, in the order they are tried.
+   *
+   * A route may name one upstream or several.
+   */
+  upstreams: string[]
   auth: AuthPolicy
   timeouts: Timeouts
   /** The limit of the body of a request, 0 disables it. */
@@ -247,7 +251,7 @@ export class ConfigurationStore {
         { id: route.id, host: route.match.host, path: route.match.path, rewrite: route.rewrite },
         {
           id: route.id,
-          upstream: route.upstream,
+          upstreams: policy.upstreams,
           auth: policy.auth,
           timeouts: policy.timeouts,
           maxBodyBytes: policy.maxBodyBytes,
