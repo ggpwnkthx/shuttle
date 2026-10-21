@@ -56,6 +56,10 @@ export const VERSION_SOURCES: ReadonlyArray<{
       /image:\s*ghcr\.io\/ggpwnkthx\/shuttle:(.+)$/m.exec(content)?.[1]?.trim() ?? null,
   },
   {
+    path: 'src/runtime/version.ts',
+    read: (content) => /export const VERSION = '(.+)'/.exec(content)?.[1]?.trim() ?? null,
+  },
+  {
     path: 'CHANGELOG.md',
     // The latest release of the changelog: the first heading of a version.
     read: (content) => /^##\s+(\d+\.\d+\.\d+)/m.exec(content)?.[1] ?? null,
