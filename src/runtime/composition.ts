@@ -197,6 +197,17 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
   })
   const observer = new MetricsStore()
 
+  // The symmetric format of the signature of the identity is deprecated:
+  // every upstream that holds the key can mint an identity. A production
+  // deployment is refused at the start when it has no private key, so this
+  // warning is about the deployments that are not production ones.
+  if (!settings.identity.signingKey) {
+    logger.warn('the identity is signed with the deprecated symmetric format', {
+      format: 'v4',
+      hint: 'run `bun run identity:key` and set SHUTTLE_IDENTITY_SIGNING_KEY: an upstream that verifies an identity must not be able to mint one',
+    })
+  }
+
   const config = new ConfigurationStore({
     source: settings.configPath,
     defaultMaxBodyBytes: settings.limits.maxBodyBytes,

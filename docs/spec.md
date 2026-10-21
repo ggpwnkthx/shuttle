@@ -784,6 +784,15 @@ can verify an identity cannot mint one. An upstream that verifies `v4` has
 to be changed before the gateway signs `v5`: it reads the version of the
 value and verifies with the public key of the deployment.
 
+**The symmetric format is deprecated.** `v4` exists for the development
+stack and for the deployments that have not migrated yet. A production
+deployment is **refused** at the start when it has no
+`SHUTTLE_IDENTITY_SIGNING_KEY`: the symmetric format is not a production
+format. The gateway writes a warning in its log when it signs with the
+symmetric key, and the format will be removed in the release that follows
+the first one that is not a `0.x`. The `v5` format is the only one a
+deployment has to implement.
+
 **The migration from `v3`.** The value of `v3` was a hex digest of a
 canonical JSON **array**. An upstream that verifies `v3` has to be changed:
 it rebuilds the payload as an object and verifies the JWS. The gateway
@@ -1547,3 +1556,86 @@ lists are numbered independently.
 | 39 | The grace of an outage of the access service | It is off by default, and a decision that is served while the service is down is served only when it allows the caller. A denial that is served instead of the outage would hide the outage from the operator (§6.2). |
 | 40 | A route that names no workspace | The access service is asked about it only when the route asks for it with `accessCheck`. A deployment without workspaces is served by the same protocol, and the workspace of the request is then absent (§6.3). |
 | 41 | The body of a request that is never sent again | It is not held in memory: it would be held for nothing, and the upstream would only be reached once the whole body arrived (§11.4). |
+| 42 | The compatibility of the release | The contracts of §16.1 are extended by a `MINOR` release and changed by a `MAJOR` one. A `0.x` release extends them, and the changelog of the release says what changed (§16). |
+
+---
+
+## 16. The compatibility of the release
+
+Shuttle is a dependency of a deployment: the gateway is in the path of every
+request of the applications behind it, and the deployments write their own
+access service and their own upstreams against it. The contracts that
+those two depend on are therefore **versioned promises**, and this section
+says which promise holds for which release.
+
+### 16.1 What is a contract
+
+| The contract | Where it is written |
+| --- | --- |
+| The behavior of the gateway | This document. |
+| The protocol of the access service | §6.1, with its conformance suite. |
+| The format of the signature of the identity | §7.4, with the guide of [upstream-identity.md](upstream-identity.md). |
+| The format of the route table | §3. |
+| The names of the variables of the environment | §4 and [.env.example](../.env.example). |
+| The names of the metrics | §12.1. |
+
+Everything else is an implementation detail: the organization of the code
+(§14), the names of the internal functions, the libraries, the wording of
+the logs and the wording of the answers. A deployment that depends on them
+is not supported.
+
+### 16.2 The promise of a release
+
+The version of the release is `MAJOR.MINOR.PATCH`, and the release before
+`1.0` is a `0.x`:
+
+- **PATCH**: a fix. The behavior of the contracts does not change.
+- **MINOR**: a feature. The contracts are **extended**, never changed: a
+  field of the route table is added, a variable of the environment is
+  added, a metric is added, a status of the protocol is added. A
+  deployment that was written against the previous release keeps working
+  without a change.
+- **MAJOR**: a change. The contracts may change, and the changes are
+  listed in the changelog of the release with the migration of each of
+  them. The first `1.0` is the release that fixes the contracts of
+  `0.x`: after it, a `MINOR` release never changes one.
+
+The rules that hold in every `0.x` release, and that are kept after the
+`1.0`:
+
+1. **The route table is extended, never changed.** A field is added, and
+   it has a default. A field that is removed or that changes its meaning
+   is a `MAJOR` change. An unknown field is a configuration error, and it
+   stays one: a setting that looks active but is not is a security hole
+   (§3.1).
+2. **The protocol of the access service is extended, never changed.** The
+   fields of the request are added, and the answers of the service keep
+   their meaning. A field that is removed is a `MAJOR` change, and the
+   changelog says how a service migrates.
+3. **The format of the signature of the identity is versioned.** The
+   version is part of the value (`v4=…`, `v5=…`) and part of the payload,
+   so an upstream that knows the version refuses the signature of another
+   one instead of misreading it. A new format gets a new version: the
+   previous one keeps working until the changelog says that it does not
+   (§7.4).
+4. **The names of the variables of the environment do not change their
+   meaning.** A variable that is renamed keeps its old name until the
+   changelog says that it is gone, and the old name warns in the log for a
+   release before it disappears.
+5. **The metrics are added, never renamed.** A metric that is removed
+   keeps its name for a release that announces its replacement, and the
+   replacement carries the same labels.
+6. **The answers of the gateway keep their status and their shape.** A
+   status is added, and it is a status the client did not know: the
+   clients that check for the statuses they know keep working. The body of
+   an answer keeps the field that carries the error.
+
+### 16.3 The deprecations
+
+A deprecation is announced in the changelog, warned about in the log of the
+gateway, and removed in a release that is named in the announcement. The
+table is the one of this release:
+
+| What | Deprecated in | Removed in | The way out |
+| --- | --- | --- | --- |
+| The symmetric format of the signature of the identity (`v4`) | 0.4.0 | the first release that is not a `0.x` | Set `SHUTTLE_IDENTITY_SIGNING_KEY` and give the public key to the upstreams (§7.4). |

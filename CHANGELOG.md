@@ -72,6 +72,18 @@ whole body had arrived, which loses the early answer of the upstream.
 The body of a request that may not be sent again is now streamed, like the
 body of a route that names one upstream.
 
+### The contracts of a release are versioned
+
+The specification now has a section that says which contracts are
+promises, which ones are implementation details, and what a `MINOR` and a
+`MAJOR` release may change: [spec.md](docs/spec.md) §16.
+
+The symmetric format of the signature of the identity (`v4`) is
+**deprecated**: a production deployment is already refused when it has no
+private key, the gateway now warns in its log when it signs with the
+symmetric key, and the format is removed in the first release that is not
+a `0.x`.
+
 ### The failover of a route reaches an upstream that does not answer
 
 A route may name several upstreams, and the gateway tries them in the order
