@@ -88,7 +88,38 @@ export interface LimitSettings {
   maxBodyBytes: number
   route: { max: number; windowMs: number }
   global: { max: number; windowMs: number }
+  /**
+   * The budget of an authenticated caller on one route.
+   *
+   * The other scopes are keyed by the address of the caller, so a caller
+   * behind a proxy that serves many users shares one budget with all of
+   * them. This scope is keyed by the subject of the caller, so one noisy
+   * tenant cannot spend the budget of the others.
+   */
+  principal: { max: number; windowMs: number }
+  /**
+   * The budget of the whole deployment.
+   *
+   * The scopes that are keyed by an address cannot bound a flood that
+   * spreads over many addresses. This scope can: every request of the
+   * deployment is counted in the same window.
+   */
+  total: { max: number; windowMs: number }
   login: { max: number; windowMs: number }
+}
+
+/**
+ * The settings of the resources of the process.
+ */
+export interface ResourceSettings {
+  /**
+   * The maximum number of requests that may be handled at the same time.
+   *
+   * A client that opens a request and never sends its body holds a
+   * connection until the idle budget of the upload runs out. The cap is
+   * the bound of that. A value of zero means "no limit".
+   */
+  maxConcurrentRequests: number
 }
 
 /** The settings of the websockets. */
@@ -102,6 +133,13 @@ export interface WebSocketSettings {
   pongTimeoutMs: number
   idleTimeoutSeconds: number
   handshakeTimeoutMs: number
+  /**
+   * How often an open connection is revalidated, in milliseconds.
+   *
+   * A value of zero disables the revalidation: the connection is then
+   * authorized when it is opened and never again.
+   */
+  revalidateIntervalMs: number
 }
 
 /** The settings of the observation. */
@@ -124,6 +162,8 @@ export interface RuntimeSettings {
   sharedState: SharedStateSettings
   browser: BrowserSettings
   limits: LimitSettings
+  /** The bounds of the resources of the process. */
+  resources: ResourceSettings
   websockets: WebSocketSettings
   observability: ObservabilitySettings
   /** The deadline of the drain on a termination signal. */
@@ -239,6 +279,7 @@ const EnvSchema = z.object({
   SHUTTLE_LOG_LEVEL: z.string().optional(),
   SHUTTLE_METRICS_TOKEN: z.string().optional(),
   SHUTTLE_MAX_BODY_BYTES: intEnv(10_485_760, { min: 0 }),
+  SHUTTLE_MAX_CONCURRENT_REQUESTS: intEnv(1_000, { min: 0 }),
 
   SHUTTLE_TRUSTED_PROXIES: listEnv(),
   SHUTTLE_EXTERNAL_PROTO: z.enum(['http', 'https']).default('http'),
@@ -249,6 +290,18 @@ const EnvSchema = z.object({
   SHUTTLE_RATE_LIMIT_WINDOW_MS: intEnv(60_000, { min: 1_000 }),
   SHUTTLE_RATE_LIMIT_GLOBAL_MAX: intEnv(0, { min: 0 }),
   SHUTTLE_RATE_LIMIT_GLOBAL_WINDOW_MS: intEnv(60_000, { min: 1_000 }),
+  SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX: intEnv(0, { min: 0 }),
+  SHUTTLE_RATE_LIMIT_PRINCIPAL_WINDOW_MS: intEnv(60_000, { min: 1_000 }),
+  SHUTTLE_RATE_LIMIT_TOTAL_MAX: intEnv(0, { min: 0 }),
+  SHUTTLE_RATE_LIMIT_TOTAL_WINDOW_MS: intEnv(1_000, { min: 100 }),
+  /**
+   * Allows a production deployment with every rate limit disabled.
+   *
+   * The limiter is the only protection of the gateway against a flood, and
+   * a deployment that turns it off has to say so explicitly: a setting that
+   * looks active but is not is a security hole.
+   */
+  SHUTTLE_ALLOW_NO_RATE_LIMITS: boolEnv(),
   SHUTTLE_LOGIN_RATE_LIMIT_MAX: intEnv(30, { min: 0 }),
   SHUTTLE_LOGIN_RATE_LIMIT_WINDOW_MS: intEnv(60_000, { min: 1_000 }),
 
@@ -261,6 +314,7 @@ const EnvSchema = z.object({
   SHUTTLE_WS_PONG_TIMEOUT_MS: intEnv(90_000, { min: 0 }),
   SHUTTLE_WS_IDLE_TIMEOUT_SECONDS: intEnv(120, { min: 0 }),
   SHUTTLE_WS_HANDSHAKE_TIMEOUT_MS: intEnv(10_000, { min: 100 }),
+  SHUTTLE_WS_REVALIDATE_INTERVAL_MS: intEnv(60_000, { min: 0 }),
 
   SHUTTLE_SHUTDOWN_TIMEOUT_MS: intEnv(15_000, { min: 0 }),
 })
@@ -335,6 +389,18 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
   if (production && !parsed.SHUTTLE_ACCESS_TOKEN && !parsed.SHUTTLE_ACCESS_ALLOW_ANONYMOUS) {
     throw new Error(
       'SHUTTLE_ACCESS_TOKEN must be set in a production environment, or SHUTTLE_ACCESS_ALLOW_ANONYMOUS=true when the access service authenticates the gateway by other means'
+    )
+  }
+  if (
+    production &&
+    !parsed.SHUTTLE_ALLOW_NO_RATE_LIMITS &&
+    parsed.SHUTTLE_RATE_LIMIT_MAX === 0 &&
+    parsed.SHUTTLE_RATE_LIMIT_GLOBAL_MAX === 0 &&
+    parsed.SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX === 0 &&
+    parsed.SHUTTLE_RATE_LIMIT_TOTAL_MAX === 0
+  ) {
+    throw new Error(
+      'at least one rate limit must be set in a production environment (SHUTTLE_RATE_LIMIT_MAX, SHUTTLE_RATE_LIMIT_GLOBAL_MAX, SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX or SHUTTLE_RATE_LIMIT_TOTAL_MAX), or SHUTTLE_ALLOW_NO_RATE_LIMITS=true when the deployment is protected by another layer'
     )
   }
 
@@ -416,10 +482,21 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
         max: parsed.SHUTTLE_RATE_LIMIT_GLOBAL_MAX,
         windowMs: parsed.SHUTTLE_RATE_LIMIT_GLOBAL_WINDOW_MS,
       },
+      principal: {
+        max: parsed.SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX,
+        windowMs: parsed.SHUTTLE_RATE_LIMIT_PRINCIPAL_WINDOW_MS,
+      },
+      total: {
+        max: parsed.SHUTTLE_RATE_LIMIT_TOTAL_MAX,
+        windowMs: parsed.SHUTTLE_RATE_LIMIT_TOTAL_WINDOW_MS,
+      },
       login: {
         max: parsed.SHUTTLE_LOGIN_RATE_LIMIT_MAX,
         windowMs: parsed.SHUTTLE_LOGIN_RATE_LIMIT_WINDOW_MS,
       },
+    },
+    resources: {
+      maxConcurrentRequests: parsed.SHUTTLE_MAX_CONCURRENT_REQUESTS,
     },
     websockets: {
       maxConnections: parsed.SHUTTLE_WS_MAX_CONNECTIONS,
@@ -431,6 +508,7 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       pongTimeoutMs: parsed.SHUTTLE_WS_PONG_TIMEOUT_MS,
       idleTimeoutSeconds: parsed.SHUTTLE_WS_IDLE_TIMEOUT_SECONDS,
       handshakeTimeoutMs: parsed.SHUTTLE_WS_HANDSHAKE_TIMEOUT_MS,
+      revalidateIntervalMs: parsed.SHUTTLE_WS_REVALIDATE_INTERVAL_MS,
     },
     observability: {
       logLevel: parseLogLevel(parsed.SHUTTLE_LOG_LEVEL),

@@ -74,6 +74,28 @@ export interface UpstreamHandshakePort {
   connect(request: UpstreamHandshakeRequest): Promise<UpstreamHandshakeOutcome>
 }
 
+/**
+ * The outcome of a revalidation of a connection.
+ *
+ * A connection that is refused is closed with the code `1008` (policy
+ * violation): the caller is not allowed to use the workspace any more.
+ */
+export interface RevalidationOutcome {
+  /** True when the connection may stay open. */
+  allowed: boolean
+  /** Why the connection is closed, when it is closed. */
+  reason?: string
+}
+
+/**
+ * The port that revalidates an open connection.
+ *
+ * The domain asks the port whether the connection may stay open; it does
+ * not know what a session is and it does not know what the access service
+ * answers.
+ */
+export type RevalidationPort = () => Promise<RevalidationOutcome>
+
 /** The caller leg of a websocket pair. */
 export interface ClientLeg {
   /**

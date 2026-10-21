@@ -47,6 +47,13 @@ export interface WebSocketSettings {
   pongTimeoutMs: number
   /** How long the handshake of the upstream may take, in milliseconds. */
   handshakeTimeoutMs: number
+  /**
+   * How often an open connection is revalidated, in milliseconds.
+   *
+   * A value of zero (the default) disables the revalidation: the
+   * connection is then authorized when it is opened and never again.
+   */
+  revalidateIntervalMs?: number
 }
 
 /** The options of the service of the websockets. */
@@ -249,6 +256,7 @@ export class WebSocketService implements WebSocketServicePort {
       backpressureLimitBytes: this.#settings.backpressureLimitBytes,
       pingIntervalMs: this.#settings.pingIntervalMs,
       pongTimeoutMs: this.#settings.pongTimeoutMs,
+      revalidateIntervalMs: this.#settings.revalidateIntervalMs,
       onClose: () => {
         this.#bridges.delete(bridge)
         this.#reservations.release()
@@ -269,6 +277,7 @@ export class WebSocketService implements WebSocketServicePort {
     upgraded.events.drain = () => bridge.noteDrain()
     upgraded.events.close = (code, reason) => bridge.close(code, reason)
     bridge.start()
+    if (context.revalidate) bridge.startRevalidation(context.revalidate)
 
     this.#observer.recordWebsocket(context.routeId)
     this.#logger.info('the websocket was upgraded', {

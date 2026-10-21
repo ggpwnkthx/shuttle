@@ -17,7 +17,7 @@ async function readJson(response: UpstreamResponse): Promise<unknown> {
  * They run against a real socket: the runtime of the gateway is the only
  * thing that can tell whether a phase of an exchange is observable, whether
  * an upload really streams and what a protocol switch does. The rules of
- * the specification (SPECS.md §11) are only as good as these observations.
+ * the specification (docs/spec.md §11) are only as good as these observations.
  */
 
 const encoder = new TextEncoder()

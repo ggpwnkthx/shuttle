@@ -1,13 +1,13 @@
 # The transport capabilities of the runtime
 
 The gateway is written against the runtime, not against a library that hides
-it. The rules of the specification (SPECS.md §10, §11 and §4) are only as
+it. The rules of the specification ([spec.md](spec.md) §10, §11 and §4) are only as
 good as the observations that back them, so every boundary the gateway relies
 on is proved by a test of `test/network/` that runs against a real socket.
 
 **The runtime of this release is Bun 1.4.3.** The observations below were
 made with it; the ones of the older releases are recorded as well, because
-they explain why the version is pinned (see [DECISIONS.md](../DECISIONS.md),
+they explain why the version is pinned (see [decisions.md](decisions.md),
 decision 1).
 
 ## What was proved
@@ -35,7 +35,7 @@ decision 1).
 | 1.2.23 | The early answer is delivered, but the runtime does not cancel the producer of the body; the `unexpected-response` event of the websocket client of the `ws` library is not implemented, so the refusal of an upstream is not observable; the upgrade of the caller with headers of the gateway is refused. |
 | 1.2.0 | The early answer is not delivered at all: the exchange waits for the end of the upload. |
 
-The specification states `Bun ≥ 1.2`. The measurements above show that the
-boundaries the specification relies on are not observable on the 1.2 line, so
-the version of the runtime is part of the contract and is pinned. The change
-is recorded in SPECS.md (§15, decision 21) and in DECISIONS.md.
+The specification states `Bun ≥ 1.4.3`. The measurements above show that
+the boundaries the specification relies on are not observable on the 1.2
+line, so the version of the runtime is part of the contract and is pinned.
+The change is recorded in [spec.md](spec.md) (§15, decision 20) and in [decisions.md](decisions.md).

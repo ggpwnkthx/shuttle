@@ -1,3 +1,5 @@
+import type { RevalidationPort } from './ports'
+
 /**
  * The context of an upgrade of a websocket.
  *
@@ -33,4 +35,13 @@ export interface WebSocketUpgradeContext {
   externalProto: 'http' | 'https'
   /** The origins that are allowed in addition to the origin of the gateway. */
   allowedOrigins: string[]
+  /**
+   * The revalidation of an open connection.
+   *
+   * The gateway asks it whether the connection may stay open: a session
+   * that expired, an access that was revoked and a configuration that
+   * changed all have to end a connection that was opened under the old
+   * rules. The application builds it, the domain calls it.
+   */
+  revalidate?: RevalidationPort
 }

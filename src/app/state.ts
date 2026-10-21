@@ -26,6 +26,8 @@ export interface GatewayState {
   snapshot: ConfigurationSnapshot | null
   /** The forwarding context of the request. */
   forwarding: ForwardingContext | null
+  /** The id of the route the request was matched on, when it matched one. */
+  routeId: string | null
   /** The cookies that have to be written into the answer of the request. */
   cookies: GatewayCookie[]
 }

@@ -106,6 +106,20 @@ spec:
             # are only trusted from them.
             - name: SHUTTLE_TRUSTED_PROXIES
               value: 10.0.0.0/8
+            # The limits. At least one of them has to be set: the gateway
+            # refuses to start in production without one.
+            # The scope of the deployment is the only one that bounds a
+            # flood that spreads over many addresses; the scope of a
+            # principal is the only one that tells two tenants behind the
+            # same address apart.
+            - name: SHUTTLE_RATE_LIMIT_TOTAL_MAX
+              value: "1000"
+            - name: SHUTTLE_RATE_LIMIT_GLOBAL_MAX
+              value: "600"
+            - name: SHUTTLE_RATE_LIMIT_MAX
+              value: "600"
+            - name: SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX
+              value: "300"
             - name: SHUTTLE_LOG_LEVEL
               value: info
             - name: SHUTTLE_SHUTDOWN_TIMEOUT_MS

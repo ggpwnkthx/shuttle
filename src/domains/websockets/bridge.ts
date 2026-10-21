@@ -21,6 +21,14 @@ export const CLOSE_NORMAL = 1000
 /** The close code of a connection that is closed by the gateway. */
 export const CLOSE_GOING_AWAY = 1001
 
+/**
+ * The close code of a connection whose access is no longer valid.
+ *
+ * The code is `1008` (policy violation): the caller was allowed to open
+ * the connection and it is not allowed to keep it.
+ */
+export const CLOSE_POLICY_VIOLATION = 1008
+
 /** The close code of a connection whose other side is too slow. */
 export const CLOSE_TRY_AGAIN_LATER = 1013
 
@@ -65,6 +73,12 @@ export interface BridgeOptions {
   pingIntervalMs: number
   /** How long a leg may stay silent, in milliseconds. */
   pongTimeoutMs: number
+  /**
+   * How often an open connection is revalidated, in milliseconds.
+   *
+   * A value of zero (the default) disables the revalidation.
+   */
+  revalidateIntervalMs?: number
   /** Called when the connection is over. */
   onClose?: (code: number, reason: string) => void
   /** Called when a message could not be relayed. */
@@ -79,7 +93,11 @@ export class WebSocketBridge {
   #buffer: WebSocketMessage[] = []
   #bufferedBytes = 0
   #closed = false
+  /** True while a revalidation is running. */
+  #revalidating = false
   #keepalive: ReturnType<typeof setInterval> | undefined
+  /** The timer of the revalidation of the connection. */
+  #revalidateTimer: ReturnType<typeof setInterval> | undefined
   #lastPongAt = Date.now()
   #lastUpstreamPongAt = Date.now()
 
@@ -118,6 +136,51 @@ export class WebSocketBridge {
     if (this.#options.pingIntervalMs > 0) {
       this.#keepalive = setInterval(() => this.#keepaliveTick(), this.#options.pingIntervalMs)
       this.#keepalive.unref?.()
+    }
+  }
+
+  /**
+   * Starts the revalidation of the connection.
+   *
+   * The connection was opened under the rules of the moment: a session
+   * that expired, an access that was revoked and a configuration that
+   * changed have to end it. The port answers whether the connection may
+   * stay open; a failure of the port closes the connection, because a
+   * connection the gateway cannot vouch for is a connection it must not
+   * keep.
+   */
+  startRevalidation(revalidate: () => Promise<{ allowed: boolean; reason?: string }>): void {
+    const interval = this.#options.revalidateIntervalMs ?? 0
+    if (interval <= 0) return
+    this.#revalidateTimer = setInterval(() => void this.#revalidateTick(revalidate), interval)
+    this.#revalidateTimer.unref?.()
+  }
+
+  /**
+   * The revalidation of the connection.
+   *
+   * The check is not repeated while one is running: a slow answer of the
+   * port must not pile up the checks.
+   */
+  async #revalidateTick(
+    revalidate: () => Promise<{ allowed: boolean; reason?: string }>
+  ): Promise<void> {
+    if (this.#closed || this.#revalidating) return
+    this.#revalidating = true
+    try {
+      const outcome = await revalidate()
+      if (this.#closed) return
+      if (!outcome.allowed) {
+        this.#options.onError?.(outcome.reason ?? 'the connection is not allowed to stay open')
+        this.close(CLOSE_POLICY_VIOLATION, truncateCloseReason(outcome.reason ?? 'forbidden'))
+      }
+    } catch (error) {
+      this.#options.onError?.(
+        `the revalidation of the connection failed: ${error instanceof Error ? error.message : String(error)}`
+      )
+      this.close(CLOSE_POLICY_VIOLATION, 'the connection could not be validated')
+    } finally {
+      this.#revalidating = false
     }
   }
 
@@ -177,6 +240,10 @@ export class WebSocketBridge {
     if (this.#keepalive) {
       clearInterval(this.#keepalive)
       this.#keepalive = undefined
+    }
+    if (this.#revalidateTimer) {
+      clearInterval(this.#revalidateTimer)
+      this.#revalidateTimer = undefined
     }
     this.#buffer = []
     this.#bufferedBytes = 0

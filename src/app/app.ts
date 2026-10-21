@@ -12,6 +12,7 @@ import { Hono, type Context, type ExecutionContext } from 'hono'
 import { serializeCookie } from '../domains/authentication'
 import { GATEWAY_ENDPOINTS } from '../domains/configuration'
 import { resolveForwardingContext } from '../domains/forwarding'
+import { UNMATCHED_ROUTE } from '../observability'
 import type { GatewayDependencies } from './dependencies'
 import { dispatch } from './dispatcher'
 import {
@@ -49,6 +50,7 @@ function initialState(request: Request): GatewayState {
     startedAt: Date.now(),
     snapshot: null,
     forwarding: null,
+    routeId: null,
     cookies: [],
   }
 }
@@ -57,7 +59,8 @@ function initialState(request: Request): GatewayState {
  * The forwarding context of a request.
  *
  * The endpoints of the gateway compute it themselves: the limiter of the
- * logins is keyed by the address of the caller.
+ * logins is keyed by the address of the caller, and the guard of the
+ * logout compares the origin of the browser with the host the caller used.
  */
 function forwardingOf(
   context: Context<GatewayEnv>,
@@ -111,6 +114,7 @@ export function createGatewayApp(dependencies: GatewayDependencies): Hono<Gatewa
     context.set('startedAt', state.startedAt)
     context.set('snapshot', state.snapshot)
     context.set('forwarding', state.forwarding)
+    context.set('routeId', state.routeId)
     context.set('cookies', state.cookies)
     await next()
     try {
@@ -132,8 +136,14 @@ export function createGatewayApp(dependencies: GatewayDependencies): Hono<Gatewa
     context.set('forwarding', forwardingOf(context, dependencies))
     return await loginHandler(context, dependencies)
   })
-  app.get(GATEWAY_ENDPOINTS.callback, (context) => callbackHandler(context, dependencies))
-  app.get(GATEWAY_ENDPOINTS.logout, (context) => logoutHandler(context, dependencies))
+  app.get(GATEWAY_ENDPOINTS.callback, (context) => {
+    context.set('forwarding', forwardingOf(context, dependencies))
+    return callbackHandler(context, dependencies)
+  })
+  app.get(GATEWAY_ENDPOINTS.logout, (context) => {
+    context.set('forwarding', forwardingOf(context, dependencies))
+    return logoutHandler(context, dependencies)
+  })
 
   // Everything else is dispatched.
   app.all('*', async (context) => {
@@ -144,6 +154,16 @@ export function createGatewayApp(dependencies: GatewayDependencies): Hono<Gatewa
       return await dispatch(context, dependencies, requestId, started)
     } catch (error) {
       dependencies.logger.error('the gateway failed to handle the request', { requestId, error })
+      // The request failed in the gateway itself: it is counted like every
+      // other request the gateway answered.
+      dependencies.observer.recordRequest({
+        routeId: context.get('routeId') ?? UNMATCHED_ROUTE,
+        method: context.req.method,
+        status: 500,
+        durationMs: Date.now() - started,
+        bytesIn: 0,
+        bytesOut: 0,
+      })
       return jsonError(500, 'internal_error', 'the gateway failed to handle the request')
     } finally {
       dependencies.observer.requestFinished()
@@ -154,6 +174,14 @@ export function createGatewayApp(dependencies: GatewayDependencies): Hono<Gatewa
     dependencies.logger.error('the gateway failed to handle the request', {
       requestId: context.get('requestId'),
       error,
+    })
+    dependencies.observer.recordRequest({
+      routeId: context.get('routeId') ?? UNMATCHED_ROUTE,
+      method: context.req.method,
+      status: 500,
+      durationMs: Date.now() - context.get('startedAt'),
+      bytesIn: 0,
+      bytesOut: 0,
     })
     return jsonError(500, 'internal_error', 'the gateway failed to handle the request')
   })

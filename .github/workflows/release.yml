@@ -53,6 +53,7 @@ jobs:
             -e SHUTTLE_ACCESS_URL=https://access.example.com \
             -e SHUTTLE_ACCESS_TOKEN=release-access-token \
             -e SHUTTLE_METRICS_TOKEN=release-metrics-token \
+            -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
             -v "$PWD/config/routes.json:/etc/shuttle/routes.json:ro" \
             "ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}"
           for i in $(seq 1 30); do

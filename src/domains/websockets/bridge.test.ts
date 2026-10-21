@@ -232,6 +232,69 @@ describe('the bridge of a websocket', () => {
   })
 })
 
+describe('the revalidation of a websocket', () => {
+  test('a connection that may stay open stays open', async () => {
+    const client = fakeClient()
+    const upstream = fakeUpstream()
+    const bridge = new WebSocketBridge({
+      ...options(client.leg, upstream.socket),
+      revalidateIntervalMs: 5,
+    })
+    bridge.start()
+    bridge.startRevalidation(async () => ({ allowed: true }))
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(client.closed).toHaveLength(0)
+    bridge.close(1000, 'done')
+  })
+
+  test('a connection that may not stay open is closed', async () => {
+    const client = fakeClient()
+    const upstream = fakeUpstream()
+    const bridge = new WebSocketBridge({
+      ...options(client.leg, upstream.socket),
+      revalidateIntervalMs: 5,
+    })
+    bridge.start()
+    bridge.startRevalidation(async () => ({ allowed: false, reason: 'the access was revoked' }))
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(client.closed).toHaveLength(1)
+    expect(client.closed[0]?.code).toBe(1008)
+    expect(upstream.closed[0]?.code).toBe(1008)
+  })
+
+  test('a revalidation that fails closes the connection', async () => {
+    const client = fakeClient()
+    const upstream = fakeUpstream()
+    const bridge = new WebSocketBridge({
+      ...options(client.leg, upstream.socket),
+      revalidateIntervalMs: 5,
+    })
+    bridge.start()
+    bridge.startRevalidation(async () => {
+      throw new Error('the access service is not reachable')
+    })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(client.closed).toHaveLength(1)
+    expect(client.closed[0]?.code).toBe(1008)
+  })
+
+  test('a revalidation of zero never runs', async () => {
+    const client = fakeClient()
+    const upstream = fakeUpstream()
+    const bridge = new WebSocketBridge(options(client.leg, upstream.socket))
+    bridge.start()
+    let calls = 0
+    bridge.startRevalidation(async () => {
+      calls += 1
+      return { allowed: false }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(calls).toBe(0)
+    expect(client.closed).toHaveLength(0)
+    bridge.close(1000, 'done')
+  })
+})
+
 describe('the reason of a close', () => {
   test('a short reason is kept', () => {
     expect(truncateCloseReason('done')).toBe('done')

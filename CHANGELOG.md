@@ -1,10 +1,93 @@
 # The changelog of Shuttle
 
+The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
+decisions behind it are in [docs/decisions.md](docs/decisions.md).
+
+## 0.2.0
+
+The release that closes the gap between the specification and the
+implementation, and that bounds the resources of the deployment.
+
+### The host of a request
+
+The `x-forwarded-host` of a **trusted proxy** is now honoured. It is the
+host the caller used, and it decides three things that were previously
+decided by the raw `Host` header: the route that handles the request, the
+origin the browser is compared with, and the value the signature of the
+identity covers.
+
+Before this release, a deployment behind an ingress that rewrites the
+`Host` header had two problems: the route did not match, and a legitimate
+browser request from another origin was refused with `403
+cross_site_request`.
+
+The header of a client that is not a trusted proxy is still ignored, and a
+value that is not a plausible host is ignored.
+
+### The metrics of the requests
+
+`shuttle_requests_total` now counts **every** answer of the gateway, the
+refusals included. Before this release it counted only the requests that
+reached an upstream, so the volume of the traffic and the error rate could
+not be read off it.
+
+The labels are bounded:
+
+- `route` is the id of the route, `unmatched` for the requests that matched
+  no route, or `overflow` beyond 500 routes.
+- `method` is the upper-cased method, or `other` for a method that is not
+  tracked. A client chooses the method, so it could create a series per
+  method.
+- `status` is the status, or `other` for a status that is not tracked. An
+  upstream chooses the status, so it could create a series per status.
+
+### The limits of the deployment
+
+Two new scopes, and a fix to the limiter of the memory:
+
+- `SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX` bounds the requests of an
+  **authenticated caller** on one route. The other scopes are keyed by the
+  address of the caller, so they cannot tell two tenants behind the same
+  address apart.
+- `SHUTTLE_RATE_LIMIT_TOTAL_MAX` bounds the requests of the **whole
+  deployment**. The scopes that are keyed by an address cannot bound a flood
+  that spreads over many addresses.
+- The table of the limiter of the memory no longer evicts a live window to
+  make room for a new key. A caller that sprayed addresses reset its own
+  counter at will. The requests that do not fit the table are now counted
+  in one shared window, so the flood is bounded by the same limit.
+- A production deployment has to set at least one rate limit, unless
+  `SHUTTLE_ALLOW_NO_RATE_LIMITS=true`.
+
+### The resources of the process
+
+`SHUTTLE_MAX_CONCURRENT_REQUESTS` (1 000 by default) bounds the number of
+exchanges that run at the same time. A client that opened a request and
+never sent its body held a connection for the whole idle budget of the
+upload, which is five minutes by default. An exchange that does not fit is
+refused with `503 gateway_overloaded` rather than queued.
+
+### The revalidation of the open websockets
+
+An open WebSocket is revalidated every `SHUTTLE_WS_REVALIDATE_INTERVAL_MS`
+(60 s by default). The route, the session and the access are checked again,
+the access service is asked anew instead of reading the cache, and the
+connection is closed with the code `1008` when one of them fails. A
+revalidation that cannot be made closes the connection.
+
+Before this release, a connection was authorized when it was opened and
+never again: a revoked access or an expired session did not end it.
+
+### The documentation
+
+The specification, the architecture, the implementation guide and the
+operations guide have been rewritten to be concrete and concise. The
+decisions that changed the contract are recorded in
+[docs/decisions.md](docs/decisions.md), with the tests that prove them.
+
 ## 0.1.0
 
-The first release of the application gateway. The behavior of the gateway is
-described in [SPECS.md](SPECS.md); the code is organized by domain, as
-[ARCHITECTURE.md](ARCHITECTURE.md) describes it.
+The first release of the application gateway.
 
 ### What it does
 
@@ -37,46 +120,14 @@ described in [SPECS.md](SPECS.md); the code is organized by domain, as
 
 ### The organization of the code
 
-The domains own their policy, their ports, their adapters and their tests:
-`routing`, `configuration`, `authentication`, `workspace-access`,
-`forwarding`, `rate-limiting`, `proxying` and `websockets`. The application
-is thin, the platform owns the sockets and the runtime is the only place
-where the concrete pieces are assembled. The import boundaries are checked
-by `scripts/architecture.ts` and by the CI workflow.
+The domains own their policy, their ports, their adapters and their tests.
+The import boundaries between them are checked by `scripts/architecture.ts`,
+which runs in the test suite and in the CI workflow, so a violation fails
+the build.
 
-### The deployment
+### The evidence
 
-- The image is built from a pinned runtime, it carries the version and the
-  revision of the build as labels, it runs as a non-root user and it holds
-  the dependencies of the gateway alone (the development dependencies of the
-  fixtures are not part of it).
-- The manifests of Kubernetes are in `deploy/kubernetes/`: the deployment
-  (the probes, the resources, the hardening, the grace period of the drain),
-  the service, the autoscaling, the budget of the disruptions, the network
-  policy, the ingress (without the buffering of the bodies) and the route
-  table. The secret of the deployment is applied from the secret store of
-  the platform, never from the repository.
-- The stack of a single host is in `deploy/compose.production.yaml`: the
-  gateway and the shared state, without the fixtures of the development.
-- The review of a deployment is in `docs/deployment-review.md`: the modes of
-  the authentication, the hosts, the trusted proxies, the access to the
-  upstreams, the protection of the metrics, the secrets, the limits and the
-  capacity.
-- The manifests are checked by the test suite: a manifest that does not
-  parse, a deployment without the probes, a secret written in a manifest or
-  an ingress that buffers the bodies fail the build.
-
-### The decisions of the release
-
-They are recorded in [DECISIONS.md](DECISIONS.md). Two of them change the
-contract and are recorded in the specification itself:
-
-- the runtime is **Bun ≥ 1.4.3**: the boundaries the gateway relies on (an
-  early answer while the upload runs, the cancellation of the upload, the
-  refusal of an upstream websocket handshake, the upgrade of the caller with
-  the headers of the gateway) are not observable on the 1.2 line of the
-  runtime. The measurements are in
-  [docs/transport-capabilities.md](docs/transport-capabilities.md).
-- the standard `forwarded` header is removed in both directions: it is the
-  claim of a client about the request it made and it competes with the chain
-  the gateway writes.
+388 tests over 38 files, plus the tests against a real Redis, in a real
+browser and against a real socket. The coverage of the lines of the source
+is 90.9 %. The measurements of the capacity are in
+[docs/capacity.md](docs/capacity.md).

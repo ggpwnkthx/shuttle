@@ -38,7 +38,7 @@ import {
   writtenIdentity,
   type CallerIdentity,
 } from '../domains/forwarding'
-import { rateLimitKey } from '../domains/rate-limiting'
+import { TOTAL_RATE_LIMIT_KEY, rateLimitKey } from '../domains/rate-limiting'
 import { matchRoute } from '../domains/routing'
 import type { ExchangeFailure } from '../domains/proxying'
 import { validateWorkspace } from '../domains/workspace-access'
@@ -46,6 +46,7 @@ import { UNMATCHED_ROUTE, redactUrl } from '../observability'
 import type { GatewayDependencies } from './dependencies'
 import { readCookie } from './cookies'
 import { clientGoneResponse, jsonError } from './errors'
+import { buildRevalidation } from './revalidation'
 import type { GatewayEnv } from './state'
 
 /** Reports whether a request wants to be upgraded to a websocket. */
@@ -56,6 +57,30 @@ function isUpgradeRequest(request: Request): boolean {
 /** Reports whether the caller wants an html answer. */
 function wantsHtml(context: Context<GatewayEnv>): boolean {
   return (context.req.header('accept') ?? '').includes('text/html')
+}
+
+/**
+ * Records a request the gateway answered itself.
+ *
+ * The request is recorded with the route it was matched on, or with
+ * `unmatched` when it matched no route. The bytes are zero: a request the
+ * gateway answered itself never reached an upstream.
+ */
+function recordOutcome(
+  dependencies: GatewayDependencies,
+  routeId: string,
+  method: string,
+  status: number,
+  started: number
+): void {
+  dependencies.observer.recordRequest({
+    routeId,
+    method,
+    status,
+    durationMs: Date.now() - started,
+    bytesIn: 0,
+    bytesOut: 0,
+  })
 }
 
 /**
@@ -73,17 +98,18 @@ export async function dispatch(
   // no routes to offer.
   const snapshot = dependencies.config.snapshot
   if (!snapshot) {
+    recordOutcome(dependencies, UNMATCHED_ROUTE, context.req.method, 503, started)
     return jsonError(503, 'not_ready', 'the gateway has no valid configuration')
   }
 
   const url = new URL(context.req.url)
   const path = url.pathname
   const method = context.req.method
-  const host = context.req.header('host') ?? ''
 
   // 2. The paths the gateway serves itself are reserved, whatever the
   // configuration says: a route must not be able to shadow them.
   if (isReservedPath(snapshot, path)) {
+    recordOutcome(dependencies, UNMATCHED_ROUTE, method, 404, started)
     return jsonError(404, 'not_found', 'unknown reserved path')
   }
 
@@ -97,14 +123,21 @@ export async function dispatch(
   })
   context.set('forwarding', forwarding)
 
+  // The host the caller used: the one the trusted proxy reports, when the
+  // peer is a trusted proxy. It is the host the route is matched on, the
+  // host the browser is compared with and the host the signature covers.
+  const host = forwarding.host
+
   // 4. The route is matched before the limiters, so the budget of a route
   // is spent by the requests that the route would handle.
   const match = matchRoute(snapshot.routes, host, path)
   const route = match?.route.payload
+  if (route) context.set('routeId', route.id)
 
-  // 5. The limits: the budget of the caller over all the routes and the
-  // budget of the caller on this route. The requests that match no route
-  // are counted in a bucket of their own.
+  // 5. The limits: the budget of the deployment, the budget of the caller
+  // over all the routes and the budget of the caller on this route. The
+  // requests that match no route are counted in a bucket of their own.
+  const total = await dependencies.totalRateLimiter.check(TOTAL_RATE_LIMIT_KEY)
   const global = await dependencies.globalRateLimiter.check(
     rateLimitKey('global', { clientIp: forwarding.clientIp })
   )
@@ -113,7 +146,7 @@ export async function dispatch(
       ? rateLimitKey('route', { clientIp: forwarding.clientIp, routeId: route.id })
       : rateLimitKey('unmatched', { clientIp: forwarding.clientIp })
   )
-  const limit = global.allowed ? scoped : global
+  const limit = !total.allowed ? total : !global.allowed ? global : scoped
   if (!limit.allowed) {
     logger.warn('the request rate limit was reached', {
       requestId,
@@ -121,6 +154,7 @@ export async function dispatch(
       routeId: route?.id ?? null,
     })
     observer.recordRateLimit()
+    recordOutcome(dependencies, route?.id ?? UNMATCHED_ROUTE, method, 429, started)
     return new Response(
       JSON.stringify({ error: 'too_many_requests', message: 'too many requests' }),
       {
@@ -137,6 +171,7 @@ export async function dispatch(
   // the limiters already: a flood of requests to a path that does not
   // exist is a flood like any other.
   if (!match || !route) {
+    recordOutcome(dependencies, UNMATCHED_ROUTE, method, 404, started)
     return jsonError(404, 'no_route', 'no route matches this request')
   }
 
@@ -157,6 +192,7 @@ export async function dispatch(
       observer.recordAuthFailure(route.id, 'unauthenticated')
       if (wantsHtml(context) && route.auth.mode !== 'jwt') {
         const target = encodeURIComponent(path + url.search)
+        recordOutcome(dependencies, route.id, method, 302, started)
         return new Response(null, {
           status: 302,
           headers: { location: `/auth/login?redirect=${target}` },
@@ -166,6 +202,7 @@ export async function dispatch(
       if (route.auth.mode === 'jwt' || route.auth.mode === 'any') {
         headers['www-authenticate'] = 'Bearer realm="shuttle"'
       }
+      recordOutcome(dependencies, route.id, method, 401, started)
       return new Response(
         JSON.stringify({ error: 'unauthorized', message: 'authentication is required' }),
         { status: 401, headers }
@@ -175,6 +212,31 @@ export async function dispatch(
       // The cookie follows the session: the browser learns about the new
       // lifetime of the session, also when the request is refused.
       context.set('cookies', [...context.get('cookies'), outcome.session.cookie])
+    }
+    // The budget of the authenticated caller on this route. It is keyed by
+    // the subject of the caller, so a tenant behind an address that serves
+    // many users cannot spend the budget of the others.
+    const principalLimit = await dependencies.principalRateLimiter.check(
+      rateLimitKey('principal', { routeId: route.id, subject: principal.subject })
+    )
+    if (!principalLimit.allowed) {
+      logger.warn('the principal rate limit was reached', {
+        requestId,
+        routeId: route.id,
+        subject: principal.subject,
+      })
+      observer.recordRateLimit()
+      recordOutcome(dependencies, route.id, method, 429, started)
+      return new Response(
+        JSON.stringify({ error: 'too_many_requests', message: 'too many requests' }),
+        {
+          status: 429,
+          headers: {
+            'content-type': 'application/json',
+            'retry-after': String(Math.max(1, Math.ceil(principalLimit.retryAfterMs / 1000))),
+          },
+        }
+      )
     }
   }
 
@@ -198,6 +260,7 @@ export async function dispatch(
         reason: crossSite.reason,
       })
       observer.recordCrossSiteRefusal(route.id)
+      recordOutcome(dependencies, route.id, method, 403, started)
       return jsonError(403, 'cross_site_request', crossSite.reason ?? 'the request was refused')
     }
   }
@@ -211,6 +274,7 @@ export async function dispatch(
       requireUuid: route.auth.workspace.requireUuid,
     })
     if (!validation.ok) {
+      recordOutcome(dependencies, route.id, method, 400, started)
       return jsonError(
         400,
         'bad_request',
@@ -238,6 +302,7 @@ export async function dispatch(
         // The reason of the access service is not given to the caller: it
         // describes the policy of the platform and it is not the business
         // of the client.
+        recordOutcome(dependencies, route.id, method, 403, started)
         return jsonError(
           403,
           'workspace_forbidden',
@@ -251,6 +316,7 @@ export async function dispatch(
   // 10. The dispatch.
   if (isUpgradeRequest(context.req.raw)) {
     if (!route.websocket) {
+      recordOutcome(dependencies, route.id, method, 400, started)
       return jsonError(
         400,
         'websocket_not_allowed',
@@ -258,6 +324,7 @@ export async function dispatch(
       )
     }
     if (!dependencies.websockets) {
+      recordOutcome(dependencies, route.id, method, 503, started)
       return jsonError(503, 'websocket_unavailable', 'the websockets are not available')
     }
     const identity = principal ? writtenIdentity(identityOf(principal, workspaceId)) : undefined
@@ -265,6 +332,7 @@ export async function dispatch(
     const targetUrl = new URL(target)
     const upgrade = context.env.upgrade
     if (!upgrade) {
+      recordOutcome(dependencies, route.id, method, 503, started)
       return jsonError(503, 'websocket_unavailable', 'the websockets are not available')
     }
     const outcome = await dependencies.websockets.handle(
@@ -295,13 +363,25 @@ export async function dispatch(
         host: forwarding.host,
         externalProto: forwarding.proto,
         allowedOrigins: dependencies.browser.allowedOrigins,
+        // The connection is revalidated while it is open: a session that
+        // expired, an access that was revoked and a route that changed all
+        // have to end a connection that was opened under the old rules.
+        revalidate: buildRevalidation(dependencies, {
+          routeId: route.id,
+          subject: principal?.subject,
+          roles: principal?.roles,
+          workspaceId,
+          sessionId: plan.kind === 'session' ? plan.sessionId : undefined,
+        }),
       },
       upgrade
     )
     if (outcome.kind === 'upgraded') {
       // The answer of the upgrade was already sent by the runtime.
+      recordOutcome(dependencies, route.id, method, 101, started)
       return new Response(null)
     }
+    recordOutcome(dependencies, route.id, method, outcome.status, started)
     return jsonError(outcome.status, outcome.code, outcome.message)
   }
 
@@ -388,6 +468,13 @@ export async function dispatch(
         failure?.message ?? 'the upstream did not answer in time'
       )
     }
+    if (status === 503) {
+      return jsonError(
+        503,
+        'gateway_overloaded',
+        failure?.message ?? 'the gateway is handling too many requests'
+      )
+    }
     // The message of a network error names the internal host and the port
     // of the upstream, so it is not given to the caller: it is in the log.
     return jsonError(502, 'bad_gateway', 'the upstream could not be reached')
@@ -423,6 +510,8 @@ function statusOfFailure(failure: ExchangeFailure | null): number {
       return 504
     case 'aborted':
       return 499
+    case 'overloaded':
+      return 503
     default:
       return 502
   }

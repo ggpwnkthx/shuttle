@@ -24,6 +24,87 @@ const OVERFLOW_ROUTE = 'overflow'
 /** The label value used for the requests that matched no route. */
 export const UNMATCHED_ROUTE = 'unmatched'
 
+/**
+ * The label value used for the methods that are not tracked individually.
+ *
+ * The method of a request is chosen by the client: a client that sends an
+ * unusual method would create a series per method without bound. The
+ * methods that a deployment really uses keep their name, the others are
+ * counted together.
+ */
+export const OTHER_METHOD = 'other'
+
+/**
+ * The methods that are tracked individually.
+ *
+ * They are the methods of the specification of HTTP and the one of the
+ * WebDAV extension that a gateway realistically sees.
+ */
+const TRACKED_METHODS: ReadonlySet<string> = new Set([
+  'GET',
+  'HEAD',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
+  'OPTIONS',
+  'TRACE',
+  'PROPFIND',
+  'PROPPATCH',
+  'MKCOL',
+  'COPY',
+  'MOVE',
+  'LOCK',
+  'UNLOCK',
+  'REPORT',
+  'SEARCH',
+])
+
+/**
+ * The label value used for the statuses that are not tracked individually.
+ *
+ * The status of an answer is chosen by the upstream: an upstream that
+ * answers with an unusual status would create a series per status without
+ * bound. The statuses that carry a meaning for an operator keep their
+ * number, the others are counted together.
+ */
+export const OTHER_STATUS = 'other'
+
+/**
+ * The statuses that are tracked individually.
+ *
+ * They are the statuses of the specification of HTTP, the ones the gateway
+ * generates itself and the two that an operator looks for: the redirect of
+ * the login and the refusal of the cross-site guard.
+ */
+const TRACKED_STATUSES: ReadonlySet<number> = new Set([
+  100, 101, 200, 201, 202, 203, 204, 206, 300, 301, 302, 303, 304, 307, 308, 400, 401, 402, 403,
+  404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 421, 422, 423, 424,
+  425, 426, 428, 429, 431, 451, 499, 500, 501, 502, 503, 504, 505, 507, 508, 510, 511,
+])
+
+/**
+ * The label value of a method.
+ *
+ * The method is upper-cased: a client that sends `get` and a client that
+ * sends `GET` are counted together.
+ */
+export function methodLabel(method: string): string {
+  const upper = method.toUpperCase()
+  return TRACKED_METHODS.has(upper) ? upper : OTHER_METHOD
+}
+
+/**
+ * The label value of a status.
+ *
+ * A status that is not tracked individually is counted as `other`, so the
+ * number of series of the metric stays bounded whatever the upstream
+ * answers.
+ */
+export function statusLabel(status: number): string {
+  return TRACKED_STATUSES.has(status) ? String(status) : OTHER_STATUS
+}
+
 /** Upper bounds of the latency histogram, in seconds. */
 const DURATION_BUCKETS_SECONDS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60]
 
@@ -195,8 +276,8 @@ export class MetricsStore implements Observer {
     const route = this.#route(observation.routeId)
     this.#requests.inc({
       route,
-      method: observation.method,
-      status: String(observation.status),
+      method: methodLabel(observation.method),
+      status: statusLabel(observation.status),
     })
     if (observation.status >= 500) this.#errors.inc({ route })
     this.#bytesIn.inc(observation.bytesIn)
@@ -246,9 +327,11 @@ export class MetricsStore implements Observer {
    * The label value of a route.
    *
    * The routes beyond the cap are aggregated into a single `overflow`
-   * series, so the memory stays bounded.
+   * series, so the memory stays bounded. The `unmatched` label is not a
+   * route: it is reserved and never counted against the cap.
    */
   #route(routeId: string): string {
+    if (routeId === UNMATCHED_ROUTE) return UNMATCHED_ROUTE
     if (this.#routes.has(routeId)) return routeId
     if (this.#routes.size >= MAX_TRACKED_ROUTES) {
       this.#routes.add(OVERFLOW_ROUTE)

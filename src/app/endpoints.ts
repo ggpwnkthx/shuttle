@@ -169,11 +169,15 @@ export async function logoutHandler(
   context: Context<GatewayEnv>,
   dependencies: GatewayDependencies
 ): Promise<Response> {
+  // The host the caller used: the one the trusted proxy reports, when the
+  // peer is a trusted proxy. The guard compares the origin of the browser
+  // with it, so it has to be the host the caller believes it called.
+  const forwarding = context.get('forwarding')
   const crossSite = checkCrossSiteNavigation({
     method: context.req.method,
     headers: context.req.raw.headers,
-    host: context.req.header('host') ?? '',
-    externalProto: dependencies.externalProto,
+    host: forwarding?.host ?? context.req.header('host') ?? '',
+    externalProto: forwarding?.proto ?? dependencies.externalProto,
     allowedOrigins: dependencies.browser.allowedOrigins,
     strict: false,
   })

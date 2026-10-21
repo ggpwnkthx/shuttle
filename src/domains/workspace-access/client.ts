@@ -103,12 +103,19 @@ export class AccessClient {
    * Asks the access service whether the subject may use the workspace.
    *
    * Any failure results in a denial.
+   *
+   * The `fresh` option bypasses the cache: the decision of the service is
+   * asked for again. It is used by the revalidation of an open connection,
+   * where a decision that was cached a moment ago is exactly the decision
+   * that has to be checked.
    */
-  async decide(request: AccessRequest): Promise<AccessDecision> {
+  async decide(request: AccessRequest, options: { fresh?: boolean } = {}): Promise<AccessDecision> {
     const key = decisionKey(request)
-    const cached = await this.#readCache(key)
-    if (cached) {
-      return { ...cached, cached: true }
+    if (!options.fresh) {
+      const cached = await this.#readCache(key)
+      if (cached) {
+        return { ...cached, cached: true }
+      }
     }
 
     let decision: AccessDecision

@@ -40,6 +40,10 @@ export interface GatewayDependencies {
   globalRateLimiter: RequestLimiter
   /** The limiter of the requests of a caller on one route. */
   rateLimiter: RequestLimiter
+  /** The limiter of the requests of an authenticated caller on one route. */
+  principalRateLimiter: RequestLimiter
+  /** The limiter of the requests of the whole deployment. */
+  totalRateLimiter: RequestLimiter
   /** The limiter of the login attempts. */
   loginRateLimiter: RequestLimiter
   /** The key of the signature of the identity. */

@@ -88,11 +88,38 @@ describe('the failures of an exchange', () => {
 
     // The caller is gone: there is nobody to answer. The status is
     // recorded, so the number of the callers that went away is known.
-    await Bun.sleep(200)
-    const metrics = await fetch(`${harness.gatewayUrl}/metrics`, {
-      headers: { authorization: 'Bearer test-metrics-token' },
-    })
-    const body = await metrics.text()
-    expect(body).toContain('shuttle_requests_total{route="public-site",method="GET",status="499"}')
+    //
+    // The metric appears when the exchange is finalized, which happens
+    // after the caller is gone. The test waits for it instead of sleeping
+    // for a fixed time: a busy machine needs more than a fixed number of
+    // milliseconds.
+    const metrics = await waitForMetric(
+      harness,
+      'shuttle_requests_total{route="public-site",method="GET",status="499"}'
+    )
+    expect(metrics).toContain(
+      'shuttle_requests_total{route="public-site",method="GET",status="499"}'
+    )
   })
 })
+
+/**
+ * Waits for a series to appear in the metrics.
+ *
+ * The exchange of a caller that went away is finalized asynchronously, so
+ * the metric is not there the instant the caller is gone. The test polls
+ * the endpoint until the series appears.
+ */
+async function waitForMetric(harness: Harness, series: string, timeoutMs = 5_000): Promise<string> {
+  const started = Date.now()
+  let body = ''
+  while (Date.now() - started < timeoutMs) {
+    const response = await fetch(`${harness.gatewayUrl}/metrics`, {
+      headers: { authorization: 'Bearer test-metrics-token' },
+    })
+    body = await response.text()
+    if (body.includes(series)) return body
+    await Bun.sleep(25)
+  }
+  return body
+}

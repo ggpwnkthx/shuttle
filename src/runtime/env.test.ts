@@ -85,12 +85,26 @@ describe('the environment of a production deployment', () => {
     SHUTTLE_OIDC_REDIRECT_URI: 'https://shuttle.example.com/auth/callback',
     SHUTTLE_ACCESS_URL: 'https://access.example.com',
     SHUTTLE_ACCESS_TOKEN: 'access-token',
+    SHUTTLE_RATE_LIMIT_MAX: '600',
   }
 
   test('a complete environment is accepted', () => {
     const settings = readEnv(production)
     expect(settings.production).toBe(true)
     expect(settings.browser.cookieSecure).toBe(true)
+  })
+
+  test('at least one rate limit is required', () => {
+    expect(() => readEnv({ ...production, SHUTTLE_RATE_LIMIT_MAX: '0' })).toThrow(
+      /at least one rate limit/
+    )
+    // The deployment may say explicitly that another layer protects it.
+    const settings = readEnv({
+      ...production,
+      SHUTTLE_RATE_LIMIT_MAX: '0',
+      SHUTTLE_ALLOW_NO_RATE_LIMITS: 'true',
+    })
+    expect(settings.limits.route.max).toBe(0)
   })
 
   test('the secret of the sessions is required', () => {

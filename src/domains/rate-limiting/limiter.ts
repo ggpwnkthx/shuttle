@@ -69,11 +69,25 @@ interface Window {
  * It is the right one for a single node deployment and the one the tests
  * use. A deployment with more than one replica uses the Redis
  * implementation instead.
+ *
+ * The table of the windows is bounded, and the bound is reached **without
+ * evicting a live window**: an entry leaves the table when its window is
+ * over, never because another key needed its place. A limiter that evicts
+ * a live window to make room for a new one hands the evicted caller a fresh
+ * budget, so a caller that sprays addresses resets its own counter at will
+ * and the limit it is supposed to enforce stops meaning anything.
+ *
+ * When the table is full, the requests of the keys that are not tracked are
+ * counted in one shared window. The shared window has the same limit, so a
+ * flood that spreads over many addresses is bounded as well: the table
+ * cannot be filled to push the limit of the deployment out of the way.
  */
 export class MemoryRateLimiter implements RequestLimiter {
   readonly max: number
   readonly windowMs: number
   #windows: LRUCache<string, Window>
+  /** The window of the keys the table could not hold. */
+  #overflow: Window | null = null
 
   constructor(options: RateLimiterOptions) {
     this.max = options.max
@@ -113,11 +127,7 @@ export class MemoryRateLimiter implements RequestLimiter {
     // The window is fixed: it starts at a moment every replica can compute,
     // so the windows of two deployments are the same windows.
     const start = windowStart(now, this.windowMs)
-    const window = this.#windows.get(key)
-    if (!window || window.startedAt !== start) {
-      this.#windows.set(key, { startedAt: start, count: 1 })
-      return { allowed: true, limit: this.max, remaining: this.max - 1, retryAfterMs: 0 }
-    }
+    const window = this.#windowOf(key, start)
     if (window.count >= this.max) {
       return {
         allowed: false,
@@ -133,6 +143,34 @@ export class MemoryRateLimiter implements RequestLimiter {
   /** Forgets the windows of a key. */
   async reset(key: string): Promise<void> {
     this.#windows.delete(key)
+  }
+
+  /**
+   * The window of a key.
+   *
+   * A key that is already tracked keeps its window. A key that is not
+   * tracked is added when the table has room, and counted in the shared
+   * window when it has not.
+   */
+  #windowOf(key: string, start: number): Window {
+    const tracked = this.#windows.get(key)
+    if (tracked) {
+      if (tracked.startedAt !== start) {
+        tracked.startedAt = start
+        tracked.count = 0
+      }
+      return tracked
+    }
+    if (this.#windows.size < MAX_TRACKED_KEYS) {
+      const window: Window = { startedAt: start, count: 0 }
+      this.#windows.set(key, window)
+      return window
+    }
+    // The table is full: the request is counted in the shared window.
+    if (!this.#overflow || this.#overflow.startedAt !== start) {
+      this.#overflow = { startedAt: start, count: 0 }
+    }
+    return this.#overflow
   }
 }
 

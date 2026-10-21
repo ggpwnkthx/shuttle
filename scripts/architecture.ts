@@ -11,7 +11,7 @@
  * suite (`test/architecture/imports.test.ts`) and by the CI workflow, so a
  * violation fails the build instead of being noticed in a review.
  *
- * The rules are the ones of SPECS.md §14.3:
+ * The rules are the ones of docs/spec.md §14.3:
  *
  * 1. A domain is imported through its public entry point (`index.ts`).
  * 2. Routing, authentication and rate limiting depend on no other domain.

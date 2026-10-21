@@ -49,6 +49,13 @@ export interface StartedAccessService {
   port: number
   /** The decision requests the service received, for the tests. */
   requests: { subject: string; workspaceId: string; routeId: string; roles: string[] }[]
+  /**
+   * Changes the policy of the service while it runs.
+   *
+   * The tests use it to revoke an access and to give it back, without
+   * restarting the service.
+   */
+  setPolicy: (policy: AccessPolicy) => void
   stop: () => Promise<void>
 }
 
@@ -62,7 +69,7 @@ export async function startAccessService(
   options: AccessServiceOptions = {}
 ): Promise<StartedAccessService> {
   assertFixtureAllowed('access service')
-  const policy = options.policy ?? DEFAULT_POLICY
+  let policy = options.policy ?? DEFAULT_POLICY
   const requests: StartedAccessService['requests'] = []
 
   const server = Bun.serve({
@@ -118,6 +125,9 @@ export async function startAccessService(
     url: `http://127.0.0.1:${server.port ?? 0}`,
     port: server.port ?? 0,
     requests,
+    setPolicy: (next: AccessPolicy) => {
+      policy = next
+    },
     stop: async () => {
       await server.stop(true)
     },

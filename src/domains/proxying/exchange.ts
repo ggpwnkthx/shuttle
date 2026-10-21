@@ -68,7 +68,7 @@ export interface ExchangeRequest {
 }
 
 /** Why an exchange failed before the answer of the upstream was committed. */
-export type ExchangeFailureKind = 'too_large' | 'timeout' | 'aborted' | 'network'
+export type ExchangeFailureKind = 'too_large' | 'timeout' | 'aborted' | 'network' | 'overloaded'
 
 /** A failure of an exchange. */
 export interface ExchangeFailure {
@@ -108,6 +108,17 @@ export interface ExchangeResult {
 export interface HttpExchangeOptions {
   /** The transport that carries the exchange. */
   transport: HttpTransport
+  /**
+   * The number of exchanges that may run at the same time.
+   *
+   * A client that opens a request and never sends its body holds a
+   * connection until the idle budget of the upload runs out. The cap is
+   * the bound of that: the gateway refuses the exchanges that do not fit
+   * instead of running out of resources.
+   *
+   * A value of zero means "no limit".
+   */
+  maxConcurrent?: number
   /** Called exactly once, when the exchange is over. */
   onFinalize?: (result: ExchangeResult) => void
 }
@@ -147,17 +158,25 @@ export function expectsBody(method: string, status: number): boolean {
 export class HttpExchangeService {
   #transport: HttpTransport
   #onFinalize?: (result: ExchangeResult) => void
+  /** The maximum number of exchanges that may run at the same time. */
+  #maxConcurrent: number
   /** The exchanges that are running, so a drain can stop them. */
   #active = new Set<{ abort: () => void }>()
 
   constructor(options: HttpExchangeOptions) {
     this.#transport = options.transport
     this.#onFinalize = options.onFinalize
+    this.#maxConcurrent = options.maxConcurrent ?? 0
   }
 
   /** The number of exchanges that are running. */
   get activeCount(): number {
     return this.#active.size
+  }
+
+  /** The maximum number of exchanges that may run at the same time. */
+  get maxConcurrent(): number {
+    return this.#maxConcurrent
   }
 
   /** Cancels every exchange that is running. */
@@ -181,6 +200,21 @@ export class HttpExchangeService {
       bytesIn: 0,
       bytesOut: 0,
       outcome: 'complete',
+    }
+
+    // The cap on the number of exchanges that run at the same time. A
+    // client that opens a request and never sends its body holds a
+    // connection until the idle budget of the upload runs out: the cap is
+    // the bound of that, and it is refused rather than queued.
+    if (this.#maxConcurrent > 0 && this.#active.size >= this.#maxConcurrent) {
+      result.failure = {
+        kind: 'overloaded',
+        message: 'the gateway is handling too many requests at the same time',
+      }
+      result.outcome = 'aborted'
+      this.#onFinalize?.(result)
+      request.onFinalize?.(result)
+      return result
     }
 
     let finalized = false

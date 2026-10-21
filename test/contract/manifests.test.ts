@@ -157,6 +157,25 @@ describe('the manifests of the deployment', () => {
     expect(gateway.environment.SHUTTLE_OIDC_CLIENT_SECRET).toContain('?')
     expect(gateway.environment.SHUTTLE_ACCESS_TOKEN).toContain('?')
     expect(gateway.environment.SHUTTLE_METRICS_TOKEN).toContain('?')
+    // The gateway refuses to start in production without a rate limit.
+    expect(gateway.environment.SHUTTLE_RATE_LIMIT_TOTAL_MAX).toBeTruthy()
+  })
+
+  test('the deployment sets at least one rate limit', async () => {
+    // The gateway refuses to start in production without a rate limit: a
+    // manifest that does not set one would not start.
+    const deployment = await ofKind('Deployment')
+    const spec = deployment.spec as Record<string, unknown>
+    const template = spec.template as Record<string, unknown>
+    const pod = template.spec as Record<string, unknown>
+    const container = (pod.containers as Record<string, unknown>[])[0]!
+    const env = container.env as { name: string; value?: string }[]
+    const limits = env.filter((entry) => entry.name.startsWith('SHUTTLE_RATE_LIMIT_'))
+    expect(limits.length).toBeGreaterThan(0)
+    const enabled = limits
+      .filter((entry) => entry.name.endsWith('_MAX'))
+      .some((entry) => Number(entry.value ?? '0') > 0)
+    expect(enabled).toBe(true)
   })
 
   test('the ingress does not buffer the bodies and it keeps the websockets open', async () => {

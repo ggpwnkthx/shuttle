@@ -184,6 +184,36 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
         max: settings.limits.global.max,
         windowMs: settings.limits.global.windowMs,
       })
+  // The budget of an authenticated caller on one route. It is keyed by the
+  // subject of the caller, so one tenant cannot spend the budget of the
+  // others behind the same address.
+  const principalRateLimiter = sharedClient
+    ? new RedisRateLimiter({
+        max: settings.limits.principal.max,
+        windowMs: settings.limits.principal.windowMs,
+        client: sharedClient,
+        keyPrefix: `${settings.sharedState.keyPrefix}:principal`,
+        onError: onSharedStateError,
+      })
+    : new MemoryRateLimiter({
+        max: settings.limits.principal.max,
+        windowMs: settings.limits.principal.windowMs,
+      })
+  // The budget of the whole deployment. The scopes that are keyed by an
+  // address cannot bound a flood that spreads over many addresses; this one
+  // can.
+  const totalRateLimiter = sharedClient
+    ? new RedisRateLimiter({
+        max: settings.limits.total.max,
+        windowMs: settings.limits.total.windowMs,
+        client: sharedClient,
+        keyPrefix: `${settings.sharedState.keyPrefix}:total`,
+        onError: onSharedStateError,
+      })
+    : new MemoryRateLimiter({
+        max: settings.limits.total.max,
+        windowMs: settings.limits.total.windowMs,
+      })
   const loginRateLimiter = sharedClient
     ? new RedisRateLimiter({
         max: settings.limits.login.max,
@@ -197,7 +227,10 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
         windowMs: settings.limits.login.windowMs,
       })
 
-  const exchanges = new HttpExchangeService({ transport: new BunHttpTransport() })
+  const exchanges = new HttpExchangeService({
+    transport: new BunHttpTransport(),
+    maxConcurrent: settings.resources.maxConcurrentRequests,
+  })
 
   // The websockets. The domain owns the reservations, the handshake and the
   // bridge; the platform owns the sockets.
@@ -215,6 +248,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
       pingIntervalMs: settings.websockets.pingIntervalMs,
       pongTimeoutMs: settings.websockets.pongTimeoutMs,
       handshakeTimeoutMs: settings.websockets.handshakeTimeoutMs,
+      revalidateIntervalMs: settings.websockets.revalidateIntervalMs,
     },
     logger,
     observer,
@@ -234,6 +268,8 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     exchanges,
     rateLimiter,
     globalRateLimiter,
+    principalRateLimiter,
+    totalRateLimiter,
     loginRateLimiter,
     identityKey: deriveIdentityKey(settings.session.secret),
     gatewayCookies: auth.gatewayCookieNames,

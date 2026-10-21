@@ -19,7 +19,7 @@ jobs:
     env:
       # The runtime of the release. The 1.2 line of the runtime does not
       # expose the boundaries the specification relies on, the measurements
-      # are in docs/transport-capabilities.md.
+      # are in docs/runtime.md.
       BUN_VERSION: '1.4.3'
     steps:
       - uses: actions/checkout@v4
@@ -137,6 +137,7 @@ jobs:
             -e SHUTTLE_OIDC_REDIRECT_URI=https://shuttle.example.com/auth/callback \
             -e SHUTTLE_ACCESS_URL=https://access.example.com \
             -e SHUTTLE_ACCESS_TOKEN=ci-access-token \
+            -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
             -v "$PWD/config/routes.json:/etc/shuttle/routes.json:ro" \
             shuttle:ci
           for i in $(seq 1 30); do
@@ -165,6 +166,7 @@ jobs:
             -e SHUTTLE_OIDC_CLIENT_SECRET=ci-client-secret \
             -e SHUTTLE_OIDC_REDIRECT_URI=https://shuttle.example.com/auth/callback \
             -e SHUTTLE_ACCESS_URL=https://access.example.com \
+            -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
             shuttle:ci; then
             echo "the gateway started without a token for the access service"
             exit 1
@@ -176,8 +178,24 @@ jobs:
             -e SHUTTLE_SESSION_SECRET=ci-secret \
             -e SHUTTLE_ACCESS_URL=https://access.example.com \
             -e SHUTTLE_ACCESS_TOKEN=ci-access-token \
+            -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
             shuttle:ci; then
             echo "the gateway started without an identity provider"
+            exit 1
+          fi
+
+      - name: the image refuses to start without a rate limit
+        run: |
+          if docker run --rm \
+            -e SHUTTLE_SESSION_SECRET=ci-secret \
+            -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
+            -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
+            -e SHUTTLE_OIDC_CLIENT_SECRET=ci-client-secret \
+            -e SHUTTLE_OIDC_REDIRECT_URI=https://shuttle.example.com/auth/callback \
+            -e SHUTTLE_ACCESS_URL=https://access.example.com \
+            -e SHUTTLE_ACCESS_TOKEN=ci-access-token \
+            shuttle:ci; then
+            echo "the gateway started without a rate limit"
             exit 1
           fi
 

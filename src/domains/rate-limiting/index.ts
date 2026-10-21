@@ -10,5 +10,5 @@
 export { MAX_TRACKED_KEYS, MemoryRateLimiter } from './limiter'
 export type { RateLimitDecision, RateLimiterOptions, RequestLimiter } from './limiter'
 
-export { rateLimitKey, retryAfterMs, windowStart } from './policy'
+export { rateLimitKey, retryAfterMs, windowStart, TOTAL_RATE_LIMIT_KEY } from './policy'
 export type { RateLimitKeyInput, RateLimitScope } from './policy'

@@ -10,6 +10,8 @@ export type {
   ClientLeg,
   ClientUpgradePort,
   ClientUpgradeResult,
+  RevalidationOutcome,
+  RevalidationPort,
   UpstreamHandshakeOutcome,
   UpstreamHandshakePort,
   UpstreamHandshakeRequest,
@@ -26,6 +28,7 @@ export type { ReservationOptions } from './reservation'
 export {
   CLOSE_GOING_AWAY,
   CLOSE_NORMAL,
+  CLOSE_POLICY_VIOLATION,
   CLOSE_TRY_AGAIN_LATER,
   MAX_CLOSE_REASON_BYTES,
   WebSocketBridge,

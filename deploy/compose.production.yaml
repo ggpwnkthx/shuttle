@@ -33,6 +33,12 @@ services:
       SHUTTLE_SESSION_URL: redis://redis:6379/0
       SHUTTLE_SHARED_STATE_URL: redis://redis:6379/1
       SHUTTLE_METRICS_TOKEN: ${SHUTTLE_METRICS_TOKEN:?the token of the metrics is required}
+      # At least one rate limit has to be set: the gateway refuses to start
+      # in production without one, unless SHUTTLE_ALLOW_NO_RATE_LIMITS=true.
+      SHUTTLE_RATE_LIMIT_TOTAL_MAX: ${SHUTTLE_RATE_LIMIT_TOTAL_MAX:-1000}
+      SHUTTLE_RATE_LIMIT_GLOBAL_MAX: ${SHUTTLE_RATE_LIMIT_GLOBAL_MAX:-600}
+      SHUTTLE_RATE_LIMIT_MAX: ${SHUTTLE_RATE_LIMIT_MAX:-600}
+      SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX: ${SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX:-300}
       SHUTTLE_EXTERNAL_PROTO: https
       SHUTTLE_COOKIE_SECURE: "true"
       SHUTTLE_TRUSTED_PROXIES: ${SHUTTLE_TRUSTED_PROXIES:-}

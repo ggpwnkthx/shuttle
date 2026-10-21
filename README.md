@@ -1,15 +1,23 @@
 # Shuttle
 
 Shuttle is an application gateway. It authenticates a caller against an
-OpenID Connect provider, asks an access service whether the caller may use a
-workspace, and forwards the request to a single configured upstream.
+OpenID Connect provider, asks an access service whether the caller may use
+a workspace, and forwards the request to one configured upstream.
 
-- The specification of the behavior is [SPECS.md](SPECS.md).
-- The ownership of the code is [IMPLEMENTATION.md](IMPLEMENTATION.md) and
-  [ARCHITECTURE.md](ARCHITECTURE.md).
-- The order of the delivery is [BUILD_PLAN.md](BUILD_PLAN.md), the state of
-  the build is [BUILD_STATUS.md](BUILD_STATUS.md) and the decisions of the
-  release are [DECISIONS.md](DECISIONS.md).
+It has no domain model of its own: the workspaces, the roles and the
+quotas live in the access service. Shuttle enforces "authenticated +
+authorized for this workspace + forwarded safely" and nothing else.
+
+The documentation is in [docs/](docs/):
+
+| Document | What it holds |
+| --- | --- |
+| [docs/spec.md](docs/spec.md) | The normative behavior, and the only document that changes the contract. |
+| [docs/architecture.md](docs/architecture.md) | How the code is laid out, which import is allowed where, and which file owns what. |
+| [docs/decisions.md](docs/decisions.md) | The decisions behind the contract, with their evidence. |
+| [docs/operations.md](docs/operations.md) | How to deploy, configure, run and review it. |
+| [docs/capacity.md](docs/capacity.md) | The measurements of the capacity. |
+| [docs/runtime.md](docs/runtime.md) | The capabilities of the runtime the gateway is written against. |
 
 ## What it does
 
@@ -19,9 +27,10 @@ workspace, and forwards the request to a single configured upstream.
 | **Authentication** | OpenID Connect with PKCE for the browser, bearer tokens for the API clients, in four modes that decide predictably which credential a route accepts. |
 | **Authorization** | The access service decides who may use a workspace; the gateway asks and fails closed. |
 | **Proxying** | Streamed bodies, server sent events, uploads, a budget per phase of the upstream exchange and a limit on the body. |
-| **Header policy** | The hop-by-hop headers and the spoofable headers are removed, the identity is written by the gateway and the forwarding headers are only trusted from known proxies. |
-| **Sessions** | Server side, in the process or in a Redis compatible store, with an idle lifetime and a maximum age. |
-| **Operations** | Health and readiness probes, Prometheus metrics, structured logs with redaction, a hot reload of the configuration and a graceful shutdown. |
+| **Header policy** | The hop-by-hop headers and the spoofable headers are removed, the identity is written by the gateway and signed, and the forwarding headers are only trusted from known proxies. |
+| **Sessions** | Server side, in the process or in Redis, with an idle lifetime and a maximum age. |
+| **WebSockets** | The upstream handshake first, bounded buffers, keepalive, and a revalidation that closes a connection whose access was revoked. |
+| **Operations** | Health and readiness probes, Prometheus metrics, structured logs with redaction, a hot reload of the configuration and a graceful drain. |
 
 ## Quick start
 
@@ -31,8 +40,8 @@ bun run dev          # the gateway with the local fixtures
 ```
 
 The development runner starts the identity provider, the access service and
-two upstreams, writes a configuration file for them and starts the gateway on
-`http://localhost:8080`.
+two upstreams, writes a configuration file for them, and starts the gateway
+on `http://localhost:8080`.
 
 ```bash
 curl -s http://localhost:8080/healthz
@@ -53,8 +62,7 @@ fails.
     "timeouts": { "responseMs": 5000, "firstByteMs": 30000, "bodyMs": 300000 },
     "maxBodyBytes": 10485760
   },
-  "trustedProxies": ["127.0.0.1/32", "::1/128"],
-  "reservedPaths": [],
+  "trustedProxies": ["10.0.0.0/8"],
   "routes": [
     {
       "id": "workspace-api",
@@ -67,8 +75,10 @@ fails.
 }
 ```
 
-The environment is described in [.env.example](.env.example); every variable
-has a default, except the ones a production deployment has to set.
+The environment is described in [.env.example](.env.example). Every variable
+has a default, except the ones a production deployment has to set: the
+session secret, the identity provider, the access service, and at least one
+rate limit.
 
 ## The endpoints of the gateway
 
@@ -82,8 +92,8 @@ has a default, except the ones a production deployment has to set.
 | `GET /auth/logout` | Destroys the session. Refused when it comes from another site. |
 
 Every other request is dispatched: the route is matched, the limiters are
-applied, the caller is authenticated, the cross site guard runs, the access
-service is asked and the request is forwarded.
+applied, the caller is authenticated, the cross-site guard runs, the access
+service is asked, and the request is forwarded.
 
 ## The checks
 
@@ -96,35 +106,14 @@ bun test src           # the unit tests of the domains
 bun test test/contract # the contract tests of the pipeline
 bun test test/network  # the tests against a real socket
 bun test test/browser  # the tests in a real browser
+bun test test/integration # the tests against a real Redis
 ```
 
-The import boundaries of the project are checked by
-`scripts/architecture.ts`; the rules are described in
-[ARCHITECTURE.md](ARCHITECTURE.md).
-
-## The deployment
-
-The image is built from the `Dockerfile` of the repository:
+The tests that need a Redis server are skipped without one. To run them
+locally:
 
 ```bash
-docker build -t shuttle:0.1.0 .
+scripts/redis-dev.sh start 6399
+SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0 bun test test/integration
+scripts/redis-dev.sh stop 6399
 ```
-
-The operations guide (topology, ingress, TLS, secrets, metrics, recovery and
-rollback) is in [docs/operations.md](docs/operations.md), the targets of the
-deployment and the measurements of the capacity are in
-[docs/capacity.md](docs/capacity.md), the review of a deployment is in
-[docs/deployment-review.md](docs/deployment-review.md) and the boundaries of
-the runtime are in [docs/transport-capabilities.md](docs/transport-capabilities.md).
-
-The artifacts of the deployment are in `deploy/`:
-
-| Artifact | Where |
-| --- | --- |
-| The manifests of Kubernetes | `deploy/kubernetes/` (the deployment, the service, the autoscaling, the budget of the disruptions, the network policy, the ingress, the route table and the template of the secret) |
-| The stack of a single host | `deploy/compose.production.yaml` |
-| The stack of the development | `deploy/compose.yaml` (with the fixtures) |
-
-The image of a release is built by the workflow `release.yml` when a tag is
-pushed: it builds the image, it starts it with the configuration of a
-deployment and it exports it as an artifact of the run.

@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { COUNT_SCRIPT, RedisRateLimiter } from './adapters'
-import { MemoryRateLimiter, rateLimitKey, retryAfterMs, windowStart } from './index'
+import {
+  MAX_TRACKED_KEYS,
+  MemoryRateLimiter,
+  TOTAL_RATE_LIMIT_KEY,
+  rateLimitKey,
+  retryAfterMs,
+  windowStart,
+} from './index'
 
 describe('the scopes of the limiters', () => {
   test('the keys of the scopes are kept apart', () => {
@@ -10,6 +17,20 @@ describe('the scopes of the limiters', () => {
     )
     expect(rateLimitKey('unmatched', { clientIp: '203.0.113.7' })).toBe('none:203.0.113.7')
     expect(rateLimitKey('login', { clientIp: '203.0.113.7' })).toBe('203.0.113.7')
+  })
+
+  test('the scope of a principal is keyed by the subject, not by the address', () => {
+    expect(rateLimitKey('principal', { routeId: 'workspace-api', subject: 'user-1' })).toBe(
+      'principal:workspace-api:user-1'
+    )
+    // Two callers behind the same address are two principals.
+    expect(rateLimitKey('principal', { routeId: 'workspace-api', subject: 'user-2' })).not.toBe(
+      rateLimitKey('principal', { routeId: 'workspace-api', subject: 'user-1' })
+    )
+  })
+
+  test('the scope of the deployment has no address in it', () => {
+    expect(TOTAL_RATE_LIMIT_KEY).toBe('deployment:total')
   })
 })
 
@@ -67,7 +88,33 @@ describe('the limiter of the memory', () => {
     for (let index = 0; index < 20_000; index++) {
       await limiter.check(`caller:${index}`, 960_000)
     }
-    expect(limiter.size).toBeLessThanOrEqual(10_000)
+    expect(limiter.size).toBeLessThanOrEqual(MAX_TRACKED_KEYS)
+  })
+
+  test('the window of a caller is not reset by a flood of other callers', async () => {
+    const limiter = new MemoryRateLimiter({ max: 2, windowMs: 60_000 })
+    await limiter.check('caller:victim', 960_000)
+    await limiter.check('caller:victim', 960_000)
+    // The table is filled with other keys: the window of the victim is
+    // still there, so the third request of the victim is refused.
+    for (let index = 0; index < MAX_TRACKED_KEYS + 10; index++) {
+      await limiter.check(`caller:flood-${index}`, 960_000)
+    }
+    expect((await limiter.check('caller:victim', 960_000)).allowed).toBe(false)
+  })
+
+  test('a flood that does not fit the table is counted in one shared window', async () => {
+    const limiter = new MemoryRateLimiter({ max: 5, windowMs: 60_000 })
+    for (let index = 0; index < MAX_TRACKED_KEYS; index++) {
+      await limiter.check(`caller:${index}`, 960_000)
+    }
+    // The table is full: the requests that do not fit are counted
+    // together, so the flood is bounded by the same limit.
+    let allowed = 0
+    for (let index = 0; index < 20; index++) {
+      if ((await limiter.check(`caller:overflow-${index}`, 960_000)).allowed) allowed += 1
+    }
+    expect(allowed).toBe(5)
   })
 
   test('a request that is over the limit is not counted', async () => {
