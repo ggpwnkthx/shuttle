@@ -10,7 +10,9 @@ which file owns what; [decisions.md](decisions.md) records the decisions
 behind the contract. Recommendations in an implementation guide do not
 become requirements until they are recorded here.
 
-Status: 0.4.0. Runtime: Bun ≥ 1.4.3 (§15, decision 20). Listener: HTTP and
+Status: 0.4.0. Runtime: Bun ≥ 1.4.3 (§15, decision 20). The gateway **refuses
+to start** on an older runtime: the boundaries it relies on are not
+observable there. Listener: HTTP and
 WebSocket on `SHUTTLE_GATEWAY_HOST:SHUTTLE_GATEWAY_PORT` (default
 `0.0.0.0:8080`).
 
@@ -210,6 +212,14 @@ The environment is read once, at the start of the process, and it is
 validated as a whole: a value that cannot be understood stops the gateway,
 because a setting that looks active but is not a security hole. The only
 exception is the level of the log, which falls back to `info`.
+
+The **runtime** is validated the same way and before the environment: the
+gateway needs Bun ≥ 1.4.3 (§15, decision 20) and stops on an older one,
+because the boundaries it relies on — the early answer of an upstream while
+the upload runs, the cancellation of the producer of the body, the refusal
+of the handshake of an upstream websocket and the upgrade of the caller with
+the headers of the gateway — are not observable there. The measurements are
+in [runtime.md](runtime.md).
 
 The names of the variables never leave `src/runtime/env.ts`. The rest of the
 gateway receives the settings it needs, not the environment.
@@ -1107,7 +1117,7 @@ lists are numbered independently.
 | 17 | The secret of the identity signature | `SHUTTLE_SESSION_SECRET`, from which the key is derived; unset means a random per-process secret, which is refused in production (§7.4). |
 | 18 | The readiness after a failed reload | The gateway stays ready and keeps the last valid configuration; the failure is visible in `/readyz`, in the log and in the metrics (§12.3). |
 | 19 | The organization of the code | The policy, the use cases, the ports and the adapters live together; the app, the platform and the runtime are explicit boundaries. The public imports and the dependency directions are checked in CI (§14). |
-| 20 | The version of the runtime | The runtime is **Bun ≥ 1.4.3**. The boundaries the gateway relies on are not observable on the 1.2 line. The measurements are in [runtime.md](runtime.md). |
+| 20 | The version of the runtime | The runtime is **Bun ≥ 1.4.3**. The boundaries the gateway relies on are not observable on the 1.2 line. The gateway **refuses to start** on an older runtime. The measurements are in [runtime.md](runtime.md). |
 | 21 | The forwarding headers of a client | The standard `forwarded` header is removed in both directions. The `Authorization` header of the caller is forwarded to the upstream as it is, unless the route says otherwise (§7.1). |
 | 22 | The host of a request | The effective host is the `x-forwarded-host` of a trusted proxy, and the `Host` header otherwise. It decides the route, the origin and the signature (§7.3). |
 | 23 | The limits | Four scopes: the deployment, the caller over all the routes, the caller on one route and the authenticated caller on one route. A scope keyed by an address cannot bound a flood that spreads over many addresses, and it cannot tell two tenants behind the same address apart (§9). |

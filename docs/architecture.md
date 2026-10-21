@@ -191,6 +191,7 @@ decision.
 | `bun/access-transport.ts` | The call to the access service. |
 | `bun/client-upgrade.ts` | The upgrade of the caller, with the headers of the gateway. |
 | `bun/upstream-websocket.ts` | The handshake with the upstream, and the socket of the upstream. |
+| `bun/runtime.ts` | The version of the runtime of the process. The api of the runtime belongs to the platform, so the version is read here and the policy that decides whether it is good enough lives in the runtime. |
 | `redis/client.ts` | The construction of the client, the shapes of the server (a server, a cluster, a sentinel), the TLS, the background connection and the disposal. |
 | `redis/commands.ts` | The commands of the shared state. |
 | `postgres/client.ts` | The construction of the client, the pool of the connections, the TLS, the background connection and the disposal. |

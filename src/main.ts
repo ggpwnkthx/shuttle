@@ -9,8 +9,15 @@
 import { readEnv } from './runtime/env'
 import { createRuntime } from './runtime/composition'
 import { watchConfiguration } from './runtime/lifecycle'
+import { assertRuntimeVersion } from './runtime/version'
 
 async function main(): Promise<void> {
+  // The runtime is the contract of the release: a gateway that starts on a
+  // runtime that does not have the boundaries it relies on answers in ways
+  // its specification does not describe, and the difference is only
+  // visible in production.
+  assertRuntimeVersion()
+
   const settings = readEnv(process.env)
   const runtime = await createRuntime(settings)
 

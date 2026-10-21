@@ -3,6 +3,23 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
+## Unreleased
+
+### The gateway refuses to start on a runtime that is too old
+
+The contract states **Bun ≥ 1.4.3** and the measurements of
+[docs/runtime.md](docs/runtime.md) show that the boundaries the gateway
+relies on — the early answer of an upstream while the upload runs, the
+cancellation of the producer of the body, the refusal of the handshake of an
+upstream websocket and the upgrade of the caller with the headers of the
+gateway — are not observable on the 1.2 line.
+
+Nothing checked the version of the runtime: a gateway started on an older
+line booted happily and then behaved in ways the specification does not
+describe, and the difference is only visible in production. The version is
+now checked before the process reads its environment, and the gateway stops
+with a message that names the version it needs.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the

@@ -10,6 +10,12 @@ made with it; the ones of the older releases are recorded as well, because
 they explain why the version is pinned (see [decisions.md](decisions.md),
 decision 1).
 
+The gateway checks the version of its runtime before it reads its
+environment and **stops** when it is too old: the boundaries below are not
+observable on the 1.2 line, so a gateway that started there would answer in
+ways its specification does not describe. The check is in
+`src/runtime/version.ts` and it is covered by `src/runtime/version.test.ts`.
+
 ## What was proved
 
 | Capability | How it was proved | What the runtime does |
