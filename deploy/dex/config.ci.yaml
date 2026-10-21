@@ -5,7 +5,7 @@
 # interop test: the test uses a fixed port, so the uri is exact.
 #
 #   docker run --rm -p 5556:5556 -v "$PWD/deploy/dex/config.ci.yaml:/etc/dex/config.yaml:ro" \
-#     ghcr.io/dexidp/dex:v25.0.0 dex serve /etc/dex/config.yaml
+#     ghcr.io/dexidp/dex:v2.46.1 dex serve /etc/dex/config.yaml
 #
 # The password of the account is "alice-password".
 

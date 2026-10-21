@@ -69,7 +69,7 @@ services:
     restart: unless-stopped
 
   dex:
-    image: ghcr.io/dexidp/dex:v25.0.0
+    image: ghcr.io/dexidp/dex:v2.46.1
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     ports:
       - "5556:5556"

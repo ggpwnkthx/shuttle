@@ -145,9 +145,12 @@ jobs:
 
       - name: start the provider
         run: |
-          docker run -d --name dex -p 5556:5556 \
+          # The version of the provider is pinned: a provider that changes
+          # the way it names the subject of a caller, or the shape of its
+          # login form, changes what the test proves.
+          docker run -d --rm --name dex -p 5556:5556 \
             -v "$GITHUB_WORKSPACE/deploy/dex/config.ci.yaml:/etc/dex/config.yaml:ro" \
-            ghcr.io/dexidp/dex:v25.0.0 dex serve /etc/dex/config.yaml
+            ghcr.io/dexidp/dex:v2.46.1 dex serve /etc/dex/config.yaml
           for attempt in $(seq 1 30); do
             if wget -qO- http://127.0.0.1:5556/dex/.well-known/openid-configuration > /dev/null; then
               echo "the provider is up"

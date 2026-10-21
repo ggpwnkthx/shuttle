@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { parseLoginForm } from '../contract/harness'
+import { decodeHtmlEntities, parseLoginForm } from '../contract/harness'
 
 /**
  * The form of a login of an identity provider.
@@ -26,5 +26,31 @@ describe('the form of a login of an identity provider', () => {
 
   test('a page without a form is not a form', () => {
     expect(parseLoginForm('<html><body>no form here</body></html>')).toBeNull()
+  })
+
+  test('the entities of the action are decoded', () => {
+    // The action of the form of dex carries two parameters, and html
+    // writes the `&` between them as `&amp;`. A form that is submitted
+    // with the entity left in place loses the `state` of the login, and
+    // dex refuses the login with a `400`.
+    const form = parseLoginForm(
+      '<form method="post" action="/dex/auth/local/login?back=&amp;state=ruhd2pl5j6lwzaiwd2urtawqx">' +
+        '<input tabindex="1" required id="login" name="login" type="text" />' +
+        '</form>'
+    )
+    expect(form).not.toBeNull()
+    expect(form!.action).toBe('/dex/auth/local/login?back=&state=ruhd2pl5j6lwzaiwd2urtawqx')
+  })
+
+  test('the entities of a value are decoded', () => {
+    expect(decodeHtmlEntities('a &amp; b')).toBe('a & b')
+    expect(decodeHtmlEntities('&lt;script&gt;')).toBe('<script>')
+    expect(decodeHtmlEntities('&quot;q&quot;')).toBe('"q"')
+    expect(decodeHtmlEntities('&#39;')).toBe("'")
+    expect(decodeHtmlEntities('&#65;')).toBe('A')
+    expect(decodeHtmlEntities('&#x41;')).toBe('A')
+    // The `&amp;` is decoded last: `&amp;lt;` is the text `&lt;` and not
+    // the character `<`.
+    expect(decodeHtmlEntities('&amp;lt;')).toBe('&lt;')
   })
 })

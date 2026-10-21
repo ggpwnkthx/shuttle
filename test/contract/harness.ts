@@ -43,7 +43,33 @@ export function parseLoginForm(html: string): LoginForm | null {
   for (const match of html.matchAll(input)) {
     fields[match[1]!] = match[2]!
   }
-  return { action: form[1]!, fields }
+  return { action: decodeHtmlEntities(form[1]!), fields }
+}
+
+/**
+ * Decodes the entities of an html attribute.
+ *
+ * The action of a form is an url, and an url carries `&` between its
+ * parameters: html writes it as `&amp;`, and a form that is submitted with
+ * the entity left in place loses every parameter after the first one. The
+ * `state` of a login is one of them, and a provider that refuses a request
+ * without its state refuses the login.
+ *
+ * The `&amp;` is decoded last, so that `&amp;lt;` is the text `&lt;` and
+ * not the character `<`.
+ */
+export function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) =>
+      String.fromCodePoint(Number.parseInt(code, 16))
+    )
+    .replace(/&amp;/g, '&')
 }
 
 export const METRICS_TOKEN = 'test-metrics-token'

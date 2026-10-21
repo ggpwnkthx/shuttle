@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { createHarness, type Harness } from '../contract/harness'
+import { createHarness, WORKSPACE_ID, type Harness } from '../contract/harness'
 
 /**
  * The interoperability with a real identity provider.
@@ -29,6 +29,15 @@ describe.skipIf(!issuer)('the interoperability with a real identity provider', (
       // The port is fixed: the provider of the deployment is configured
       // with the exact uri of the callback.
       gatewayPort: 18080,
+      // The access service of the tests allows one workspace to one
+      // subject, and the subject of the account of dex carries the id of
+      // the user and the id of the connector: it is not known before the
+      // first login. The wildcard of the fixture allows every caller: what
+      // the test proves is the flow of the login against a real provider,
+      // not the policy of the deployment.
+      policy: {
+        '*': [WORKSPACE_ID],
+      },
       issuer: {
         issuer: issuer!,
         clientId: process.env.SHUTTLE_TEST_DEX_CLIENT_ID ?? 'shuttle-ci',

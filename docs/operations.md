@@ -678,6 +678,7 @@ the knobs an operator turns when a revocation has to be immediate.
 | The shared state against a real Redis | `bun test test/integration` | yes |
 | The shared state against a real Postgres | `bun test test/integration` | yes |
 | The browser | `bun test test/browser` | yes |
+| The interoperability with a real provider | `bun test test/interop` | yes |
 | The soak | `bun test test/load` | yes |
 | The load | `bun run load` | yes |
 | The comparison of the backends | `bun run benchmark` | no |

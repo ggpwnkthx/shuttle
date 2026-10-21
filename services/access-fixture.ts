@@ -42,6 +42,17 @@ export const DEFAULT_POLICY: AccessPolicy = {
   'alice@shuttle.test': ['11111111-1111-4111-8111-111111111111'],
 }
 
+/**
+ * The subject `*` allows every caller.
+ *
+ * A deployment that uses the local connector of dex gets a subject that
+ * carries the id of the user and the id of the connector, and the id of the
+ * user is not known before the first login. The interoperability tests use
+ * the wildcard: what they prove is the flow of the login, not the policy of
+ * the deployment.
+ */
+export const ANY_SUBJECT = '*'
+
 /** The entry of a subject, with its reason. */
 function entryOf(entry: AccessPolicyEntry): { workspaces: string[]; reason?: string } {
   return Array.isArray(entry) ? { workspaces: entry } : entry
@@ -118,7 +129,7 @@ export async function startAccessService(
         routeId: String(body.routeId ?? ''),
         roles: Array.isArray(body.roles) ? body.roles : [],
       })
-      const entry = policy[subject]
+      const entry = policy[subject] ?? policy['*']
       if (!entry) {
         return Response.json({ allow: false, reason: 'the subject does not exist' })
       }
