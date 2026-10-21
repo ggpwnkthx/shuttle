@@ -51,7 +51,24 @@ describe('the cookies of a request', () => {
     // The rendering is what drops the name that the standard does not
     // allow, so a client cannot break the gateway with a malformed header.
     expect(parseCookieHeader('a b=1')).toEqual({ 'a b': '1' })
-    expect(parseCookieHeader('=value')).toEqual({ '': 'value' })
+  })
+
+  test('a pair without a name is not a cookie', () => {
+    // The standard does not allow an empty name, and the rendering drops
+    // such a pair. The parser drops it as well, so that what the gateway
+    // reads is what it forwards.
+    expect(parseCookieHeader('=value')).toEqual({})
+    expect(parseCookieHeader('a=1; =2')).toEqual({ a: '1' })
+  })
+
+  test('the control characters are removed from the values', () => {
+    // A value that carries one is a value that no browser sent: it would
+    // end up in a comparison with a session id or with the state of a
+    // login.
+    expect(parseCookieHeader('a=%00')).toEqual({ a: '' })
+    expect(parseCookieHeader('a=x%0Ay')).toEqual({ a: 'xy' })
+    // A name that carries one is not a name: the cookie is dropped.
+    expect(parseCookieHeader('a\tb=1')).toEqual({})
   })
 
   test('the cookies are rendered in the order of the object', () => {
