@@ -39,6 +39,17 @@ export interface AccessDecision {
   reason: string
   /** True when the decision was served from the cache. */
   cached: boolean
+  /**
+   * True when the decision was served while the access service was not
+   * reachable.
+   *
+   * A stale decision is the last decision the service took, served for a
+   * bounded time after its lifetime was over. It is served only when it
+   * allows the caller: the grace exists so that an outage of the service
+   * does not take the traffic down, and a denial that is served instead of
+   * an outage hides the outage from the operator.
+   */
+  stale: boolean
   /** The moment the decision was taken, in milliseconds. */
   decidedAt: number
 }
@@ -47,8 +58,14 @@ export interface AccessDecision {
 export interface AccessRequest {
   /** The subject of the caller. */
   subject: string
-  /** The identifier of the workspace. */
-  workspaceId: string
+  /**
+   * The identifier of the workspace.
+   *
+   * It is absent when the route asks the access service about itself and
+   * names no workspace: the service then decides on the subject, the route
+   * and the roles.
+   */
+  workspaceId?: string
   /** The route the request came in on. */
   routeId: string
   /** The roles of the caller. */

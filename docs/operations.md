@@ -62,6 +62,7 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_MAX_CONCURRENT_REQUESTS` | `1000` | The exchanges that run at the same time. |
 | `SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS` | `2000` | The budget of one attempt to an upstream, when a route names several. An attempt that does not answer in time is abandoned and the next upstream is tried. `0` disables it. |
 | `SHUTTLE_REPLAY_MAX_BYTES` | `65536` | The size of a body that may be sent again to a second upstream. A body that fits is held in memory. `0` disables it. |
+| `SHUTTLE_ACCESS_STALE_GRACE_MS` | `0` | How long a decision of the access service may be served after the service became unreachable. `0` disables it: an unreachable service is an outage and the gateway answers `503` to it. |
 | `SHUTTLE_RATE_LIMIT_TOTAL_MAX` | A value | The budget of the deployment. At least one limit has to be set. |
 | `SHUTTLE_SHUTDOWN_TIMEOUT_MS` | `15000` | The deadline of the drain. |
 
@@ -217,13 +218,38 @@ The policy file:
       "workspaces": ["11111111-1111-4111-8111-111111111111"],
       "roles": ["editor"]
     },
-    "bob@example.com": { "workspaces": ["*"] }
+    "bob@example.com": { "workspaces": ["*"] },
+    "carol@example.com": { "workspaces": [], "routes": ["admin-api"] }
   }
 }
 ```
 
 A subject that the file does not know is denied. The service applies the
 file, and it says no when the file says nothing.
+
+The `routes` of a subject are the routes it may use when the request
+names **no workspace**: a route of the gateway that asks the access
+service about itself (`accessCheck`) sends a request without a workspace,
+and the service decides on the routes of the subject.
+
+**The grace of an outage.** A route may ask the access service for a
+decision and go on with the last decision the service took while the
+service is down:
+
+```jsonc
+{
+  "id": "workspace-api",
+  "accessStaleGraceMs": 30000
+}
+```
+
+The grace is `0` by default: an unreachable service is an outage, and the
+gateway answers `503 access_unavailable` to it, which is the answer that
+tells the operator that the service is down. A grace keeps the traffic of
+the route flowing, and it makes the revocations late by that much: the
+decisions that were served this way are counted in
+`shuttle_access_stale_total{route}` and their age is measured in
+`shuttle_access_stale_age_seconds{route}`.
 
 ## The secrets
 
@@ -373,7 +399,7 @@ answered `200` and a body that was cut is a `200` with the outcome
 | Piece | When it is not reachable |
 | --- | --- |
 | The identity provider | The logins fail with `503`. The callers that have a session keep working. |
-| The access service | The requests with a workspace are denied (`403`). The other routes are unaffected. |
+| The access service | The requests that need a decision are refused with `503 access_unavailable`. The other routes are unaffected. A route that has a grace (`accessStaleGraceMs`) goes on with the last decision of the service, and the decisions that were served this way are counted in `shuttle_access_stale_total`. |
 | The shared state (Redis) | The sessions fail closed (`401`/`503`), the limiter fails open, the decisions are asked for again. |
 | The upstreams | The requests of the route are answered with `502`. The other routes are unaffected. |
 
@@ -387,6 +413,7 @@ answered `200` and a body that was cut is a `200` with the outcome
 | Every request answers `403 cross_site_request` | The same, with the origin the browser sends. | The ingress sets `x-forwarded-host` and `x-forwarded-proto`. |
 | `shuttle_shared_state_errors_total` grows | The shared state is degraded: the limiter fails open and the decisions are asked for again. | The shared state is restored. |
 | `shuttle_access_unavailable_total` grows | The access service is not reachable, or it answers something the gateway cannot read. | The access service is restored. The gateway fails closed: the callers are refused with `503 access_unavailable` until the service answers again. |
+| `shuttle_access_stale_total` grows | The access service is not reachable, and the routes that have a grace went on with the last decision of the service. | The access service is restored. The revocations of the callers are late by the grace: a route that may not be late sets `accessStaleGraceMs: 0`. |
 | `shuttle_request_errors_total` grows for one route | The upstream of the route is broken. | The upstream is repaired. The other routes are unaffected. |
 | `shuttle_rate_limited_total` grows | A flood. | The limits are reviewed. The limiter protects the upstreams. |
 | `shuttle_cross_site_refusals_total` grows | A client of the platform sends requests from another site. | The origin of the client is added to `SHUTTLE_ALLOWED_ORIGINS`, or the client is fixed. |

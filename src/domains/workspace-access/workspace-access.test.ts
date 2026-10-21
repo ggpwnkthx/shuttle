@@ -285,6 +285,12 @@ describe('the cache of the decisions', () => {
     expect(first).toBe(second)
   })
 
+  test('a route without a workspace has its own decisions', () => {
+    const withWorkspace = decisionKey({ subject: 'u', workspaceId: 'w', routeId: 'r' })
+    const without = decisionKey({ subject: 'u', routeId: 'r' })
+    expect(withWorkspace).not.toBe(without)
+  })
+
   test('a failure of the service is not cached', async () => {
     let calls = 0
     const { client: access } = client({
@@ -403,5 +409,155 @@ describe('the reason of a denial', () => {
   test('a denial that is about a role is counted as such', () => {
     expect(authFailureReason('the subject does not have the role admin')).toBe('missing_role')
     expect(authFailureReason('the subject does not exist')).toBe('access_denied')
+  })
+})
+
+describe('the grace of an outage of the access service', () => {
+  const request = {
+    subject: 'user-1',
+    workspaceId: 'workspace-1',
+    routeId: 'route',
+    roles: ['a'],
+  }
+
+  /** A client whose service is down and whose cache holds a decision. */
+  async function withOldDecision(
+    decision: { allow: boolean },
+    options: { cacheTtlMs: number; staleGraceMs: number }
+  ): Promise<{
+    client: AccessClient
+    stale: { routeId: string; ageMs: number }[]
+  }> {
+    const cache = new MemoryDecisionCache()
+    const key = decisionKey(request)
+    await cache.set(
+      key,
+      {
+        allow: decision.allow,
+        kind: decision.allow ? 'allowed' : 'denied',
+        reason: decision.allow ? 'allowed' : 'denied',
+        // The decision was taken ten seconds ago: it is older than the
+        // lifetime of the deployment and inside the grace.
+        decidedAt: Date.now() - 10_000,
+      },
+      600_000
+    )
+    const stale: { routeId: string; ageMs: number }[] = []
+    const access = new AccessClient({
+      baseUrl: 'http://access.test',
+      transport: transport({ error: new Error('the connection is refused') }),
+      cache,
+      cacheTtlMs: options.cacheTtlMs,
+      staleGraceMs: options.staleGraceMs,
+      onStale: (routeId, ageMs) => stale.push({ routeId, ageMs }),
+    })
+    return { client: access, stale }
+  }
+
+  test('without a grace an outage of the service is an outage', async () => {
+    const { client: access } = await withOldDecision(
+      { allow: true },
+      { cacheTtlMs: 1_000, staleGraceMs: 0 }
+    )
+    const decision = await access.decide(request)
+    expect(decision.kind).toBe('unavailable')
+    expect(decision.stale).toBe(false)
+  })
+
+  test('a decision that is too old is asked for again', async () => {
+    let calls = 0
+    const cache = new MemoryDecisionCache()
+    const key = decisionKey(request)
+    await cache.set(
+      key,
+      { allow: true, kind: 'allowed', reason: '', decidedAt: Date.now() - 60_000 },
+      600_000
+    )
+    const access = new AccessClient({
+      baseUrl: 'http://access.test',
+      transport: transport({
+        body: '{"allow":true}',
+        onRequest: () => {
+          calls += 1
+        },
+      }),
+      cache,
+      cacheTtlMs: 1_000,
+      staleGraceMs: 30_000,
+    })
+    const decision = await access.decide(request)
+    // The service was asked: the decision was too old to be served, and it
+    // answered.
+    expect(calls).toBe(1)
+    expect(decision.allow).toBe(true)
+    expect(decision.stale).toBe(false)
+  })
+
+  test('the last decision is served while the service is down', async () => {
+    const { client: access, stale } = await withOldDecision(
+      { allow: true },
+      { cacheTtlMs: 1_000, staleGraceMs: 30_000 }
+    )
+    const decision = await access.decide(request)
+    expect(decision.allow).toBe(true)
+    expect(decision.kind).toBe('allowed')
+    expect(decision.stale).toBe(true)
+    expect(stale).toHaveLength(1)
+    expect(stale[0]?.routeId).toBe('route')
+  })
+
+  test('a stale decision that is older than the grace is not served', async () => {
+    const { client: access } = await withOldDecision(
+      { allow: true },
+      { cacheTtlMs: 1_000, staleGraceMs: 1_000 }
+    )
+    // The decision is a minute old and the grace is a second: it is
+    // neither fresh nor stale enough to be served.
+    const decision = await access.decide(request)
+    expect(decision.kind).toBe('unavailable')
+  })
+
+  test('a stale denial is not served: the outage stays visible', async () => {
+    const { client: access } = await withOldDecision(
+      { allow: false },
+      { cacheTtlMs: 1_000, staleGraceMs: 30_000 }
+    )
+    const decision = await access.decide(request)
+    expect(decision.kind).toBe('unavailable')
+    expect(decision.stale).toBe(false)
+  })
+
+  test('a fresh decision is never stale', async () => {
+    const { client: access } = await withOldDecision(
+      { allow: true },
+      { cacheTtlMs: 1_000, staleGraceMs: 30_000 }
+    )
+    // The revalidation of an open connection asks for a fresh decision: a
+    // connection whose access was revoked has to be closed, and a stale
+    // decision would keep it open.
+    const decision = await access.decide(request, { fresh: true })
+    expect(decision.kind).toBe('unavailable')
+    expect(decision.stale).toBe(false)
+  })
+
+  test('the grace of the route replaces the grace of the deployment', async () => {
+    const cache = new MemoryDecisionCache()
+    const key = decisionKey(request)
+    await cache.set(
+      key,
+      { allow: true, kind: 'allowed', reason: '', decidedAt: Date.now() - 2_000 },
+      600_000
+    )
+    const access = new AccessClient({
+      baseUrl: 'http://access.test',
+      transport: transport({ error: new Error('the connection is refused') }),
+      cache,
+      cacheTtlMs: 1_000,
+      staleGraceMs: 60_000,
+    })
+    // The grace of the route is zero: the outage is an outage.
+    expect((await access.decide(request, { staleGraceMs: 0 })).kind).toBe('unavailable')
+    // The grace of the deployment is used when the route says nothing.
+    expect((await access.decide(request)).kind).toBe('allowed')
   })
 })

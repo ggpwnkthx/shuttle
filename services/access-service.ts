@@ -24,7 +24,8 @@
  *       "workspaces": ["11111111-1111-4111-8111-111111111111"],
  *       "roles": ["editor"]
  *     },
- *     "bob@example.com": { "workspaces": ["*"] }
+ *     "bob@example.com": { "workspaces": ["*"] },
+ *     "carol@example.com": { "workspaces": [], "routes": ["admin-api"] }
  *   }
  * }
  * ```
@@ -34,6 +35,7 @@
  * | `version` | The version of the file. Only `1` is understood. |
  * | `subjects` | The subjects the service knows, by their identifier. |
  * | `workspaces` | The workspaces the subject may use. `"*"` is every workspace. |
+ * | `routes` | The routes the subject may use when the request names no workspace. `"*"` is every route. A subject that has none is denied for a request that names no workspace. |
  * | `roles` | The roles the subject needs. The request must carry one of them. |
  *
  * A subject that the file does not know is denied. The service never
@@ -56,6 +58,13 @@ import { readFileSync } from 'node:fs'
 export interface SubjectPolicy {
   /** The workspaces the subject may use. `"*"` is every workspace. */
   workspaces: string[]
+  /**
+   * The routes the subject may use when the request names no workspace.
+   *
+   * `"*"` is every route. A subject that has no route is denied for a
+   * request that names no workspace.
+   */
+  routes?: string[]
   /** The roles the subject needs. */
   roles?: string[]
   /** The reason of a denial, when the policy wants to name one. */
@@ -79,7 +88,7 @@ export interface AccessServiceOptions {
   /** Called for every decision, for the log of the service. */
   onDecision?: (decision: {
     subject: string
-    workspaceId: string
+    workspaceId?: string
     routeId: string
     allow: boolean
     reason: string
@@ -134,6 +143,16 @@ export function parsePolicyFile(raw: string, source: string): AccessPolicyFile {
     if (policy.roles !== undefined && !Array.isArray(policy.roles)) {
       throw new Error(`the subject ${subject} of the policy file ${source} has bad roles`)
     }
+    if (policy.routes !== undefined) {
+      if (!Array.isArray(policy.routes)) {
+        throw new Error(`the subject ${subject} of the policy file ${source} has bad routes`)
+      }
+      for (const route of policy.routes) {
+        if (typeof route !== 'string') {
+          throw new Error(`the subject ${subject} of the policy file ${source} has a bad route`)
+        }
+      }
+    }
   }
   return file as AccessPolicyFile
 }
@@ -150,7 +169,7 @@ export function parsePolicyFile(raw: string, source: string): AccessPolicyFile {
  */
 export function decide(
   policy: AccessPolicyFile,
-  request: { subject: string; workspaceId: string; roles?: string[] }
+  request: { subject: string; workspaceId?: string; routeId?: string; roles?: string[] }
 ): Decision {
   const subject = policy.subjects[request.subject]
   if (!subject) {
@@ -166,12 +185,25 @@ export function decide(
       }
     }
   }
-  const workspaces = subject.workspaces
-  const allowed = workspaces.includes('*') || workspaces.includes(request.workspaceId)
+  if (request.workspaceId !== undefined) {
+    const workspaces = subject.workspaces
+    const allowed = workspaces.includes('*') || workspaces.includes(request.workspaceId)
+    if (!allowed) {
+      return {
+        allow: false,
+        reason: subject.reason ?? 'the subject may not use the workspace',
+      }
+    }
+    return { allow: true }
+  }
+  // The request names no workspace: the routes of the subject decide.
+  const routes = subject.routes ?? []
+  const routeId = request.routeId ?? ''
+  const allowed = routes.includes('*') || routes.includes(routeId)
   if (!allowed) {
     return {
       allow: false,
-      reason: subject.reason ?? 'the subject may not use the workspace',
+      reason: subject.reason ?? 'the subject may not use the route',
     }
   }
   return { allow: true }
@@ -221,16 +253,20 @@ export async function startAccessService(
         return Response.json({ error: 'bad_request' }, { status: 400 })
       }
       const subject = typeof body.subject === 'string' ? body.subject : ''
-      const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : ''
+      // The workspace is optional: a request that names none is decided by
+      // the routes of the subject. A workspace that is there and is empty
+      // is a malformed request.
+      const hasWorkspace = body.workspaceId !== undefined && body.workspaceId !== null
+      const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : undefined
       const routeId = typeof body.routeId === 'string' ? body.routeId : ''
       const roles = Array.isArray(body.roles)
         ? body.roles.filter((r): r is string => typeof r === 'string')
         : []
-      if (subject === '' || workspaceId === '') {
+      if (subject === '' || (hasWorkspace && workspaceId === '')) {
         return Response.json({ error: 'bad_request' }, { status: 400 })
       }
 
-      const decision = decide(options.policy, { subject, workspaceId, roles })
+      const decision = decide(options.policy, { subject, workspaceId, routeId, roles })
       options.onDecision?.({
         subject,
         workspaceId,

@@ -582,6 +582,48 @@ describe('the description of the configuration that is running', () => {
     expect(codes).not.toContain('unauthenticated_route')
   })
 
+  test('a route that asks the access service about itself is not named', () => {
+    const configuration = store()
+    configuration.apply(
+      baseConfig({
+        routes: [
+          {
+            id: 'api',
+            match: { host: '*', path: '/api' },
+            upstream: 'http://upstream-a:3000',
+            auth: { mode: 'jwt' },
+            accessCheck: true,
+          },
+        ],
+      })
+    )
+    const description = describeConfiguration(configuration.snapshot!)
+    const codes = description.warnings.map((warning) => warning.code)
+    // The route asks the access service: it is not a route that
+    // authenticates the caller and never checks anything.
+    expect(codes).not.toContain('no_workspace_check')
+    expect(description.routes[0]?.accessCheck).toBe(true)
+  })
+
+  test('a check of the access service needs an authenticated caller', () => {
+    const configuration = store()
+    const result = configuration.apply(
+      baseConfig({
+        routes: [
+          {
+            id: 'api',
+            match: { host: '*', path: '/api' },
+            upstream: 'http://upstream-a:3000',
+            auth: { mode: 'none' },
+            accessCheck: true,
+          },
+        ],
+      })
+    )
+    expect(result.ok).toBe(false)
+    expect(configuration.lastError?.details.join(' ')).toContain('accessCheck')
+  })
+
   test('the credential of the caller that reaches the upstream is named', () => {
     const configuration = store()
     configuration.apply(

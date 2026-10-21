@@ -33,6 +33,14 @@ export interface AccessConformanceProfile {
   allowed: { subject: string; workspaceId: string; roles?: string[] }
   /** A subject the service denies. */
   denied: { subject: string; workspaceId: string; roles?: string[] }
+  /**
+   * A subject the service allows to use a route that names no workspace.
+   *
+   * When it is absent, the suite checks that a request that names no
+   * workspace is answered with a decision, and not refused: the workspace
+   * is optional in the protocol.
+   */
+  allowedWithoutWorkspace?: { subject: string; routeId: string; roles?: string[] }
 }
 
 /** Sends a decision request to the service. */
@@ -105,8 +113,36 @@ export function describeAccessService(label: string, profile: AccessConformanceP
       expect(status).toBe(400)
     })
 
-    test('a request without a workspace is refused', async () => {
-      const { status } = await decide(profile, { subject: profile.allowed.subject })
+    test('a request without a workspace is answered', async () => {
+      // The workspace is optional: a route that asks the access service
+      // about itself names none, and the service decides on the subject,
+      // the route and the roles.
+      const { status, json } = await decide(profile, {
+        subject: profile.allowed.subject,
+        routeId: 'workspace-api',
+        roles: profile.allowed.roles ?? [],
+      })
+      expect(status).toBe(200)
+      expect(json).toBeObject()
+      expect(typeof (json as { allow?: unknown }).allow).toBe('boolean')
+    })
+
+    test('a request without a workspace is decided by the service', async () => {
+      if (!profile.allowedWithoutWorkspace) return
+      const { status, json } = await decide(profile, {
+        subject: profile.allowedWithoutWorkspace.subject,
+        routeId: profile.allowedWithoutWorkspace.routeId,
+        roles: profile.allowedWithoutWorkspace.roles ?? [],
+      })
+      expect(status).toBe(200)
+      expect((json as { allow?: unknown }).allow).toBe(true)
+    })
+
+    test('a request with an empty workspace is refused', async () => {
+      const { status } = await decide(profile, {
+        subject: profile.allowed.subject,
+        workspaceId: '',
+      })
       expect(status).toBe(400)
     })
 

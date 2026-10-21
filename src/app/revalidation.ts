@@ -86,7 +86,11 @@ export function buildRevalidation(
     // The access service. A revoked access ends the connections it
     // allowed. The decision is asked for again: the cached one is exactly
     // the decision that has to be checked.
-    if (target.subject && target.workspaceId) {
+    //
+    // The route is asked too when it names no workspace and asks the
+    // access service about itself: the connection was authorized by that
+    // check, and the check is what has to be made again.
+    if (target.subject && (target.workspaceId || route.payload.accessCheck)) {
       const decision = await dependencies.access.decide(
         {
           subject: target.subject,

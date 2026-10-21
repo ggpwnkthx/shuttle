@@ -79,6 +79,13 @@ export interface RouteDescription {
   timeouts: Timeouts
   /** The lifetime of a cached decision of the access service. */
   accessCacheTtlMs: number | null
+  /**
+   * Whether the access service is asked about the route when it names no
+   * workspace.
+   */
+  accessCheck: boolean
+  /** The grace of an outage of the access service, in milliseconds. */
+  accessStaleGraceMs: number
 }
 
 /** The description of a whole configuration. */
@@ -114,6 +121,8 @@ function describeRoute(route: CompiledRoute<EffectiveRoute>): RouteDescription {
     maxBodyBytes: policy.maxBodyBytes,
     timeouts: { ...policy.timeouts },
     accessCacheTtlMs: policy.accessCacheTtlMs ?? null,
+    accessCheck: policy.accessCheck,
+    accessStaleGraceMs: policy.accessStaleGraceMs,
   }
 }
 
@@ -135,7 +144,7 @@ function warningsOf(route: CompiledRoute<EffectiveRoute>): ConfigurationWarning[
       message: 'the route forwards callers that were not authenticated',
     })
   }
-  if (policy.auth.mode !== 'none' && !policy.auth.workspace) {
+  if (policy.auth.mode !== 'none' && !policy.auth.workspace && !policy.accessCheck) {
     warnings.push({
       routeId: route.id,
       code: 'no_workspace_check',

@@ -157,6 +157,13 @@ export interface Observer {
   recordAccess(routeId: string, durationMs: number): void
   /** The access service could not be asked. */
   recordAccessUnavailable(routeId: string): void
+  /**
+   * A decision was served while the access service was unreachable.
+   *
+   * The age of the decision is reported: it is the time the revocation of
+   * the caller was late by.
+   */
+  recordAccessStale(routeId: string, ageMs: number): void
   /** A websocket was accepted. */
   recordWebsocket(routeId: string): void
   /** A websocket handshake was refused. */
@@ -181,6 +188,8 @@ export class MetricsStore implements Observer {
   #errors: Counter<'route'>
   #authFailures: Counter<'route' | 'reason'>
   #accessUnavailable: Counter<'route'>
+  #accessStale: Counter<'route'>
+  #accessStaleAge: Histogram<'route'>
   #websockets: Counter<'route'>
   #duration: Histogram<'route'>
   #upstreamDuration: Histogram<'route'>
@@ -219,6 +228,19 @@ export class MetricsStore implements Observer {
       name: 'shuttle_access_unavailable_total',
       help: 'Requests that were refused because the access service could not be reached.',
       labelNames: ['route'],
+      registers: [this.#registry],
+    })
+    this.#accessStale = new Counter({
+      name: 'shuttle_access_stale_total',
+      help: 'Decisions that were served while the access service was unreachable.',
+      labelNames: ['route'],
+      registers: [this.#registry],
+    })
+    this.#accessStaleAge = new Histogram({
+      name: 'shuttle_access_stale_age_seconds',
+      help: 'The age of the decisions that were served while the access service was unreachable.',
+      labelNames: ['route'],
+      buckets: [1, 5, 15, 30, 60, 300, 900, 3_600],
       registers: [this.#registry],
     })
     this.#websockets = new Counter({
@@ -341,6 +363,14 @@ export class MetricsStore implements Observer {
     this.#accessUnavailable.inc({ route: this.#route(routeId) })
   }
 
+  recordAccessStale(routeId: string, ageMs: number): void {
+    // A decision that was served while the service was down is a
+    // degradation of the deployment: the traffic went on, and the operator
+    // has to see that it went on with an old decision.
+    this.#accessStale.inc({ route: this.#route(routeId) })
+    this.#accessStaleAge.observe({ route: this.#route(routeId) }, ageMs / 1_000)
+  }
+
   recordWebsocket(routeId: string): void {
     this.#websockets.inc({ route: this.#route(routeId) })
   }
@@ -402,6 +432,7 @@ export function createSilentObserver(): Observer {
     recordRequest: () => undefined,
     recordAuthFailure: () => undefined,
     recordAccessUnavailable: () => undefined,
+    recordAccessStale: () => undefined,
     recordAccess: () => undefined,
     recordUpstream: () => undefined,
     recordWebsocket: () => undefined,

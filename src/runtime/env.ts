@@ -49,6 +49,8 @@ export interface AccessSettings {
   token?: string
   timeoutMs: number
   cacheTtlMs: number
+  /** The grace of an outage of the service, in milliseconds. */
+  staleGraceMs: number
   allowAnonymous: boolean
 }
 
@@ -380,6 +382,17 @@ const EnvSchema = z.object({
   SHUTTLE_ACCESS_TOKEN: z.string().optional(),
   SHUTTLE_ACCESS_TIMEOUT_MS: intEnv(3_000, { min: 1 }),
   SHUTTLE_ACCESS_CACHE_TTL_MS: intEnv(5_000, { min: 0 }),
+  /**
+   * How long a decision of the access service may be served after the
+   * service became unreachable, in milliseconds.
+   *
+   * Zero disables it: an unreachable service is an outage and the gateway
+   * answers `503` to it, which is the answer that tells the operator that
+   * the service is down. A value above zero keeps the traffic of the
+   * deployment flowing while the service is down, at the price of a
+   * revocation that is late by that much.
+   */
+  SHUTTLE_ACCESS_STALE_GRACE_MS: intEnv(0, { min: 0, max: 3_600_000 }),
   /**
    * Allows the gateway to call the access service without a token.
    *
@@ -745,6 +758,7 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       token: parsed.SHUTTLE_ACCESS_TOKEN,
       timeoutMs: parsed.SHUTTLE_ACCESS_TIMEOUT_MS,
       cacheTtlMs: parsed.SHUTTLE_ACCESS_CACHE_TTL_MS,
+      staleGraceMs: parsed.SHUTTLE_ACCESS_STALE_GRACE_MS,
       allowAnonymous: parsed.SHUTTLE_ACCESS_ALLOW_ANONYMOUS ?? false,
     },
     session: {

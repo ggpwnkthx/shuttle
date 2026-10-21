@@ -202,6 +202,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     defaultMaxBodyBytes: settings.limits.maxBodyBytes,
     defaultUpstreamAttemptMs: settings.limits.upstreamAttemptMs,
     defaultReplayMaxBytes: settings.limits.replayMaxBytes,
+    defaultAccessStaleGraceMs: settings.access.staleGraceMs,
     trustedProxies: settings.network.trustedProxies,
     // The policy that is running is written in the log: the route table
     // and the environment are large, and an operator has to be able to see
@@ -316,12 +317,17 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     token: settings.access.token,
     timeoutMs: settings.access.timeoutMs,
     cacheTtlMs: settings.access.cacheTtlMs,
+    staleGraceMs: settings.access.staleGraceMs,
     transport: new FetchAccessTransport(),
     cache: decisionCache,
     onError: (error) => logger.warn('the access service request failed', { error }),
     // The latency of the service is published: it is a dependency of its
     // own on the path of every request of a workspace.
     onDecision: (routeId, durationMs) => observer.recordAccess(routeId, durationMs),
+    // A decision that was served while the service was down is published:
+    // it is a degradation of the deployment and the operator has to see
+    // it.
+    onStale: (routeId, ageMs) => observer.recordAccessStale(routeId, ageMs),
   })
 
   // The limiters. A deployment with more than one replica shares its

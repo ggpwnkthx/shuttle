@@ -59,6 +59,16 @@ export interface EffectiveRoute {
    * in milliseconds. Undefined means the lifetime of the environment.
    */
   accessCacheTtlMs?: number
+  /**
+   * How long a decision of the access service may be served after the
+   * service became unreachable, in milliseconds. Zero disables it.
+   */
+  accessStaleGraceMs: number
+  /**
+   * Whether the access service is asked about the route when it names no
+   * workspace.
+   */
+  accessCheck: boolean
 }
 
 /**
@@ -128,6 +138,13 @@ export interface ConfigurationStoreOptions {
    */
   defaultReplayMaxBytes?: number
   /**
+   * The grace of an outage of the access service when neither the route
+   * nor the defaults set one.
+   *
+   * It comes from the environment.
+   */
+  defaultAccessStaleGraceMs?: number
+  /**
    * Called when a generation is published.
    *
    * The runtime uses it to write the policy that is running in the log: a
@@ -159,6 +176,7 @@ export class ConfigurationStore {
   #defaultMaxBodyBytes: number
   #defaultUpstreamAttemptMs: number
   #defaultReplayMaxBytes: number
+  #defaultAccessStaleGraceMs: number
   #trustedProxies: string[]
   #onPublished?: (snapshot: ConfigurationSnapshot) => void
 
@@ -167,6 +185,7 @@ export class ConfigurationStore {
     this.#defaultMaxBodyBytes = options.defaultMaxBodyBytes
     this.#defaultUpstreamAttemptMs = options.defaultUpstreamAttemptMs ?? 0
     this.#defaultReplayMaxBytes = options.defaultReplayMaxBytes ?? 0
+    this.#defaultAccessStaleGraceMs = options.defaultAccessStaleGraceMs ?? 0
     this.#trustedProxies = options.trustedProxies ?? []
     this.#onPublished = options.onPublished
   }
@@ -286,6 +305,7 @@ export class ConfigurationStore {
         maxBodyBytes: this.#defaultMaxBodyBytes,
         upstreamAttemptMs: this.#defaultUpstreamAttemptMs,
         replayMaxBytes: this.#defaultReplayMaxBytes,
+        accessStaleGraceMs: this.#defaultAccessStaleGraceMs,
       })
       return compileRoute(
         {
@@ -306,6 +326,8 @@ export class ConfigurationStore {
           crossSite: policy.crossSite,
           forwardAuthorization: policy.forwardAuthorization,
           accessCacheTtlMs: policy.accessCacheTtlMs,
+          accessStaleGraceMs: policy.accessStaleGraceMs,
+          accessCheck: policy.accessCheck,
         }
       )
     })

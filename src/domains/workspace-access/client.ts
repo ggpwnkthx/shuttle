@@ -60,6 +60,14 @@ export interface AccessClientOptions {
   timeoutMs?: number
   /** How long a decision is cached. */
   cacheTtlMs?: number
+  /**
+   * How long a decision may be served after the service became unreachable.
+   *
+   * Zero disables it: an unreachable service is an outage and the gateway
+   * answers `503` to it, which is the behaviour that tells the operator
+   * that the service is down.
+   */
+  staleGraceMs?: number
   /** The transport of the service. */
   transport: AccessTransport
   /** The cache of the decisions. */
@@ -74,6 +82,13 @@ export interface AccessClientOptions {
    * did not cost a call.
    */
   onDecision?: (routeId: string, durationMs: number) => void
+  /**
+   * Called when a decision was served while the service was unreachable.
+   *
+   * The route and the age of the decision are reported: the age is the
+   * time the decision was old when it was served.
+   */
+  onStale?: (routeId: string, ageMs: number) => void
 }
 
 /**
@@ -83,10 +98,19 @@ export interface AccessClientOptions {
  * decides on them, so a decision that was made for a caller with a role
  * must never be served to a caller without it. The key is hashed, so the
  * keys of the server stay small and cannot collide by accident.
+ *
+ * The workspace is part of the key as well. A route that names no
+ * workspace has its own decisions, and they are never served to a route
+ * that names one.
  */
 export function decisionKey(request: AccessRequest): string {
   const roles = [...(request.roles ?? [])].sort().join(',')
-  const canonical = JSON.stringify([request.subject, request.workspaceId, request.routeId, roles])
+  const canonical = JSON.stringify([
+    request.subject,
+    request.workspaceId ?? '',
+    request.routeId,
+    roles,
+  ])
   return createHash('sha256').update(canonical).digest('hex')
 }
 
@@ -95,10 +119,12 @@ export class AccessClient {
   #token?: string
   #timeoutMs: number
   #cacheTtlMs: number
+  #staleGraceMs: number
   #transport: AccessTransport
   #cache: DecisionCache
   #onError?: (error: unknown) => void
   #onDecision?: (routeId: string, durationMs: number) => void
+  #onStale?: (routeId: string, ageMs: number) => void
   /**
    * The decisions that are being asked for, by the key of the cache.
    *
@@ -119,10 +145,12 @@ export class AccessClient {
     this.#token = options.token
     this.#timeoutMs = options.timeoutMs ?? 3_000
     this.#cacheTtlMs = options.cacheTtlMs ?? 5_000
+    this.#staleGraceMs = options.staleGraceMs ?? 0
     this.#transport = options.transport
     this.#cache = options.cache
     this.#onError = options.onError
     this.#onDecision = options.onDecision
+    this.#onStale = options.onStale
   }
 
   /**
@@ -133,22 +161,38 @@ export class AccessClient {
    * The `fresh` option bypasses the cache: the decision of the service is
    * asked for again. It is used by the revalidation of an open connection,
    * where a decision that was cached a moment ago is exactly the decision
-   * that has to be checked.
+   * that has to be checked. A fresh decision is never stale: a connection
+   * whose access was revoked has to be closed, and a decision that is
+   * served from the grace would keep it open.
    *
    * The `cacheTtlMs` option is the lifetime of the cached decision. It is
    * the latency of a revocation on the route that asked for the decision:
    * a route that asks for zero asks the service for every request, so a
    * revocation on that route is immediate.
+   *
+   * The `staleGraceMs` option is the time a decision may be served after
+   * the service became unreachable. Zero disables it.
    */
   async decide(
     request: AccessRequest,
-    options: { fresh?: boolean; cacheTtlMs?: number } = {}
+    options: { fresh?: boolean; cacheTtlMs?: number; staleGraceMs?: number } = {}
   ): Promise<AccessDecision> {
     const key = decisionKey(request)
+    const cacheTtlMs = options.cacheTtlMs ?? this.#cacheTtlMs
+    const staleGraceMs = options.staleGraceMs ?? this.#staleGraceMs
+    // The decision that is too old to be served as it is, but that may be
+    // served while the service is unreachable.
+    let stale: CachedDecision | null = null
     if (!options.fresh) {
       const cached = await this.#readCache(key)
       if (cached) {
-        return { ...cached, cached: true }
+        const age = Date.now() - cached.decidedAt
+        if (age <= cacheTtlMs) {
+          return { ...cached, cached: true, stale: false }
+        }
+        if (staleGraceMs > 0 && age <= cacheTtlMs + staleGraceMs) {
+          stale = cached
+        }
       }
     }
 
@@ -157,10 +201,10 @@ export class AccessClient {
     const pending = this.#inFlight.get(key)
     if (pending) {
       const decision = await pending
-      return { ...decision, cached: decision.cached }
+      return this.#serveStale(decision, stale, request.routeId)
     }
 
-    const ask = this.#askAndCache(request, key, options)
+    const ask = this.#askAndCache(request, key, { cacheTtlMs, staleGraceMs })
       .catch((error: unknown) => {
         // The failure of the service is never a crash of the gateway: the
         // caller is refused and the operator sees an outage.
@@ -170,6 +214,7 @@ export class AccessClient {
           kind: 'unavailable' as const,
           reason: 'the access service is not available',
           cached: false,
+          stale: false,
           decidedAt: Date.now(),
         }
       })
@@ -177,7 +222,35 @@ export class AccessClient {
         this.#inFlight.delete(key)
       })
     this.#inFlight.set(key, ask)
-    return await ask
+    const decision = await ask
+    return this.#serveStale(decision, stale, request.routeId)
+  }
+
+  /**
+   * Serves the last decision of the service while the service is down.
+   *
+   * The decision is served only when it allows the caller: the grace
+   * exists so that an outage of the service does not take the traffic of
+   * the deployment down. A denial that is served instead of the outage
+   * would hide the outage from the operator, and the refusal of the caller
+   * is the same answer as the refusal of a fail-closed gateway.
+   */
+  #serveStale(
+    decision: AccessDecision,
+    stale: CachedDecision | null,
+    routeId: string
+  ): AccessDecision {
+    if (decision.kind !== 'unavailable' || !stale || !stale.allow) return decision
+    const age = Date.now() - stale.decidedAt
+    this.#onStale?.(routeId, age)
+    return {
+      allow: true,
+      kind: 'allowed',
+      reason: stale.reason,
+      cached: true,
+      stale: true,
+      decidedAt: stale.decidedAt,
+    }
   }
 
   /**
@@ -189,7 +262,7 @@ export class AccessClient {
   async #askAndCache(
     request: AccessRequest,
     key: string,
-    options: { fresh?: boolean; cacheTtlMs?: number }
+    options: { cacheTtlMs?: number; staleGraceMs?: number }
   ): Promise<AccessDecision> {
     let decision: AccessDecision
     try {
@@ -208,12 +281,17 @@ export class AccessClient {
         kind: 'unavailable',
         reason: `the access service is not available`,
         cached: false,
+        stale: false,
         decidedAt: Date.now(),
       }
     }
 
     const ttlMs = options.cacheTtlMs ?? this.#cacheTtlMs
-    if (ttlMs > 0) {
+    const graceMs = options.staleGraceMs ?? this.#staleGraceMs
+    // The entry lives longer than the lifetime of the decision: the grace
+    // needs the decision to still be there when the service is down.
+    const lifetime = ttlMs + graceMs
+    if (lifetime > 0) {
       await this.#writeCache(
         key,
         {
@@ -222,7 +300,7 @@ export class AccessClient {
           reason: decision.reason,
           decidedAt: decision.decidedAt,
         },
-        ttlMs
+        lifetime
       )
     }
     return decision
@@ -267,15 +345,20 @@ export class AccessClient {
     const startedAt = Date.now()
     let response: { status: number; body: string }
     try {
+      // The workspace is only in the request when the route names one: a
+      // route that asks the access service about itself sends the subject,
+      // the route and the roles, and the service decides without a
+      // workspace.
+      const payload: Record<string, unknown> = {
+        subject: request.subject,
+        routeId: request.routeId,
+        roles: request.roles ?? [],
+      }
+      if (request.workspaceId !== undefined) payload.workspaceId = request.workspaceId
       response = await this.#transport.post({
         url: `${this.#baseUrl}/v1/decisions`,
         headers,
-        body: JSON.stringify({
-          subject: request.subject,
-          workspaceId: request.workspaceId,
-          routeId: request.routeId,
-          roles: request.roles ?? [],
-        }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(this.#timeoutMs),
       })
     } finally {
@@ -304,6 +387,7 @@ export class AccessClient {
       kind: body.allow ? 'allowed' : 'denied',
       reason: typeof body.reason === 'string' ? body.reason : body.allow ? 'allowed' : 'denied',
       cached: false,
+      stale: false,
       decidedAt: Date.now(),
     }
   }

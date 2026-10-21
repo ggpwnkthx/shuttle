@@ -181,6 +181,31 @@ export const RouteSchema = z.strictObject({
    * It replaces the value of the defaults.
    */
   accessCacheTtlMs: z.number().int().min(0).max(600_000).optional(),
+  /**
+   * How long a decision of the access service may be served after the
+   * service became unreachable, in milliseconds.
+   *
+   * Zero disables it: an unreachable service is an outage and the gateway
+   * answers `503` to it. A value above zero keeps the traffic of the route
+   * flowing while the service is down, at the price of a revocation that
+   * is late by that much.
+   *
+   * It replaces the value of the defaults, and the value of the environment
+   * (`SHUTTLE_ACCESS_STALE_GRACE_MS`) is used when the file says nothing.
+   */
+  accessStaleGraceMs: z.number().int().min(0).max(3_600_000).optional(),
+  /**
+   * Whether the access service is asked about this route when the route
+   * names no workspace.
+   *
+   * A route that names a workspace is always checked. A route that names
+   * none is only checked when this is true: the request of the service then
+   * carries the subject, the route and the roles, and no workspace.
+   *
+   * A check needs an authentication mode other than `none`: the gateway
+   * asks the access service about a caller it authenticated.
+   */
+  accessCheck: z.boolean().optional(),
 })
 export type RouteFile = z.infer<typeof RouteSchema>
 
@@ -215,6 +240,13 @@ export const DefaultsSchema = z.strictObject({
    * (`SHUTTLE_ACCESS_CACHE_TTL_MS`) is used.
    */
   accessCacheTtlMs: z.number().int().min(0).max(600_000).optional(),
+  /**
+   * The default grace of an outage of the access service.
+   *
+   * When it is not set, the value of the environment
+   * (`SHUTTLE_ACCESS_STALE_GRACE_MS`) is used.
+   */
+  accessStaleGraceMs: z.number().int().min(0).max(3_600_000).optional(),
 })
 export type Defaults = z.infer<typeof DefaultsSchema>
 
@@ -257,6 +289,14 @@ export const ShuttleConfigSchema = z
     for (const [index, route] of config.routes.entries()) {
       const placeholders = placeholderNames(route.match.path)
       const workspace = route.auth?.workspace
+      if (route.accessCheck && route.auth?.mode === 'none') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['routes', index, 'accessCheck'],
+          message:
+            'a check of the access service needs an authentication mode other than "none": the gateway asks the service about a caller it authenticated',
+        })
+      }
       if (workspace && !placeholders.includes(workspace.param)) {
         ctx.addIssue({
           code: 'custom',
@@ -333,6 +373,8 @@ export function effectivePolicy(
     upstreamAttemptMs: number
     /** The size of a replayable body when neither the route nor the defaults set one. */
     replayMaxBytes: number
+    /** The grace of an outage of the access service when neither the route nor the defaults set one. */
+    accessStaleGraceMs: number
   }
 ): {
   auth: AuthPolicy
@@ -342,6 +384,8 @@ export function effectivePolicy(
   crossSite: CrossSitePolicy
   forwardAuthorization: boolean
   accessCacheTtlMs?: number
+  accessStaleGraceMs: number
+  accessCheck: boolean
   upstreams: string[]
 } {
   return {
@@ -363,5 +407,8 @@ export function effectivePolicy(
     crossSite: route.crossSite ?? defaults.crossSite,
     forwardAuthorization: route.forwardAuthorization ?? defaults.forwardAuthorization,
     accessCacheTtlMs: route.accessCacheTtlMs ?? defaults.accessCacheTtlMs,
+    accessStaleGraceMs:
+      route.accessStaleGraceMs ?? defaults.accessStaleGraceMs ?? environment.accessStaleGraceMs,
+    accessCheck: route.accessCheck ?? false,
   }
 }

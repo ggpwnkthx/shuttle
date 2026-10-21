@@ -302,59 +302,78 @@ export async function dispatch(
       )
     }
     workspaceId = validation.workspaceId
-    if (principal) {
-      const decision = await dependencies.access.decide(
-        {
-          subject: principal.subject,
-          workspaceId,
-          routeId: route.id,
-          roles: principal.roles,
-        },
-        // The lifetime of the cached decision is the latency of a
-        // revocation on this route: a route that asks for zero asks the
-        // access service for every request.
-        { cacheTtlMs: route.accessCacheTtlMs }
-      )
-      if (!decision.allow) {
-        // An outage of the access service is not a denial: the service
-        // could not be asked, or its answer could not be read. The caller
-        // is refused either way — the gateway fails closed — but the answer
-        // is `503` and not `403`, so the client knows it may retry and the
-        // operator sees an outage and not a policy.
-        if (decision.kind === 'unavailable') {
-          observer.recordAccessUnavailable(route.id)
-          logger.error('the access service is not available', {
-            requestId,
-            routeId: route.id,
-            workspaceId,
-          })
-          recordOutcome(dependencies, route.id, method, 503, started)
-          return jsonError(
-            503,
-            'access_unavailable',
-            'the access service could not be reached',
-            undefined,
-            { 'retry-after': '1' }
-          )
-        }
-        observer.recordAuthFailure(route.id, failureReasonOf(decision.reason))
-        logger.warn('workspace access denied', {
+  }
+  // The access service is asked about the workspace of the route, or about
+  // the route itself when the route asks for it and names no workspace: the
+  // service then decides on the subject, the route and the roles.
+  if (principal && (workspaceId !== undefined || route.accessCheck)) {
+    const decision = await dependencies.access.decide(
+      {
+        subject: principal.subject,
+        workspaceId,
+        routeId: route.id,
+        roles: principal.roles,
+      },
+      // The lifetime of the cached decision is the latency of a
+      // revocation on this route: a route that asks for zero asks the
+      // access service for every request.
+      {
+        cacheTtlMs: route.accessCacheTtlMs,
+        // The grace of an outage: a decision that is served while the
+        // service is down keeps the traffic of the route flowing.
+        staleGraceMs: route.accessStaleGraceMs,
+      }
+    )
+    if (decision.stale) {
+      // The decision is older than its lifetime and the service could not
+      // be reached: the request went on with the last decision the
+      // service took. The operator has to see it.
+      logger.warn('the access decision was stale', {
+        requestId,
+        routeId: route.id,
+        workspaceId,
+        decidedAt: decision.decidedAt,
+      })
+    }
+    if (!decision.allow) {
+      // An outage of the access service is not a denial: the service
+      // could not be asked, or its answer could not be read. The caller
+      // is refused either way — the gateway fails closed — but the answer
+      // is `503` and not `403`, so the client knows it may retry and the
+      // operator sees an outage and not a policy.
+      if (decision.kind === 'unavailable') {
+        observer.recordAccessUnavailable(route.id)
+        logger.error('the access service is not available', {
           requestId,
           routeId: route.id,
           workspaceId,
-          reason: decision.reason,
         })
-        // The reason of the access service is not given to the caller: it
-        // describes the policy of the platform and it is not the business
-        // of the client.
-        recordOutcome(dependencies, route.id, method, 403, started)
+        recordOutcome(dependencies, route.id, method, 503, started)
         return jsonError(
-          403,
-          'workspace_forbidden',
-          'the workspace is not available to this caller',
-          { workspaceId }
+          503,
+          'access_unavailable',
+          'the access service could not be reached',
+          undefined,
+          { 'retry-after': '1' }
         )
       }
+      observer.recordAuthFailure(route.id, failureReasonOf(decision.reason))
+      logger.warn('workspace access denied', {
+        requestId,
+        routeId: route.id,
+        workspaceId,
+        reason: decision.reason,
+      })
+      // The reason of the access service is not given to the caller: it
+      // describes the policy of the platform and it is not the business
+      // of the client.
+      recordOutcome(dependencies, route.id, method, 403, started)
+      return jsonError(
+        403,
+        'workspace_forbidden',
+        'the workspace is not available to this caller',
+        { workspaceId }
+      )
     }
   }
 

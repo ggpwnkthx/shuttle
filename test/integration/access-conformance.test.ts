@@ -20,6 +20,9 @@ const POLICY = {
   subjects: {
     'alice@example.com': { workspaces: [WORKSPACE], roles: ['editor'] },
     'bob@example.com': { workspaces: [WORKSPACE] },
+    // A subject of a deployment that has no workspaces: it may use one
+    // route and no other.
+    'carol@example.com': { workspaces: [], routes: ['admin-api'] },
   },
 }
 
@@ -95,6 +98,45 @@ describe('the reference access service', () => {
     }
   })
 
+  test('a subject that may use a route that names no workspace is allowed', async () => {
+    const service = await startAccessService({ policy: POLICY, port: 0 })
+    try {
+      const response = await fetch(`${service.url}/v1/decisions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          subject: 'carol@example.com',
+          routeId: 'admin-api',
+          roles: [],
+        }),
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ allow: true })
+    } finally {
+      await service.stop()
+    }
+  })
+
+  test('a subject that may not use a route that names no workspace is denied', async () => {
+    const service = await startAccessService({ policy: POLICY, port: 0 })
+    try {
+      const response = await fetch(`${service.url}/v1/decisions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          subject: 'carol@example.com',
+          routeId: 'another-route',
+          roles: [],
+        }),
+      })
+      const body = (await response.json()) as { allow: boolean; reason: string }
+      expect(body.allow).toBe(false)
+      expect(body.reason).toContain('route')
+    } finally {
+      await service.stop()
+    }
+  })
+
   test('a call without the token is refused', async () => {
     const service = await startAccessService({ policy: POLICY, port: 0, token: 'secret' })
     try {
@@ -132,6 +174,7 @@ describeAccessService('the reference implementation', {
   token: 'conformance-token',
   allowed: { subject: 'alice@example.com', workspaceId: WORKSPACE, roles: ['editor'] },
   denied: { subject: 'mallory@example.com', workspaceId: WORKSPACE },
+  allowedWithoutWorkspace: { subject: 'carol@example.com', routeId: 'admin-api' },
 })
 
 /**

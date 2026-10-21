@@ -14,6 +14,9 @@ import { assertFixtureAllowed, FixtureInProductionError } from './fixture-guard'
  * A plain list of workspace identifiers is the normal case. The object form
  * adds a custom denial reason, which is how a role based denial is
  * simulated.
+ *
+ * The list may hold `"*"`: the subject may use every workspace, and the
+ * requests that name no workspace as well.
  */
 export type AccessPolicyEntry = string[] | { workspaces: string[]; reason?: string }
 
@@ -120,7 +123,10 @@ export async function startAccessService(
         return Response.json({ allow: false, reason: 'the subject does not exist' })
       }
       const resolved = entryOf(entry)
-      if (resolved.workspaces.includes(workspaceId)) {
+      // A request that names no workspace is allowed by a subject that may
+      // use every workspace: the deployment that has no workspaces writes
+      // its routes in the policy of the service.
+      if (resolved.workspaces.includes('*') || resolved.workspaces.includes(workspaceId)) {
         return Response.json({ allow: true })
       }
       return Response.json({

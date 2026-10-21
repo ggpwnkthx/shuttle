@@ -26,7 +26,7 @@ The documentation is in [docs/](docs/):
 | --- | --- |
 | **Routing** | One upstream or several per route, matched on host, path and method, with a fixed precedence and an ambiguity check at load time. A route may declare the path its upstream receives. |
 | **Authentication** | OpenID Connect with PKCE for the browser, bearer tokens for the API clients, in four modes that decide predictably which credential a route accepts. |
-| **Authorization** | The access service decides who may use a workspace; the gateway asks and fails closed. The protocol of the service is published and a reference implementation ships with the project. |
+| **Authorization** | The access service decides who may use a workspace; the gateway asks and fails closed. A route may ask the service about itself instead of a workspace, and a route may ask for a grace: the last decision of the service is served for a bounded time while the service is down. The protocol of the service is published and a reference implementation ships with the project. |
 | **Proxying** | Streamed bodies, server sent events, uploads, a budget per phase of the upstream exchange and a limit on the body. A route with several upstreams fails over to the next one when the first one does not answer. |
 | **Header policy** | The hop-by-hop headers and the spoofable headers are removed, the identity is written by the gateway and signed with a JWS an upstream verifies with a standard library, and the forwarding headers are only trusted from known proxies. The gateway writes the trace of the request. |
 | **Sessions** | Server side, in the process or in a server the replicas share (Redis or Postgres), with an idle lifetime and a maximum age. |
@@ -116,6 +116,11 @@ refuses the navigations from another site on that route,
 caller reaches its upstream, and `accessCacheTtlMs` is the lifetime of the
 cached decisions of the access service on that route — the latency of a
 revocation there. They are described in [docs/operations.md](docs/operations.md).
+
+A route that names no workspace may still be checked by the access service:
+`accessCheck` asks it about the route itself, and `accessStaleGraceMs` is
+the time the last decision of the service may be served while the service
+is down.
 
 A route may also declare the path its upstream receives — `rewrite` — and
 several upstreams, which are tried in the order of the list.

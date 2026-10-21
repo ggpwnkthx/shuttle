@@ -162,6 +162,7 @@ configuration nobody can reason about.
 | `defaults.crossSite` | The policy of the cross site requests of the routes that declare none (§8). The default is `navigation`. |
 | `defaults.forwardAuthorization` | Whether the routes that declare none forward the `Authorization` header of the caller to their upstream (§7.1). The default is `true`. |
 | `defaults.accessCacheTtlMs` | The lifetime of a cached decision of the access service for the routes that declare none (§6). The default is the one of the environment. |
+| `defaults.accessStaleGraceMs` | The grace of an outage of the access service for the routes that declare none (§6). The default is the one of the environment. |
 | `defaults.replayMaxBytes` | The size of a body that may be sent again to a second upstream, for the routes that declare none (§11.4). The default is the one of the environment. |
 | `trustedProxies` | The ranges whose forwarding headers are honoured (§7.3). The ranges of the environment are added to them. |
 | `reservedPaths` | The paths the gateway keeps for itself, on top of §2.2. |
@@ -184,6 +185,8 @@ A route:
 | `crossSite` | The policy of the cross site requests of the route: `navigation` (the default) or `strict` (§8). It replaces `defaults.crossSite`. |
 | `forwardAuthorization` | Whether the `Authorization` header of the caller is forwarded to the upstream of the route (§7.1). It replaces `defaults.forwardAuthorization`. |
 | `accessCacheTtlMs` | The lifetime of a cached decision of the access service for the route, in milliseconds (§6). It replaces `defaults.accessCacheTtlMs`. `0` asks the service for every request. |
+| `accessStaleGraceMs` | How long a decision of the access service may be served after the service became unreachable, in milliseconds (§6). It replaces `defaults.accessStaleGraceMs`, which wins over `SHUTTLE_ACCESS_STALE_GRACE_MS`. `0` disables the grace. |
+| `accessCheck` | Whether the access service is asked about the route when the route names no workspace (§6). The default is `false`: a route that names no workspace is not checked. A check needs an authentication mode other than `none`. |
 | `websocket` | Whether the route accepts WebSocket upgrades. Default `false`. |
 
 An unknown key is a configuration error, not a setting that is silently
@@ -385,6 +388,11 @@ Content-Type: application/json
 {"subject":"user-1","workspaceId":"…","routeId":"workspace-api","roles":["dev"]}
 ```
 
+The workspace is the unit of access of the platform, and it is the thing
+the service is asked about. A route that names no workspace may still be
+checked: the service is then asked about the route itself, and the request
+carries no workspace (§6.3).
+
 The answer is `{"allow": true}` or `{"allow": false, "reason": "…"}`. A
 status that is not a success, a body that is not JSON and a decision that is
 malformed are all the **unavailability of the service**, and not a denial:
@@ -422,7 +430,9 @@ decision made for a caller with a role is never served to a caller without
 it.
 
 The **latency of a revocation is the TTL of the cache**. It is the knob an
-operator turns when a revocation has to be immediate.
+operator turns when a revocation has to be immediate. The **grace of an
+outage** is the other knob: it is the time the last decision may be served
+while the service is down (§6.2).
 
 A route may set its own lifetime with `accessCacheTtlMs`: it replaces
 `defaults.accessCacheTtlMs` and the lifetime of the environment. A route
@@ -451,7 +461,7 @@ Content-Type: application/json
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `subject` | yes | The identifier of the caller. The service decides what it means. |
-| `workspaceId` | yes | The workspace the request is about. |
+| `workspaceId` | no | The workspace the request is about. It is absent when the route asks the access service about itself and names no workspace (§6.3). |
 | `routeId` | no | The route the request came in on. It may be part of the policy of the service. |
 | `roles` | no | The roles of the caller. They are part of the key of the cached decision. |
 
@@ -470,7 +480,7 @@ The status of the answer:
 | Status | What it means |
 | --- | --- |
 | `200` | A decision. The body carries `allow`. |
-| `400` | The request is malformed: it is not json, or it has no subject or no workspace. |
+| `400` | The request is malformed: it is not json, or it has no subject. A service that needs a workspace of its own refuses a request that has none with this status. |
 | `401` | The token is missing or wrong. |
 | `404` | The path is not the path of the protocol. |
 | anything else | The unavailability of the service: the gateway answers `503 access_unavailable`. |
@@ -483,8 +493,8 @@ denies a caller.
 worth nothing without a way to check it. `test/integration/access-conformance.ts`
 is that way: it runs against any implementation, and the deployment that
 writes its own service runs it against that service. The suite checks the
-allow, the deny, the reason of a denial, the malformed requests, the token
-and the path.
+allow, the deny, the reason of a denial, the malformed requests, the token,
+the path and the request that names no workspace.
 
 **The reference implementation.** `services/access-service.ts` is an
 implementation of the protocol that a deployment may run: it applies a
@@ -495,6 +505,76 @@ runs against it in the test suite, so the protocol and its reference do not
 drift apart.
 
 ---
+
+### 6.2 The grace of an outage
+
+An outage of the access service is an outage of the deployment: the
+gateway answers `503 access_unavailable` to every request of the routes
+that need a decision, and the traffic of the deployment stops.
+
+A route may ask for a **grace**: `accessStaleGraceMs`
+(`SHUTTLE_ACCESS_STALE_GRACE_MS`, `0` by default) is the time the last
+decision of the service may be served after the service became
+unreachable.
+
+| The service | The grace | What the caller gets |
+| --- | --- | --- |
+| answers | any | The decision of the service. |
+| does not answer, and the last decision allows the caller | above zero, and the decision is inside the grace | The last decision. The gateway goes on. |
+| does not answer, and the last decision denies the caller | any | `503 access_unavailable`. |
+| does not answer, and there is no decision | any | `503 access_unavailable`. |
+| does not answer, and the decision is older than the grace | any | `503 access_unavailable`. |
+
+The rules of the grace:
+
+- the grace is **off by default**: an unreachable service is an outage, and
+  the outage has to be visible;
+- a stale decision is served only when it **allows** the caller. A denial
+  that is served instead of the outage would hide the outage from the
+  operator, and the refusal of the caller is the same answer as the refusal
+  of a gateway that fails closed;
+- the grace is a **delay of a revocation**: a caller whose access was
+  revoked keeps it until the grace is over. The grace of a route and the
+  lifetime of its decisions are the two knobs of that delay;
+- a decision that is asked for **fresh** is never stale: the revalidation
+  of an open connection asks for a fresh decision, so a connection whose
+  access was revoked is closed even when the service is down and the grace
+  is large.
+
+The decisions that were served this way are counted in
+`shuttle_access_stale_total{route}`, and the age of the decision is
+measured in `shuttle_access_stale_age_seconds{route}`.
+
+### 6.3 A route that names no workspace
+
+A route that names a workspace is always checked. A route that names none
+is not checked at all, unless it asks for it with `accessCheck`:
+
+```jsonc
+{
+  "id": "admin-api",
+  "match": { "host": "api.example.com", "path": "/admin" },
+  "upstream": "http://admin:3000",
+  "auth": { "mode": "session" },
+  "accessCheck": true
+}
+```
+
+The request of the access service then carries the subject, the route and
+the roles, and **no workspace**. The service decides on those, which is
+what a deployment without workspaces needs.
+
+The rules of a check without a workspace:
+
+- a check needs an authentication mode other than `none`: the gateway asks
+  the access service about a caller it authenticated. A route that asks
+  for a check with the mode `none` is refused when the configuration is
+  loaded;
+- the decisions of a route without a workspace have their own keys: they
+  are never served to a route that names a workspace, and the other way
+  around;
+- the identity that is written to the upstream carries no workspace, and
+  the signature of the identity is the one of the request.
 
 ## 7. The header policy
 
@@ -909,7 +989,9 @@ when one of them fails:
 1. the **route** still exists and still accepts WebSockets;
 2. the **session** still exists, when the connection was opened with one;
 3. the **access service** still allows the workspace, asked again and not
-   from the cache.
+   from the cache. A route that names no workspace and asks the access
+   service about itself is asked again as well, and the decision it
+   answers is never stale (§6.2).
 
 A revalidation that cannot be made closes the connection: a connection the
 gateway cannot vouch for is a connection it must not keep. A value of `0`
@@ -1030,6 +1112,12 @@ announced a length that fits in `replayMaxBytes`
 (`SHUTTLE_REPLAY_MAX_BYTES`, 64 KiB by default), so that it may be sent to
 a second upstream. A body that does not fit is streamed and the request is
 sent once.
+
+The body of a request that may **not** be sent again is never held in
+memory, whatever its size: it would be held for nothing, and the upstream
+would only be reached once the whole body arrived, which loses the early
+answer of the upstream (§11.2). A `POST` of a route that names several
+upstreams is therefore streamed like the `POST` of a route that names one.
 
 The body is only held in memory when the route names **several** upstreams:
 a route with one upstream has nothing to fail over to, and its body is
@@ -1164,6 +1252,8 @@ The metrics:
 | `shuttle_request_errors_total` | `route` | The answers with a status of 5xx. |
 | `shuttle_auth_failures_total` | `route`, `reason` | The callers that were rejected. |
 | `shuttle_access_unavailable_total` | `route` | The requests that were refused because the access service could not be reached. |
+| `shuttle_access_stale_total` | `route` | The decisions that were served while the access service was unreachable (§6.2). |
+| `shuttle_access_stale_age_seconds` | `route` | The age of the decisions that were served while the access service was unreachable. |
 | `shuttle_cross_site_refusals_total` | `route` | The requests that came from another site. |
 | `shuttle_websocket_connections_total` | `route` | The accepted upgrades. |
 | `shuttle_websocket_refusals_total` | `reason` | The refused handshakes. |
@@ -1454,3 +1544,5 @@ lists are numbered independently.
 | 36 | The budget of an attempt to an upstream | An attempt that has another upstream behind it is abandoned after `upstreamAttemptMs`, and the next upstream is tried. The budget of the answer still bounds the whole exchange (§11.4). |
 | 37 | The body that may be sent again | A body that fits in `replayMaxBytes` is held in memory, so that the request may be sent to a second upstream. A request that changes the state of an upstream is never sent twice (§11.4). |
 | 38 | The methods of a route | A route may name the methods it accepts. A route that names the method of the request wins over one that names none, and the one that names none is the fallback of the others (§3.3). |
+| 39 | The grace of an outage of the access service | It is off by default, and a decision that is served while the service is down is served only when it allows the caller. A denial that is served instead of the outage would hide the outage from the operator (§6.2). |
+| 40 | A route that names no workspace | The access service is asked about it only when the route asks for it with `accessCheck`. A deployment without workspaces is served by the same protocol, and the workspace of the request is then absent (§6.3). |

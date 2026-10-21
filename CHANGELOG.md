@@ -5,6 +5,61 @@ decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
 ## Unreleased
 
+### The traffic survives an outage of the access service
+
+An outage of the access service took the whole deployment down: the gateway
+answers `503 access_unavailable` to every request of a route that needs a
+decision, and the decisions it has are only good for a few seconds.
+
+A route may now ask for a **grace**: `accessStaleGraceMs`
+(`SHUTTLE_ACCESS_STALE_GRACE_MS`, `0` by default) is the time the last
+decision of the service may be served after the service became unreachable.
+
+```jsonc
+{
+  "id": "workspace-api",
+  "accessStaleGraceMs": 30000
+}
+```
+
+The rules of the grace:
+
+- it is **off by default**: an unreachable service is an outage, and the
+  outage has to be visible;
+- a stale decision is served only when it **allows** the caller. A denial
+  that is served instead of the outage would hide the outage from the
+  operator;
+- the revalidation of an open connection asks for a **fresh** decision, so
+  a connection whose access was revoked is closed even while the service is
+  down.
+
+The decisions that were served this way are counted in
+`shuttle_access_stale_total{route}`, and the age of the decision is
+measured in `shuttle_access_stale_age_seconds{route}`.
+
+### A route that names no workspace is checked by the access service
+
+The access service was only asked about a **workspace**, so a deployment
+that has no workspaces had no way to ask it anything: it had to invent a
+workspace to get an answer.
+
+A route may now ask for a check with `accessCheck`, and the request of the
+service then carries the subject, the route and the roles, and no
+workspace:
+
+```jsonc
+{
+  "id": "admin-api",
+  "auth": { "mode": "session" },
+  "accessCheck": true
+}
+```
+
+The `workspaceId` of the protocol is now optional, the reference
+implementation of the service decides on the `routes` of its policy file
+when the request names no workspace, and the conformance suite checks the
+request that names none.
+
 ### The failover of a route reaches an upstream that does not answer
 
 A route may name several upstreams, and the gateway tries them in the order
