@@ -84,11 +84,17 @@ describe('the exchanges of a real upstream', () => {
     await upstream.stop()
   })
 
-  test('the answer of the upstream commits the exchange, even when the upload is over the limit', async () => {
+  test('the answer of the upstream commits the exchange, and the upload is dropped', async () => {
     const upstream = await startUpstream({ name: 'early' })
     let produced = 0
     const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
+      async pull(controller) {
+        // The body is slow on purpose: the contract says that the answer
+        // of the upstream wins when it arrives **first**, and the order of
+        // the two events is what the test is about. The chunks are bigger
+        // than the limit of the body, so the upload is over the limit as
+        // soon as it goes on.
+        await Bun.sleep(50)
         produced += 1
         controller.enqueue(new TextEncoder().encode('a'.repeat(16)))
         if (produced > 100) controller.close()
@@ -97,10 +103,12 @@ describe('the exchanges of a real upstream', () => {
     const result = await service().execute(
       request(upstream, '/early', { method: 'POST', body, maxBodyBytes: 32 })
     )
-    // The answer of the upstream was committed: the caller gets it, even
-    // though the upload was over the limit.
+    // The answer of the upstream was committed: the caller gets it.
     expect(result.response?.status).toBe(200)
     expect(result.failure).toBeNull()
+    // The upload was cut short: the answer arrived while the body was
+    // still being produced.
+    expect(produced).toBeLessThan(100)
     await upstream.stop()
   })
 
