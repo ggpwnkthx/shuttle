@@ -102,11 +102,12 @@ export class PostgresSessionStore implements SessionStore {
     const record = newSessionRecord(input, this.#lifetime, now)
     const absolute = record.absoluteExpiresAt
     await this.#client.query(
-      `INSERT INTO shuttle.sessions (id, record, expires_at, absolute_expires_at, updated_at)
-       VALUES ($1, $2::jsonb, to_timestamp(($3 / 1000.0)::double precision), $4::timestamptz, now())`,
+      `INSERT INTO shuttle.sessions (id, record, subject, expires_at, absolute_expires_at, updated_at)
+       VALUES ($1, $2::jsonb, $3, to_timestamp(($4 / 1000.0)::double precision), $5::timestamptz, now())`,
       [
         this.#sessionKey(record.id),
         serializeSessionRecord(record),
+        record.subject,
         record.expiresAt,
         absolute === undefined ? null : new Date(absolute).toISOString(),
       ]
@@ -139,6 +140,19 @@ export class PostgresSessionStore implements SessionStore {
   async destroy(id: string | undefined): Promise<void> {
     if (!id) return
     await this.#client.query(`DELETE FROM shuttle.sessions WHERE id = $1`, [this.#sessionKey(id)])
+  }
+
+  async destroyBySubject(subject: string): Promise<number> {
+    // The prefix is part of the condition: several deployments may share
+    // one database, and the sessions of one of them are not the sessions
+    // of the others.
+    const result = await this.#client.query<{ id: string }>(
+      `DELETE FROM shuttle.sessions
+        WHERE subject = $1 AND starts_with(id, $2)
+        RETURNING id`,
+      [subject, `${this.#prefix}:`]
+    )
+    return result.rows.length
   }
 
   async ping(): Promise<boolean> {

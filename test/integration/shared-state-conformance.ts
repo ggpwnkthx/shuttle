@@ -99,6 +99,33 @@ export function describeSessionStore(
       await Bun.sleep(400)
       expect(await store.get(created.id)).toBeNull()
     })
+
+    test('the sessions of a subject are revoked at once', async () => {
+      const store = factory({ ttlMs: 60_000 })
+      const first = await store.create({ subject: 'user-7' })
+      const second = await store.create({ subject: 'user-7' })
+      const other = await store.create({ subject: 'user-8' })
+
+      const removed = await store.destroyBySubject('user-7')
+      expect(removed).toBe(2)
+      expect(await store.get(first.id)).toBeNull()
+      expect(await store.get(second.id)).toBeNull()
+      // The sessions of the other callers are untouched.
+      expect(await store.get(other.id)).not.toBeNull()
+    })
+
+    test('a subject that has no session revokes nothing', async () => {
+      const store = factory({ ttlMs: 60_000 })
+      expect(await store.destroyBySubject('user-that-never-logged-in')).toBe(0)
+    })
+
+    test('a subject that is revoked twice revokes nothing the second time', async () => {
+      const store = factory({ ttlMs: 60_000 })
+      const created = await store.create({ subject: 'user-9' })
+      expect(await store.destroyBySubject('user-9')).toBe(1)
+      expect(await store.destroyBySubject('user-9')).toBe(0)
+      expect(await store.get(created.id)).toBeNull()
+    })
   })
 }
 

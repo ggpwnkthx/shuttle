@@ -18,6 +18,7 @@
  *   only refreshes a session that it found.
  */
 
+import { createHash } from 'node:crypto'
 import {
   isPastIdleLifetime,
   isPastMaximumAge,
@@ -42,6 +43,14 @@ export interface RedisSessionCommands {
   del(key: string): Promise<number>
   ping(): Promise<string>
   eval(script: string, numkeys: number, ...keysAndArgs: (string | number)[]): Promise<unknown>
+  /** Adds a member to a set. */
+  sadd(key: string, member: string): Promise<number>
+  /** Removes a member from a set. */
+  srem(key: string, member: string): Promise<number>
+  /** The members of a set. */
+  smembers(key: string): Promise<string[]>
+  /** The lifetime of a key, in milliseconds. */
+  pexpire(key: string, ms: number): Promise<number>
 }
 
 /**
@@ -137,6 +146,10 @@ export class RedisSessionStore implements SessionStore {
       'PX',
       this.#lifetime.ttlMs
     )
+    // The session is remembered by its subject, so the sessions of one
+    // caller can be revoked at once.
+    await this.#client.sadd(this.#subjectKey(record.subject), record.id)
+    await this.#client.pexpire(this.#subjectKey(record.subject), this.#lifetime.ttlMs)
     return record
   }
 
@@ -166,7 +179,26 @@ export class RedisSessionStore implements SessionStore {
 
   async destroy(id: string | undefined): Promise<void> {
     if (!id) return
+    // The record is read first: it holds the subject of the session, and
+    // the index of the subject has to forget the session.
+    const raw = await this.#client.get(this.#sessionKey(id))
+    if (typeof raw === 'string' && raw !== '') {
+      const record = parseSessionRecord(raw)
+      if (record) await this.#client.srem(this.#subjectKey(record.subject), id)
+    }
     await this.#client.del(this.#sessionKey(id))
+  }
+
+  async destroyBySubject(subject: string): Promise<number> {
+    const key = this.#subjectKey(subject)
+    const ids = await this.#client.smembers(key)
+    if (ids.length === 0) return 0
+    let removed = 0
+    for (const id of ids) {
+      removed += await this.#client.del(this.#sessionKey(id))
+    }
+    await this.#client.del(key)
+    return removed
   }
 
   async ping(): Promise<boolean> {
@@ -185,5 +217,17 @@ export class RedisSessionStore implements SessionStore {
   /** The key of a session. */
   #sessionKey(id: string): string {
     return `${this.#prefix}:s:${id}`
+  }
+
+  /**
+   * The key of the index of the sessions of a subject.
+   *
+   * The subject is hashed: it comes from the identity provider and it may
+   * carry anything, and a key of Redis is a byte string that is read by
+   * the operators of the deployment.
+   */
+  #subjectKey(subject: string): string {
+    const digest = createHash('sha256').update(subject).digest('hex')
+    return `${this.#prefix}:u:${digest}`
   }
 }

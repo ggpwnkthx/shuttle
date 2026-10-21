@@ -145,6 +145,31 @@ describe('the store of the sessions of the process', () => {
     await Promise.all([store.destroy(created.id), store.get(created.id)])
     expect(await store.get(created.id)).toBeNull()
   })
+
+  test('the sessions of a subject are revoked at once', async () => {
+    const store = new MemorySessionStore(lifetime)
+    const first = await store.create({ subject: 'user-1' })
+    const second = await store.create({ subject: 'user-1' })
+    const other = await store.create({ subject: 'user-2' })
+
+    expect(await store.destroyBySubject('user-1')).toBe(2)
+    expect(await store.get(first.id)).toBeNull()
+    expect(await store.get(second.id)).toBeNull()
+    // The sessions of the other callers are untouched.
+    expect(await store.get(other.id)).not.toBeNull()
+  })
+
+  test('a subject that has no session revokes nothing', async () => {
+    const store = new MemorySessionStore(lifetime)
+    expect(await store.destroyBySubject('user-that-never-logged-in')).toBe(0)
+  })
+
+  test('a session that was destroyed is not revoked twice', async () => {
+    const store = new MemorySessionStore(lifetime)
+    const created = await store.create({ subject: 'user-1' })
+    await store.destroy(created.id)
+    expect(await store.destroyBySubject('user-1')).toBe(0)
+  })
 })
 
 describe('the cookie of a session', () => {

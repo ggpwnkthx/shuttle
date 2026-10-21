@@ -21,6 +21,10 @@ export interface RedisCommands {
   del(key: string): Promise<number>
   ping(): Promise<string>
   eval(script: string, numkeys: number, ...keysAndArgs: (string | number)[]): Promise<unknown>
+  sadd(key: string, member: string): Promise<number>
+  srem(key: string, member: string): Promise<number>
+  smembers(key: string): Promise<string[]>
+  pexpire(key: string, ms: number): Promise<number>
 }
 
 /**
@@ -68,6 +72,18 @@ export function withRetries<T extends RedisCommands>(client: T, attempts = 3): T
       if (property === 'eval') {
         return (script: string, numkeys: number, ...keysAndArgs: (string | number)[]) =>
           run(() => target.eval(script, numkeys, ...keysAndArgs))
+      }
+      if (property === 'sadd') {
+        return (key: string, member: string) => run(() => target.sadd(key, member))
+      }
+      if (property === 'srem') {
+        return (key: string, member: string) => run(() => target.srem(key, member))
+      }
+      if (property === 'smembers') {
+        return (key: string) => run(() => target.smembers(key))
+      }
+      if (property === 'pexpire') {
+        return (key: string, ms: number) => run(() => target.pexpire(key, ms))
       }
       const value = Reflect.get(target, property, receiver)
       return typeof value === 'function' ? value.bind(target) : value

@@ -24,7 +24,8 @@
     "identity:key": "bun run scripts/identity-key.ts",
     "load": "bun run scripts/load.ts",
     "benchmark": "bun run scripts/benchmark.ts",
-    "postgres:migrate": "bun run scripts/postgres-migrate.ts"
+    "postgres:migrate": "bun run scripts/postgres-migrate.ts",
+    "sessions": "bun run scripts/sessions.ts"
   },
   "dependencies": {
     "chokidar": "4.0.3",

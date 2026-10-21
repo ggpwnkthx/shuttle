@@ -38,10 +38,17 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS ${SCHEMA_NAME}.sessions (
      id                text PRIMARY KEY,
      record            jsonb NOT NULL,
+     subject           text,
      expires_at        timestamptz NOT NULL,
      absolute_expires_at timestamptz,
      updated_at        timestamptz NOT NULL DEFAULT now()
    )`,
+  // The subject of a session is a column of its own, so the sessions of a
+  // caller can be revoked at once. The column is added to the deployments
+  // that were created before it existed: the statement is idempotent.
+  `ALTER TABLE ${SCHEMA_NAME}.sessions ADD COLUMN IF NOT EXISTS subject text`,
+  `CREATE INDEX IF NOT EXISTS ${SCHEMA_NAME}_sessions_subject_idx
+     ON ${SCHEMA_NAME}.sessions (subject)`,
   `CREATE INDEX IF NOT EXISTS ${SCHEMA_NAME}_sessions_expires_at_idx
      ON ${SCHEMA_NAME}.sessions (expires_at)`,
 

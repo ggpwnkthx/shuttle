@@ -31,6 +31,12 @@ async function main(): Promise<void> {
   const client = createPostgresClient({ url })
   try {
     await ensureSchema(client)
+    // The sessions that were created before the subject was a column are
+    // indexed now: a revocation of a subject has to find the sessions that
+    // are already there.
+    await client.query(
+      `UPDATE shuttle.sessions SET subject = record->>'subject' WHERE subject IS NULL AND record->>'subject' IS NOT NULL`
+    )
     console.log('the schema of the shared state is up to date')
   } finally {
     await client.close()

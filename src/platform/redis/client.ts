@@ -73,6 +73,14 @@ export interface SharedStateClient {
   eval(script: string, numkeys: number, ...keysAndArgs: (string | number)[]): Promise<unknown>
   keys(pattern: string): Promise<string[]>
   ttl(key: string): Promise<number>
+  /** Adds a member to a set. */
+  sadd(key: string, member: string): Promise<number>
+  /** Removes a member from a set. */
+  srem(key: string, member: string): Promise<number>
+  /** The members of a set. */
+  smembers(key: string): Promise<string[]>
+  /** The lifetime of a key, in milliseconds. */
+  pexpire(key: string, ms: number): Promise<number>
   /** Closes the connection. */
   close(): Promise<void>
 }
@@ -92,6 +100,10 @@ interface RawClient {
   eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>
   keys(pattern: string): Promise<string[]>
   ttl(key: string): Promise<number>
+  sAdd(key: string, member: string): Promise<number>
+  sRem(key: string, member: string): Promise<number>
+  sMembers(key: string): Promise<string[]>
+  pExpire(key: string, ms: number): Promise<number>
   on(event: string, listener: (...args: never[]) => void): unknown
   connect(): Promise<void>
   quit(): Promise<string>
@@ -162,6 +174,22 @@ class SharedStateClientImpl implements SharedStateClient {
 
   async ttl(key: string): Promise<number> {
     return this.#client.ttl(key)
+  }
+
+  async sadd(key: string, member: string): Promise<number> {
+    return this.#client.sAdd(key, member)
+  }
+
+  async srem(key: string, member: string): Promise<number> {
+    return this.#client.sRem(key, member)
+  }
+
+  async smembers(key: string): Promise<string[]> {
+    return this.#client.sMembers(key)
+  }
+
+  async pexpire(key: string, ms: number): Promise<number> {
+    return this.#client.pExpire(key, ms)
   }
 
   async close(): Promise<void> {

@@ -97,6 +97,17 @@ export interface SessionStore {
    */
   get(id: string | undefined): Promise<SessionRecord | null>
   destroy(id: string | undefined): Promise<void>
+  /**
+   * Removes every session of a subject.
+   *
+   * The sessions of a caller are revoked one by one, or all at once: an
+   * account that was compromised is ended without logging every other
+   * caller out.
+   *
+   * It returns the number of sessions that were removed. A subject that
+   * has no session removes nothing.
+   */
+  destroyBySubject(subject: string): Promise<number>
   /** Reports whether the store can be reached. */
   ping(): Promise<boolean>
   close(): Promise<void>

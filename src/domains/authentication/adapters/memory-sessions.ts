@@ -36,6 +36,8 @@ export class MemorySessionStore implements SessionStore {
   #sessions: LRUCache<string, SessionRecord>
   /** The moment every session was written the last time. */
   #touched = new Map<string, number>()
+  /** The sessions of every subject, so they can be revoked at once. */
+  #bySubject = new Map<string, Set<string>>()
   #lifetime: SessionLifetime
   #maxSessions: number
 
@@ -76,6 +78,7 @@ export class MemorySessionStore implements SessionStore {
     const record = newSessionRecord(input, this.#lifetime, now)
     this.#sessions.set(record.id, record, { ttl: this.#ttlOf(record, now) })
     this.#touched.set(record.id, now)
+    this.#index(record)
     return { ...record }
   }
 
@@ -101,6 +104,18 @@ export class MemorySessionStore implements SessionStore {
     this.#remove(id)
   }
 
+  async destroyBySubject(subject: string): Promise<number> {
+    const ids = this.#bySubject.get(subject)
+    if (!ids || ids.size === 0) return 0
+    let removed = 0
+    for (const id of [...ids]) {
+      if (this.#sessions.has(id)) removed += 1
+      this.#remove(id)
+    }
+    this.#bySubject.delete(subject)
+    return removed
+  }
+
   async ping(): Promise<boolean> {
     return true
   }
@@ -113,6 +128,7 @@ export class MemorySessionStore implements SessionStore {
   clear(): void {
     this.#sessions.clear()
     this.#touched.clear()
+    this.#bySubject.clear()
   }
 
   /** The lifetime of a cookie that names a session of the store. */
@@ -123,8 +139,29 @@ export class MemorySessionStore implements SessionStore {
   }
 
   #remove(id: string): void {
+    const record = this.#sessions.get(id)
     this.#sessions.delete(id)
     this.#touched.delete(id)
+    if (!record) return
+    // The subject of the session no longer has it.
+    const ids = this.#bySubject.get(record.subject)
+    if (!ids) return
+    ids.delete(id)
+    if (ids.size === 0) this.#bySubject.delete(record.subject)
+  }
+
+  /** Remembers the session of a subject, so it can be revoked at once. */
+  #index(record: SessionRecord): void {
+    const ids = this.#bySubject.get(record.subject) ?? new Set<string>()
+    ids.add(record.id)
+    // The index follows the sessions: a session that was dropped by the
+    // bound of the store is not remembered any more.
+    if (ids.size > this.#maxSessions) {
+      for (const id of [...ids]) {
+        if (!this.#sessions.has(id)) ids.delete(id)
+      }
+    }
+    this.#bySubject.set(record.subject, ids)
   }
 
   /**

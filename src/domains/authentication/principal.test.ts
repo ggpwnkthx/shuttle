@@ -166,6 +166,9 @@ describe('the authentication of a request', () => {
           throw new Error('the store is down')
         },
         async destroy() {},
+        async destroyBySubject() {
+          return 0
+        },
         async ping() {
           return false
         },
