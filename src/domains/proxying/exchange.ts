@@ -29,6 +29,7 @@
  * | both directions are over | finalize once, clear the timers |
  */
 
+import type { UpstreamBreaker } from './breaker'
 import type { HttpTransport, UpstreamResponse } from './transport'
 
 /** The budgets of the phases of an exchange, in milliseconds. */
@@ -160,6 +161,19 @@ export interface HttpExchangeOptions {
    * A value of zero means "no limit".
    */
   maxConcurrent?: number
+  /**
+   * The health of the upstreams.
+   *
+   * The breaker moves an upstream that failed recently to the end of the
+   * list, so a request that may not be sent twice still reaches an
+   * upstream that answered recently (§11.4 of the specification).
+   */
+  breaker?: UpstreamBreaker
+  /**
+   * Called when an upstream was moved to the end of the list because it
+   * failed recently.
+   */
+  onUpstreamSkipped?: (url: string) => void
   /** Called exactly once, when the exchange is over. */
   onFinalize?: (result: ExchangeResult) => void
 }
@@ -236,6 +250,10 @@ export class HttpExchangeService {
   #onFinalize?: (result: ExchangeResult) => void
   /** The maximum number of exchanges that may run at the same time. */
   #maxConcurrent: number
+  /** The health of the upstreams, when the deployment tracks it. */
+  #breaker?: UpstreamBreaker
+  /** Called when an upstream was skipped. */
+  #onUpstreamSkipped?: (url: string) => void
   /** The exchanges that are running, so a drain can stop them. */
   #active = new Set<{ abort: () => void }>()
 
@@ -243,6 +261,8 @@ export class HttpExchangeService {
     this.#transport = options.transport
     this.#onFinalize = options.onFinalize
     this.#maxConcurrent = options.maxConcurrent ?? 0
+    this.#breaker = options.breaker
+    this.#onUpstreamSkipped = options.onUpstreamSkipped
   }
 
   /** The number of exchanges that are running. */
@@ -573,7 +593,14 @@ export class HttpExchangeService {
     const replayable = request.body === null || buffered !== null
     const retryable = isRetryable(request.method, replayable)
     const attemptBudgetMs = request.upstreamAttemptMs ?? 0
-    const urls = request.urls.length > 0 ? request.urls : ['']
+    // The upstreams are tried in the order of the route, and an upstream
+    // that failed recently is moved to the end: a request that may not be
+    // sent twice still reaches an upstream that answered recently.
+    const ordered = this.#breaker
+      ? this.#breaker.order(request.urls)
+      : { urls: [...request.urls], skipped: [] as string[] }
+    for (const url of ordered.skipped) this.#onUpstreamSkipped?.(url)
+    const urls = ordered.urls.length > 0 ? ordered.urls : ['']
     let attempt = 0
 
     const send = async (): Promise<
@@ -624,6 +651,11 @@ export class HttpExchangeService {
             // The attempt is abandoned. The transport may still settle, and
             // its answer is dropped: the body of an answer nobody waits for
             // is cancelled, so the socket is released.
+            //
+            // The upstream did not answer in time: it is a fact about the
+            // upstream and not about the request, and the breaker
+            // remembers it.
+            this.#breaker?.reportFailure(url)
             void pending.then((settled) => {
               if (settled.kind === 'response')
                 void settled.response.body?.cancel().catch(() => undefined)
@@ -634,12 +666,18 @@ export class HttpExchangeService {
             // The failure of the connection is the only one that may be
             // tried again: a timeout means the upstream answered too late,
             // and the answer may be on its way.
+            //
+            // The connection was refused: the upstream is not serving, and
+            // the breaker remembers it.
+            this.#breaker?.reportFailure(url)
             const next = attempt < urls.length
             if (!next || !retryable || result.failure || headersArrived) {
               return { kind: 'error', error: outcome.error }
             }
             continue
           }
+          // The upstream answered: it is healthy again.
+          this.#breaker?.reportSuccess(url)
           return { kind: 'response', response: outcome.response }
         } finally {
           if (timer) clearTimeout(timer)

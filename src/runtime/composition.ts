@@ -19,7 +19,7 @@ import {
 import { OidcClient } from '../domains/authentication'
 import { ConfigurationStore } from '../domains/configuration'
 import { asymmetricIdentityKey, symmetricIdentityKey } from '../domains/forwarding'
-import { HttpExchangeService } from '../domains/proxying'
+import { HttpExchangeService, UpstreamBreaker } from '../domains/proxying'
 import { MemoryRateLimiter, type RequestLimiter } from '../domains/rate-limiting'
 import { PostgresRateLimiter, RedisRateLimiter } from '../domains/rate-limiting/adapters'
 import { AccessClient } from '../domains/workspace-access'
@@ -385,9 +385,36 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     onError: onSharedStateError,
   })
 
+  // The health of the upstreams.
+  //
+  // The breaker is passive and it is per process: it learns from the
+  // failures this replica observes and it never probes an upstream. An
+  // upstream that failed recently is moved to the end of the list, so a
+  // request that may not be sent twice still reaches an upstream that
+  // answered recently (§11.4 of the specification).
+  const breaker = new UpstreamBreaker({
+    failures: settings.limits.upstreamBreakerFailures,
+    cooldownMs: settings.limits.upstreamBreakerCooldownMs,
+    onFailure: (url) => {
+      observer.recordUpstreamFailure()
+      logger.debug('the upstream failed', { upstream: url })
+    },
+    onOpen: (url) => {
+      logger.warn('the upstream is skipped', {
+        upstream: url,
+        hint: 'the upstream failed recently; it is tried again after the cooldown',
+      })
+    },
+    onRecovery: (url) => {
+      logger.info('the upstream answered again', { upstream: url })
+    },
+  })
+
   const exchanges = new HttpExchangeService({
     transport: new BunHttpTransport({ tls: settings.upstreamTls }),
     maxConcurrent: settings.resources.maxConcurrentRequests,
+    breaker,
+    onUpstreamSkipped: () => observer.recordUpstreamSkipped(),
   })
 
   // The websockets. The domain owns the reservations, the handshake and the

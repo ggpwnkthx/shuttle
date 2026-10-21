@@ -178,6 +178,25 @@ export interface LimitSettings {
   upstreamAttemptMs: number
   /** The size of a body that may be sent again to a second upstream. */
   replayMaxBytes: number
+  /**
+   * The number of consecutive failures before an upstream is skipped.
+   *
+   * The breaker is passive: it learns from the failures the gateway
+   * observes and it never probes an upstream. An upstream that failed
+   * recently is moved to the end of the list, so a request that may not be
+   * sent twice still reaches an upstream that answered recently.
+   *
+   * Zero disables the breaker: the order of the list is always the order of
+   * the file.
+   */
+  upstreamBreakerFailures: number
+  /**
+   * How long an upstream is skipped, in milliseconds.
+   *
+   * The upstream is tried again when the cooldown is over, even when it
+   * failed in the meantime: the breaker never removes an upstream.
+   */
+  upstreamBreakerCooldownMs: number
   route: { max: number; windowMs: number }
   global: { max: number; windowMs: number }
   /**
@@ -525,6 +544,26 @@ const EnvSchema = z.object({
    * Zero disables it: every body is streamed.
    */
   SHUTTLE_REPLAY_MAX_BYTES: intEnv(65_536, { min: 0 }),
+  /**
+   * The number of consecutive failures before an upstream is skipped.
+   *
+   * The breaker is passive: it learns from the failures the gateway
+   * observes and it never probes an upstream. An upstream that failed
+   * recently is moved to the end of the list, so a request that may not be
+   * sent twice — a `POST`, most of the traffic of an API — still reaches
+   * an upstream that answered recently.
+   *
+   * Zero disables the breaker: the order of the list is always the order of
+   * the file.
+   */
+  SHUTTLE_UPSTREAM_BREAKER_FAILURES: intEnv(3, { min: 0 }),
+  /**
+   * How long an upstream is skipped, in milliseconds.
+   *
+   * The upstream is tried again when the cooldown is over, even when it
+   * failed in the meantime.
+   */
+  SHUTTLE_UPSTREAM_BREAKER_COOLDOWN_MS: intEnv(30_000, { min: 0 }),
 
   SHUTTLE_TRUSTED_PROXIES: listEnv(),
   SHUTTLE_EXTERNAL_PROTO: z.enum(['http', 'https']).default('http'),
@@ -810,6 +849,8 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       maxBodyBytes: parsed.SHUTTLE_MAX_BODY_BYTES,
       upstreamAttemptMs: parsed.SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS,
       replayMaxBytes: parsed.SHUTTLE_REPLAY_MAX_BYTES,
+      upstreamBreakerFailures: parsed.SHUTTLE_UPSTREAM_BREAKER_FAILURES,
+      upstreamBreakerCooldownMs: parsed.SHUTTLE_UPSTREAM_BREAKER_COOLDOWN_MS,
       route: { max: parsed.SHUTTLE_RATE_LIMIT_MAX, windowMs: parsed.SHUTTLE_RATE_LIMIT_WINDOW_MS },
       global: {
         max: parsed.SHUTTLE_RATE_LIMIT_GLOBAL_MAX,

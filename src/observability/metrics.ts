@@ -153,6 +153,10 @@ export interface Observer {
   recordAuthFailure(routeId: string, reason: AuthFailureReason): void
   /** The upstream answered a request. */
   recordUpstream(routeId: string, durationMs: number): void
+  /** An upstream failed: the connection was refused, or the attempt ran out of time. */
+  recordUpstreamFailure(): void
+  /** An upstream was skipped because it failed recently. */
+  recordUpstreamSkipped(): void
   /** The access service answered a decision request. */
   recordAccess(routeId: string, durationMs: number): void
   /** The access service could not be asked. */
@@ -202,6 +206,8 @@ export class MetricsStore implements Observer {
   #crossSiteRefusals: Counter<'route'>
   #websocketRefusals: Counter<'reason'>
   #sharedStateErrors: Counter
+  #upstreamFailures: Counter
+  #upstreamsSkipped: Counter
   /** The routes that are tracked individually. */
   #routes = new Set<string>()
 
@@ -313,6 +319,16 @@ export class MetricsStore implements Observer {
       help: 'The times the state the replicas share was not reachable.',
       registers: [this.#registry],
     })
+    this.#upstreamFailures = new Counter({
+      name: 'shuttle_upstream_failures_total',
+      help: 'The failures of the upstreams: a connection that was refused, an attempt that ran out of time.',
+      registers: [this.#registry],
+    })
+    this.#upstreamsSkipped = new Counter({
+      name: 'shuttle_upstreams_skipped_total',
+      help: 'The times an upstream was skipped because it failed recently.',
+      registers: [this.#registry],
+    })
   }
 
   requestStarted(): void {
@@ -397,6 +413,14 @@ export class MetricsStore implements Observer {
     this.#sharedStateErrors.inc()
   }
 
+  recordUpstreamFailure(): void {
+    this.#upstreamFailures.inc()
+  }
+
+  recordUpstreamSkipped(): void {
+    this.#upstreamsSkipped.inc()
+  }
+
   async render(): Promise<string> {
     return this.#registry.metrics()
   }
@@ -435,6 +459,8 @@ export function createSilentObserver(): Observer {
     recordAccessStale: () => undefined,
     recordAccess: () => undefined,
     recordUpstream: () => undefined,
+    recordUpstreamFailure: () => undefined,
+    recordUpstreamSkipped: () => undefined,
     recordWebsocket: () => undefined,
     recordWebsocketRefusal: () => undefined,
     recordConfigReload: () => undefined,

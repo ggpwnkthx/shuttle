@@ -19,3 +19,10 @@ export type {
 } from './exchange'
 
 export type { HttpTransport, UpstreamRequest, UpstreamResponse } from './transport'
+
+export {
+  DEFAULT_BREAKER_COOLDOWN_MS,
+  DEFAULT_BREAKER_FAILURES,
+  UpstreamBreaker,
+} from './breaker'
+export type { UpstreamBreakerOptions } from './breaker'
