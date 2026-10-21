@@ -62,6 +62,8 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_MAX_CONCURRENT_REQUESTS` | `1000` | The exchanges that run at the same time. |
 | `SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS` | `2000` | The budget of one attempt to an upstream, when a route names several. An attempt that does not answer in time is abandoned and the next upstream is tried. `0` disables it. |
 | `SHUTTLE_REPLAY_MAX_BYTES` | `65536` | The size of a body that may be sent again to a second upstream. A body that fits is held in memory. `0` disables it. |
+| `SHUTTLE_UPSTREAM_BREAKER_FAILURES` | `3` | The number of consecutive failures before an upstream is skipped. The breaker is passive: it learns from the failures the gateway observes and it never probes an upstream. `0` disables it: the order of the list is always the order of the file. |
+| `SHUTTLE_UPSTREAM_BREAKER_COOLDOWN_MS` | `30000` | How long an upstream is skipped, in milliseconds. The upstream is tried again when the cooldown is over, even when it failed in the meantime. |
 | `SHUTTLE_ACCESS_STALE_GRACE_MS` | `0` | How long a decision of the access service may be served after the service became unreachable. `0` disables it: an unreachable service is an outage and the gateway answers `503` to it. |
 | `SHUTTLE_RATE_LIMIT_TOTAL_MAX` | A value | The budget of the deployment. At least one limit has to be set. |
 | `SHUTTLE_SHUTDOWN_TIMEOUT_MS` | `15000` | The deadline of the drain. |
@@ -355,6 +357,8 @@ token does not match.
 | `shuttle_websocket_refusals_total{reason}` | The handshakes that were refused. | The capacity, the origins. |
 | `shuttle_request_duration_seconds{route}` | The latency of the exchanges. | The budgets of the routes. |
 | `shuttle_upstream_duration_seconds{route}` | The latency of the upstreams: from the request that left the gateway to the final headers of the answer. | An upstream that is slow. |
+| `shuttle_upstream_failures_total` | The failures of the upstreams: a connection that was refused, an attempt that ran out of time. | An upstream that is down. |
+| `shuttle_upstreams_skipped_total` | The times an upstream was moved to the end of the list because it failed recently. | The breaker of the upstreams is working. |
 | `shuttle_bytes_in_total` / `shuttle_bytes_out_total` | The bytes that really went through. | The volume. |
 | `shuttle_active_requests` | The requests that are in flight. | The drain. |
 | `shuttle_config_reloads_total{result}` | The reloads of the configuration. | A broken file on disk. |
@@ -401,7 +405,7 @@ answered `200` and a body that was cut is a `200` with the outcome
 | The identity provider | The logins fail with `503`. The callers that have a session keep working. |
 | The access service | The requests that need a decision are refused with `503 access_unavailable`. The other routes are unaffected. A route that has a grace (`accessStaleGraceMs`) goes on with the last decision of the service, and the decisions that were served this way are counted in `shuttle_access_stale_total`. |
 | The shared state (Redis) | The sessions fail closed (`401`/`503`), the limiter fails open, the decisions are asked for again. |
-| The upstreams | The requests of the route are answered with `502`. The other routes are unaffected. |
+| The upstreams | The requests of the route are answered with `502`. The other routes are unaffected. A route that names several upstreams tries the next one when the request may be sent again, and the breaker moves an upstream that failed recently to the end of the list, so the next request of the route goes to an upstream that answered recently. |
 
 ## The recovery
 
@@ -452,8 +456,37 @@ the deployment (`SHUTTLE_SESSION_KEY_PREFIX`).
 | What is wanted | How | What it costs |
 | --- | --- | --- |
 | End the session of one caller | The session is removed from the state (`DEL <prefix>:s:<id>`). | The caller has to sign in again. |
+| **End every session of one caller** | `bun run sessions -- --subject <sub>` | The caller has to sign in again. The other callers are untouched. |
 | End the sessions of the callers of a deployment | The keys of the prefix are removed (`SCAN` + `DEL`, or `FLUSHDB` when the deployment has the state to itself). | Every caller has to sign in again. |
 | End every session of every deployment that shares the state | The keys of the prefix of the deployment are removed. | The same. |
+
+The script of the revocation talks to the state the replicas share — a Redis
+server or a Postgres server — and it takes the url of the state and the
+prefix of the deployment from the environment of the gateway:
+
+```bash
+SHUTTLE_SESSION_URL=redis://127.0.0.1:6379/0 bun run sessions -- --subject alice@example.test
+```
+
+The subject is the `sub` of the identity provider. The script prints the
+number of sessions it removed, and it prints `0` when the subject has no
+session.
+
+The gateway has no endpoint for the revocation: a gateway that answers an
+administrative request is a request an attacker reaches, and the
+administrative surface of a gateway is the surface that decides who reaches
+the applications behind it.
+
+**The index of the sessions.** The sessions are indexed by subject, so they
+can be revoked at once. The index of Redis is built as the sessions are
+created: a session that was created before the index existed is not in it,
+and it expires on its own. The index of Postgres is a column of the table,
+and the sessions that were created before the column existed are indexed by
+the migration:
+
+```bash
+bun run postgres:migrate -- postgres://user:password@host:5432/shuttle
+```
 
 The rotation of the secret of the sessions has the same effect on the
 sessions that are in flight: the state of a login is signed with the old
@@ -640,6 +673,7 @@ the knobs an operator turns when a revocation has to be immediate.
 | Format | `bun run format:check` | yes |
 | Import boundaries | `bun test test/architecture` | yes |
 | Unit and contract tests | `bun test src test/contract` | yes |
+| The property tests of the parsers | `bun test test/fuzz` | yes |
 | Network tests | `bun test test/network` | yes |
 | The shared state against a real Redis | `bun test test/integration` | yes |
 | The shared state against a real Postgres | `bun test test/integration` | yes |
@@ -649,7 +683,7 @@ the knobs an operator turns when a revocation has to be immediate.
 | The comparison of the backends | `bun run benchmark` | no |
 | The image | `docker build` and the smoke tests | yes |
 
-The last full run of the suite: **524 tests passed, 0 failed** over 52 files
+The last full run of the suite: **711 tests passed, 0 failed** over 71 files
 with Bun 1.4.3, including the tests against a real Redis 7.0.15
 (`SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0`) and against a real
 Postgres 15.18 (`SHUTTLE_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5432/shuttle`),

@@ -338,6 +338,19 @@ replica is unknown to the others.
 A store that cannot be reached denies the caller. The gateway never lets
 somebody in because the store had a hiccup.
 
+**The revocation of the sessions of a caller.** Every session of a subject
+can be revoked at once, without touching the sessions of the other callers.
+The gateway exposes no endpoint for it: a gateway that answers an
+administrative request is a request an attacker reaches. The revocation is
+a script of the deployment, against the state the replicas share:
+
+```bash
+bun run sessions -- --subject alice@example.test
+```
+
+The subject is the `sub` of the identity provider. The script removes the
+sessions and prints how many it removed.
+
 ### 5.4 The bearer tokens
 
 The bearer token is validated against the same provider: the signature
@@ -603,6 +616,12 @@ and in the signature.
 
 `Cookie` is rewritten: the cookies of the gateway (`shuttle_session`,
 `shuttle_oidc_state`) are removed, the cookies of the application are kept.
+The cookies are parsed by the library that implements the standard
+(RFC 6265), and the rules of the parsing are the rules of the standard: a
+pair without a name is not a cookie and is dropped, a name that carries a
+control character is not a name and its cookie is dropped, and the control
+characters are removed from the values. What the gateway reads is what it
+forwards.
 
 Written by the gateway:
 
@@ -1128,6 +1147,42 @@ would only be reached once the whole body arrived, which loses the early
 answer of the upstream (§11.2). A `POST` of a route that names several
 upstreams is therefore streamed like the `POST` of a route that names one.
 
+**The health of the upstreams.** The failover above only reaches the second
+upstream when the request may be sent again, so the traffic that matters
+most — the `POST` of an API — had no failover at all: when the first
+upstream accepted the connection and never answered, the request burned the
+whole budget of the route and the second upstream was never reached.
+
+The gateway therefore remembers the upstreams that failed recently and it
+**moves them to the end of the list**, so that the next request of the
+route goes to an upstream that answered recently. The rules are:
+
+- the breaker is **passive**: it learns from the failures the gateway
+  observes — a connection that was refused, an attempt that ran out of its
+  budget — and it never probes an upstream. A probe would be a request of
+  its own, and the deployment would have to decide what a healthy upstream
+  is;
+- the upstreams that are not skipped come first, in the order of the list,
+  and the skipped ones come after them, also in the order of the list. The
+  order of the file is the order of the upstreams;
+- an upstream is skipped after `SHUTTLE_UPSTREAM_BREAKER_FAILURES`
+  consecutive failures (3 by default) and for
+  `SHUTTLE_UPSTREAM_BREAKER_COOLDOWN_MS` milliseconds (30 s by default). It
+  is never removed: it is tried again when the cooldown is over, even when
+  it failed in the meantime;
+- `SHUTTLE_UPSTREAM_BREAKER_FAILURES=0` disables the breaker: the order of
+  the list is then always the order of the file;
+- the state is **per process**. Every replica learns on its own, from the
+  traffic it handles: a replica that did not see the failure sends its next
+  requests to the upstream that is down, and pays the budget of the route,
+  the way it paid it before the breaker existed;
+- a request is still sent to **one** upstream: the breaker chooses which
+  one, it never sends the request twice.
+
+The failures are published in `shuttle_upstream_failures_total` and the
+requests that were sent to another upstream are published in
+`shuttle_upstreams_skipped_total`.
+
 The body is only held in memory when the route names **several** upstreams:
 a route with one upstream has nothing to fail over to, and its body is
 streamed, so the upstream is reached while the caller uploads and the early
@@ -1268,6 +1323,8 @@ The metrics:
 | `shuttle_websocket_refusals_total` | `reason` | The refused handshakes. |
 | `shuttle_request_duration_seconds` | `route` | The latency of the exchanges. |
 | `shuttle_upstream_duration_seconds` | `route` | The latency of the upstreams: the time from the request that left the gateway to the final headers of the answer. |
+| `shuttle_upstream_failures_total` | — | The failures of the upstreams: a connection that was refused, an attempt that ran out of time. |
+| `shuttle_upstreams_skipped_total` | — | The times an upstream was moved to the end of the list because it failed recently (§11.4). |
 | `shuttle_access_duration_seconds` | `route` | The latency of the calls to the access service. Only the calls that reached the service are counted: a decision that came from the cache cost nothing. |
 | `shuttle_bytes_in_total`, `shuttle_bytes_out_total` | — | The bytes that really went through. |
 | `shuttle_active_requests` | — | The requests that are in flight. |

@@ -5,6 +5,61 @@ decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
 ## Unreleased
 
+### The traffic survives an upstream that is down
+
+The failover of a route only reached the second upstream when the request
+could be sent again. A `POST` never may, so the traffic that matters most
+— the `POST` of an API — had no failover at all: when the first upstream
+accepted the connection and never answered, the request burned the whole
+budget of the route and the second upstream was never reached.
+
+The gateway now remembers the upstreams that failed recently and moves them
+to the end of the list, so the next request of the route goes to an
+upstream that answered recently. The request is still sent to **one**
+upstream: the rule that a request that changes the state of an upstream is
+never sent twice is untouched.
+
+```bash
+SHUTTLE_UPSTREAM_BREAKER_FAILURES=3      # the failures before an upstream is skipped
+SHUTTLE_UPSTREAM_BREAKER_COOLDOWN_MS=30000 # how long it is skipped
+```
+
+The breaker is passive: it learns from the failures the gateway observes and
+it never probes an upstream. `SHUTTLE_UPSTREAM_BREAKER_FAILURES=0` disables
+it, and the order of the list is then always the order of the file.
+
+The failures are published in `shuttle_upstream_failures_total` and the
+requests that went to another upstream are published in
+`shuttle_upstreams_skipped_total`.
+
+### The sessions of a caller are revoked at once
+
+An account that was compromised had to be ended by hand: the sessions of a
+caller could only be removed one by one, or all at once for the whole
+deployment. The store of the sessions indexes them by subject, and every
+session of one subject is now removed by one operation:
+
+```bash
+bun run sessions -- --subject alice@example.test
+```
+
+The script talks to the state the replicas share — a Redis server or a
+Postgres server — and prints how many sessions it removed. The gateway
+exposes no endpoint for it: a gateway that answers an administrative request
+is a request an attacker reaches.
+
+### The cookies the gateway reads are the cookies it forwards
+
+The parser of the cookies was more permissive than the renderer: a pair
+without a name, and a name the standard does not allow, were read by the
+gateway and dropped when they were forwarded. What the gateway reads is now
+what it forwards, and the control characters are removed from the values: a
+value that carries one is a value that no browser sent, and it would end up
+in a comparison with a session id or with the state of a login.
+
+The property tests of the parsers found the difference. They are in
+`test/fuzz/parsers.test.ts` and they run on every build.
+
 ### The traffic survives an outage of the access service
 
 An outage of the access service took the whole deployment down: the gateway
