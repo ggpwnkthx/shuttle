@@ -625,6 +625,54 @@ describe('the failover of a route', () => {
     expect(upstream.seen.map((entry) => entry.url)).toEqual(['http://first.test/'])
   })
 
+  test('the body of a request that is never sent again is not held in memory', async () => {
+    // A POST is never sent to a second upstream, so its body is streamed:
+    // holding it in memory would cost the memory of the gateway for
+    // nothing, and the upstream would only be reached once the whole body
+    // arrived.
+    let streamed = false
+    const transport: HttpTransport = {
+      async send(request) {
+        streamed = !(request.body instanceof Uint8Array)
+        return { status: 200, statusText: 'OK', headers: new Headers(), body: null }
+      },
+    }
+    const service = new HttpExchangeService({ transport })
+    await service.execute({
+      method: 'POST',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers({ 'content-length': '5' }),
+      body: bodyOf(['hello']),
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      replayMaxBytes: 1024,
+    })
+    expect(streamed).toBe(true)
+  })
+
+  test('the body of an idempotent request is held in memory', async () => {
+    let buffered = false
+    const transport: HttpTransport = {
+      async send(request) {
+        buffered = request.body instanceof Uint8Array
+        return { status: 200, statusText: 'OK', headers: new Headers(), body: null }
+      },
+    }
+    const service = new HttpExchangeService({ transport })
+    await service.execute({
+      method: 'PUT',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers({ 'content-length': '5' }),
+      body: bodyOf(['hello']),
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      replayMaxBytes: 1024,
+    })
+    expect(buffered).toBe(true)
+  })
+
   test('an upstream that does not answer in time is left for the next one', async () => {
     const urls: string[] = []
     const transport: HttpTransport = {

@@ -1087,7 +1087,7 @@ may be sent again:
 | The request | It is tried again |
 | --- | --- |
 | `GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT` or `DELETE` without a body | Yes. |
-| Any other method | No: it may change the state of an upstream. |
+| Any other method | No: it may change the state of an upstream. The body is streamed and the request is sent to one upstream. |
 | A request with a body that is too large to be held in memory | No: the bytes are already on their way to the first upstream. |
 | A request with a body that fits in `replayMaxBytes` | Yes: the body is held in memory and sent again. |
 
@@ -1546,3 +1546,4 @@ lists are numbered independently.
 | 38 | The methods of a route | A route may name the methods it accepts. A route that names the method of the request wins over one that names none, and the one that names none is the fallback of the others (§3.3). |
 | 39 | The grace of an outage of the access service | It is off by default, and a decision that is served while the service is down is served only when it allows the caller. A denial that is served instead of the outage would hide the outage from the operator (§6.2). |
 | 40 | A route that names no workspace | The access service is asked about it only when the route asks for it with `accessCheck`. A deployment without workspaces is served by the same protocol, and the workspace of the request is then absent (§6.3). |
+| 41 | The body of a request that is never sent again | It is not held in memory: it would be held for nothing, and the upstream would only be reached once the whole body arrived (§11.4). |

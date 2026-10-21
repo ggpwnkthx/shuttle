@@ -184,6 +184,18 @@ class PayloadTooLargeError extends Error {
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE', 'PUT', 'DELETE'])
 
 /**
+ * Reports whether a method may be sent to two upstreams.
+ *
+ * The methods that may be sent twice are the idempotent ones of HTTP:
+ * sending them again has the same effect as sending them once. A method
+ * that is not idempotent may change the state of an upstream, so it is
+ * sent to one upstream and to no other.
+ */
+export function isIdempotentMethod(method: string): boolean {
+  return IDEMPOTENT_METHODS.has(method.toUpperCase())
+}
+
+/**
  * Reports whether a request may be sent to another upstream.
  *
  * A request that changes the state of an upstream may not be sent twice,
@@ -191,7 +203,7 @@ const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE', 'PUT', 'D
  * on their way to the first upstream.
  */
 function isRetryable(method: string, replayable: boolean): boolean {
-  if (!IDEMPOTENT_METHODS.has(method.toUpperCase())) return false
+  if (!isIdempotentMethod(method)) return false
   // A request that has a body may only be sent again when the body is
   // held in memory: the bytes of a stream are already on their way to the
   // first upstream.
@@ -396,6 +408,11 @@ export class HttpExchangeService {
      *
      * A body that is larger is streamed: it passes to the upstream while it
      * arrives, and the request is not sent twice.
+     *
+     * The body of a request that may not be sent twice is never held in
+     * memory: it would be held for nothing, and the upstream would only
+     * be reached once the whole body arrived, which loses the early
+     * answer of the upstream (§11.2).
      */
     const replayLimit = request.replayMaxBytes ?? 0
     const mayBuffer =
@@ -404,6 +421,9 @@ export class HttpExchangeService {
       // streamed, so the upstream is reached while the caller uploads and
       // the early answer of the upstream is preserved (§11.2).
       request.urls.length > 1 &&
+      // A request that changes the state of an upstream is never sent to
+      // a second one, so its body is streamed as well.
+      isIdempotentMethod(request.method) &&
       replayLimit > 0 &&
       declared !== null &&
       Number.isFinite(Number(declared)) &&

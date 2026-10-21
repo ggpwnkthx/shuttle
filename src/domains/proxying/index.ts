@@ -6,7 +6,7 @@
  * committed and the registry of the exchanges that are running.
  */
 
-export { HttpExchangeService, expectsBody } from './exchange'
+export { HttpExchangeService, expectsBody, isIdempotentMethod } from './exchange'
 export type {
   ExchangeFailure,
   ExchangeFailureKind,

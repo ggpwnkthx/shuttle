@@ -60,6 +60,18 @@ implementation of the service decides on the `routes` of its policy file
 when the request names no workspace, and the conformance suite checks the
 request that names none.
 
+### The body of a request that is never sent again is not held in memory
+
+A route that names several upstreams held the body of every request in
+memory, up to `SHUTTLE_REPLAY_MAX_BYTES`, so that it could be sent to the
+next upstream. The body of a request that may not be sent twice — a
+`POST`, or any method that is not idempotent — was held for nothing: it
+cost the memory of the gateway and the upstream was only reached once the
+whole body had arrived, which loses the early answer of the upstream.
+
+The body of a request that may not be sent again is now streamed, like the
+body of a route that names one upstream.
+
 ### The failover of a route reaches an upstream that does not answer
 
 A route may name several upstreams, and the gateway tries them in the order
