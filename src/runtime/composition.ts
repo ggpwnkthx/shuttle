@@ -83,26 +83,36 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
   // The state the replicas share: the rate limits and the cached decisions.
   // It lives in a Redis server when one is configured, and in the memory of
   // the process otherwise.
-  const sharedClient = isRedisUrl(settings.sharedState.url)
-    ? withRetries(
-        createRedisClient({ url: settings.sharedState.url!, tlsCa: settings.sharedState.tlsCa })
-      )
-    : undefined
   const onSharedStateError = (error: unknown): void => {
     logger.warn('the shared state is not reachable', { error })
     observer.recordSharedStateError()
   }
+  const sharedClient = isRedisUrl(settings.sharedState.url)
+    ? withRetries(
+        createRedisClient({
+          url: settings.sharedState.url!,
+          tlsCa: settings.sharedState.tlsCa,
+          sentinelMaster: settings.sharedState.sentinelMaster,
+          onError: onSharedStateError,
+        })
+      )
+    : undefined
 
   // The store of the sessions. The scheme of the url selects the backend,
   // so the infrastructure only has to provide a single value.
-  const sessions = isRedisUrl(settings.session.url)
+  const sessionClient = isRedisUrl(settings.session.url)
+    ? withRetries(
+        createRedisClient({
+          url: settings.session.url,
+          tlsCa: settings.session.tlsCa,
+          sentinelMaster: settings.session.sentinelMaster,
+          onError: onSharedStateError,
+        })
+      )
+    : undefined
+  const sessions = sessionClient
     ? new RedisSessionStore({
-        client: withRetries(
-          createRedisClient({
-            url: settings.session.url,
-            tlsCa: settings.session.tlsCa,
-          })
-        ),
+        client: sessionClient,
         keyPrefix: settings.session.keyPrefix,
         ttlMs: settings.session.ttlMs,
         maxAgeMs: settings.session.maxAgeMs,
@@ -304,7 +314,8 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
 
   const closeResources = async (): Promise<void> => {
     await access.close()
-    sharedClient?.close()
+    await sharedClient?.close()
+    await sessionClient?.close()
   }
 
   return {

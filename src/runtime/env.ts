@@ -52,6 +52,13 @@ export interface SessionSettings {
   touchIntervalMs: number
   maxSessions: number
   tlsCa?: string
+  /**
+   * The name of the master, when the server is behind sentinel.
+   *
+   * The hosts of the url are then the sentinels, and the master and the
+   * replicas are discovered from them.
+   */
+  sentinelMaster?: string
   /** The secret that signs the state cookie and that derives the signature key. */
   secret: string
 }
@@ -61,6 +68,8 @@ export interface SharedStateSettings {
   url?: string
   keyPrefix: string
   tlsCa?: string
+  /** The name of the master, when the server is behind sentinel. */
+  sentinelMaster?: string
 }
 
 /** The settings of the listener and of the network. */
@@ -334,6 +343,15 @@ const EnvSchema = z.object({
   SHUTTLE_SHARED_STATE_TLS_CA: tlsCaEnv(),
   SHUTTLE_SHARED_STATE_TLS_CA_BASE64: tlsCaEnv(),
 
+  /**
+   * The name of the master, when the shared state is behind sentinel.
+   *
+   * The hosts of the urls are then the sentinels. The master and the
+   * replicas are discovered from them, and a failover is transparent for
+   * the gateway.
+   */
+  SHUTTLE_REDIS_SENTINEL_MASTER: z.string().optional(),
+
   SHUTTLE_COOKIE_SECURE: boolEnv(),
   SHUTTLE_LOG_LEVEL: z.string().optional(),
   SHUTTLE_METRICS_TOKEN: z.string().optional(),
@@ -551,6 +569,7 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       touchIntervalMs: parsed.SHUTTLE_SESSION_TOUCH_INTERVAL_MS,
       maxSessions: parsed.SHUTTLE_SESSION_MAX_SESSIONS,
       tlsCa: parsed.SHUTTLE_SESSION_TLS_CA ?? parsed.SHUTTLE_SESSION_TLS_CA_BASE64,
+      sentinelMaster: parsed.SHUTTLE_REDIS_SENTINEL_MASTER,
       // A secret that is generated per process is only valid on the replica
       // that generated it: the signatures of the identity are not verifiable
       // by the upstreams of the other replicas and every restart invalidates
@@ -565,6 +584,7 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
         parsed.SHUTTLE_SHARED_STATE_TLS_CA_BASE64 ??
         parsed.SHUTTLE_SESSION_TLS_CA ??
         parsed.SHUTTLE_SESSION_TLS_CA_BASE64,
+      sentinelMaster: parsed.SHUTTLE_REDIS_SENTINEL_MASTER,
     },
     browser: {
       cookieSecure: parsed.SHUTTLE_COOKIE_SECURE ?? production,
