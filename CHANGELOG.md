@@ -29,6 +29,15 @@ deployment and in the changelog. They named different releases. They all
 name `0.2.0` now, and `bun run versions` fails the build when they drift
 apart again.
 
+### The release of the image
+
+The release workflow publishes the image to the registry of the repository,
+with the tag of the release (`v0.2.0`) and with the version itself
+(`0.2.0`), which is the tag the manifests of the deployment name. It
+refuses to release a tag that does not name the version of the package, and
+it starts the image against a real Redis and waits for the readiness of the
+gateway, the way a deployment runs.
+
 ### The host of a request
 
 The `x-forwarded-host` of a **trusted proxy** is now honoured. It is the
