@@ -12,6 +12,7 @@
 
 import { IDENTITY_SIGNATURE_HEADER, type WrittenIdentity } from './identity'
 import type { ForwardingContext } from './context'
+import { cookieNameOf, parseCookieHeader, renderCookieHeader } from './cookies'
 
 /**
  * The headers that belong to the connection and not to the message.
@@ -115,17 +116,6 @@ export function connectionNominatedHeaders(headers: Headers): string[] {
 }
 
 /**
- * The name of a cookie of a `Cookie` header.
- *
- * A `Cookie` header is a list of `name=value` pairs that are separated by
- * a semicolon. The name is the part in front of the first `=`.
- */
-export function cookieNameOf(pair: string): string {
-  const index = pair.indexOf('=')
-  return (index === -1 ? pair : pair.slice(0, index)).trim()
-}
-
-/**
  * Removes the cookies of the gateway from a `Cookie` header.
  *
  * The cookies of the upstream application are kept: they belong to the
@@ -141,12 +131,12 @@ export function stripGatewayCookies(
   gatewayCookies: readonly string[]
 ): string {
   if (!cookieHeader) return ''
-  const kept = cookieHeader
-    .split(';')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .filter((part) => !gatewayCookies.includes(cookieNameOf(part)))
-  return kept.join('; ')
+  const kept: Record<string, string> = {}
+  for (const [name, value] of Object.entries(parseCookieHeader(cookieHeader))) {
+    if (gatewayCookies.includes(name)) continue
+    kept[name] = value
+  }
+  return renderCookieHeader(kept)
 }
 
 /**

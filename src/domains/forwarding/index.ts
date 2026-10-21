@@ -39,11 +39,12 @@ export {
   buildUpstreamHeaders,
   buildWebsocketUpstreamHeaders,
   connectionNominatedHeaders,
-  cookieNameOf,
   isGatewaySetCookie,
   stripGatewayCookies,
 } from './headers'
 export type { UpstreamHeadersOptions } from './headers'
+
+export { cookieNameOf, parseCookieHeader, renderCookieHeader } from './cookies'
 
 export {
   buildUpstreamTarget,

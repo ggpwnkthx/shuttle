@@ -9,6 +9,8 @@
  * application renders them into the answers.
  */
 
+import { stringifySetCookie } from 'cookie'
+
 /** The cookie that carries the id of the session of a browser caller. */
 export const SESSION_COOKIE_NAME = 'shuttle_session'
 
@@ -132,13 +134,13 @@ export function loginStateDeletionCookie(options: CookieOptions): GatewayCookie 
  * separated by an `=`, the attributes are separated by `; `.
  */
 export function serializeCookie(cookie: GatewayCookie): string {
-  const parts = [`${cookie.name}=${cookie.value}`]
-  if (cookie.attributes.maxAge !== undefined) {
-    parts.push(`Max-Age=${Math.max(0, Math.floor(cookie.attributes.maxAge))}`)
-  }
-  if (cookie.attributes.path) parts.push(`Path=${cookie.attributes.path}`)
-  if (cookie.attributes.httpOnly) parts.push('HttpOnly')
-  if (cookie.attributes.secure) parts.push('Secure')
-  if (cookie.attributes.sameSite) parts.push(`SameSite=${cookie.attributes.sameSite}`)
-  return parts.join('; ')
+  return stringifySetCookie({
+    name: cookie.name,
+    value: cookie.value,
+    path: cookie.attributes.path,
+    httpOnly: cookie.attributes.httpOnly,
+    secure: cookie.attributes.secure,
+    sameSite: cookie.attributes.sameSite.toLowerCase() as 'lax',
+    maxAge: cookie.attributes.maxAge,
+  })
 }
