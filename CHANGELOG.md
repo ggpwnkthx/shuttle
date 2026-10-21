@@ -3,6 +3,84 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
+## 0.4.0
+
+The release that makes the backend of the shared state a choice of the
+deployment: the sessions, the rate limits and the cached decisions live in
+a Redis server or in a Postgres server, and the gateway measures the two
+side by side.
+
+### The shared state may live in a Postgres server
+
+The scheme of the url picks the backend:
+
+| The url | The backend |
+| --- | --- |
+| `redis://...`, `rediss://...` | A Redis server, exactly as before. |
+| `postgres://...`, `postgresql://...` | A Postgres server. |
+
+The two hold the same three things and they hold them with **the same
+contract**: the same suite of tests runs against both
+(`test/integration/shared-state-conformance.ts`), so the two are proven to
+be interchangeable and not only to be similar.
+
+The atomicity of the shared state is the same on both sides. The two
+scripts of Redis become two **functions** of Postgres, because a function
+call is a transaction of the server:
+
+| Operation | Redis | Postgres |
+| --- | --- | --- |
+| Read a session and refresh its expiry | the `TOUCH_SCRIPT` | `shuttle.session_touch` |
+| Count a request in the window of a caller | the `WINDOW_SCRIPT` | `shuttle.rate_limit_check` |
+
+The counters of the replicas are exact: the checks of one key are
+serialized with an advisory lock, and the test of the replicas proves it
+with several processes that count at the same time.
+
+### The comparison of the backends
+
+The script `bun run benchmark` runs the same traffic against the same
+gateway with the two backends and prints the table of the comparison. The
+measurements are in [docs/capacity.md](docs/capacity.md).
+
+On the reference environment, with 20 000 requests at 50 in flight:
+
+| Scenario | In the process | Redis | Postgres |
+| --- | --- | --- | --- |
+| The limits | 6380 req/s | 5685 req/s | 3492 req/s |
+| The limits and the session | 6260 req/s | 4555 req/s | 2591 req/s |
+| The whole path of a request | 5130 req/s | 3397 req/s | 2438 req/s |
+
+Redis costs about a tenth of the throughput on the path of the limiter;
+Postgres costs about half of it. The difference is the round trip: every
+round trip is a round trip, and a transaction of a database is a round
+trip that waits for the server.
+
+### The server does not wait for the disk
+
+`SHUTTLE_POSTGRES_SYNCHRONOUS_COMMIT=off` is the default. The state of the
+shared state is a protection and not a ledger: a counter that is lost when
+the server crashes costs a caller a few requests of its budget. It is the
+same guarantee a Redis server gives without its append only file, and it
+is the difference between a millisecond and a tenth of a millisecond on
+every transaction of the limiter. With `on`, the scope of the deployment
+serializes the requests of the whole deployment and every one of them
+waits for the disk.
+
+### The schema of the shared state
+
+The gateway builds the schema of a Postgres server when it connects
+(`SHUTTLE_POSTGRES_AUTO_MIGRATE`, the default outside a production
+deployment). The statements are idempotent and an advisory lock makes one
+replica build the schema while the others wait for it. A production
+deployment that applies its own migrations says no and runs
+`bun run postgres:migrate -- <url>` instead.
+
+**This is not a change of the contract of the gateway.** The behaviour of
+the sessions, of the limits and of the decisions is the same on both
+backends, and a deployment that keeps its Redis server does not change
+anything.
+
 ## 0.3.0
 
 The release that replaces the hand-rolled parts of the trust boundary with
