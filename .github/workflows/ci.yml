@@ -181,6 +181,20 @@ jobs:
       - name: build
         run: docker build -f Dockerfile -t shuttle:ci .
 
+      - name: the key of the identity signature
+        run: |
+          # The private key that signs the identity of the requests. The
+          # upstreams are given the public key of it, and a production
+          # deployment has to set it: the gateway refuses to start
+          # without one.
+          openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
+            -out "$RUNNER_TEMP/identity-key.pem"
+          {
+            echo "SHUTTLE_IDENTITY_SIGNING_KEY<<EOF"
+            cat "$RUNNER_TEMP/identity-key.pem"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
       - name: the image starts with the configuration of a deployment
         run: |
           # The state of the deployment is shared: the image reaches the
@@ -188,6 +202,7 @@ jobs:
           docker run -d --name shuttle -p 8080:8080 \
             --add-host host.docker.internal:host-gateway \
             -e SHUTTLE_SESSION_SECRET=ci-secret \
+            -e SHUTTLE_IDENTITY_SIGNING_KEY \
             -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
             -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
             -e SHUTTLE_OIDC_CLIENT_SECRET=ci-client-secret \
@@ -233,6 +248,7 @@ jobs:
         run: |
           if docker run --rm \
             -e SHUTTLE_SESSION_SECRET=ci-secret \
+            -e SHUTTLE_IDENTITY_SIGNING_KEY \
             -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
             -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
             -e SHUTTLE_OIDC_CLIENT_SECRET=ci-client-secret \
@@ -250,6 +266,7 @@ jobs:
         run: |
           if docker run --rm \
             -e SHUTTLE_SESSION_SECRET=ci-secret \
+            -e SHUTTLE_IDENTITY_SIGNING_KEY \
             -e SHUTTLE_ACCESS_URL=https://access.example.com \
             -e SHUTTLE_ACCESS_TOKEN=ci-access-token \
             -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
@@ -264,6 +281,7 @@ jobs:
         run: |
           if docker run --rm \
             -e SHUTTLE_SESSION_SECRET=ci-secret \
+            -e SHUTTLE_IDENTITY_SIGNING_KEY \
             -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
             -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
             -e SHUTTLE_OIDC_CLIENT_SECRET=ci-client-secret \
@@ -277,10 +295,33 @@ jobs:
             exit 1
           fi
 
+      - name: the image refuses to start without the key of the identity signature
+        run: |
+          # The signature of the identity is asymmetric in a production
+          # deployment: the gateway holds the private key and the upstreams
+          # hold the public one, so an upstream that verifies an identity
+          # cannot mint one.
+          if docker run --rm \
+            -e SHUTTLE_SESSION_SECRET=ci-secret \
+            -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
+            -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
+            -e SHUTTLE_OIDC_CLIENT_SECRET=ci-client-secret \
+            -e SHUTTLE_OIDC_REDIRECT_URI=https://shuttle.example.com/auth/callback \
+            -e SHUTTLE_ACCESS_URL=https://access.example.com \
+            -e SHUTTLE_ACCESS_TOKEN=ci-access-token \
+            -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
+            -e SHUTTLE_SESSION_URL=redis://127.0.0.1:6379/0 \
+            -e SHUTTLE_SHARED_STATE_URL=redis://127.0.0.1:6379/1 \
+            shuttle:ci; then
+            echo "the gateway started without the key of the identity signature"
+            exit 1
+          fi
+
       - name: the image refuses to start with the state in the process
         run: |
           if docker run --rm \
             -e SHUTTLE_SESSION_SECRET=ci-secret \
+            -e SHUTTLE_IDENTITY_SIGNING_KEY \
             -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
             -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
             -e SHUTTLE_OIDC_CLIENT_SECRET=ci-client-secret \
