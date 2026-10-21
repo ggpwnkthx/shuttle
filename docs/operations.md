@@ -43,6 +43,7 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_SESSION_SECRET` | A random value of at least 32 bytes | It signs the state of the login and the signature of the identity. It has to be the **same on every replica**. |
 | `SHUTTLE_SESSION_URL` | `rediss://:<password>@<redis>:6379/0` | The sessions of the callers. It has to be a Redis server in production. |
 | `SHUTTLE_SHARED_STATE_URL` | `rediss://:<password>@<redis>:6379/1` | The limits and the decisions. It defaults to the url of the sessions. It has to be a Redis server in production. |
+| `SHUTTLE_REDIS_SENTINEL_MASTER` | — | The name of the master, when the server is behind sentinel. The hosts of the urls are then the sentinels. Empty by default. |
 | `SHUTTLE_METRICS_TOKEN` | A random value | The metrics are only served with it. |
 | `SHUTTLE_UPSTREAM_TLS_CA` | The authority of the deployment | The certificate of the upstream is verified with it. |
 | `SHUTTLE_UPSTREAM_TLS_CERT` / `_KEY` | The certificate of the gateway and its private key | They are presented to the upstreams that ask for a client certificate. They belong together. |
@@ -56,6 +57,25 @@ the shared state. A replica can be replaced at any moment.
 
 The full list, with the default of every value, is in
 [.env.example](../.env.example).
+
+## The shape of the shared state
+
+The url of the shared state names the shape of the server:
+
+| The url | The server |
+| --- | --- |
+| `redis://host:6379/0` | A server. |
+| `redis://host-a:6379,host-b:6379/0` | A **cluster**: the hosts are its masters. |
+| `redis://host-a:26379,host-b:26379/0` with `SHUTTLE_REDIS_SENTINEL_MASTER` | The **sentinels** of a server: the master and the replicas are discovered from them, and a failover is transparent for the gateway. |
+
+A cluster holds one database, so the path of the url is dropped in that
+shape. The certificate of the server is verified with the authority of the
+deployment (`SHUTTLE_SESSION_TLS_CA` and `SHUTTLE_SHARED_STATE_TLS_CA`).
+
+The client connects in the background and keeps trying, so a gateway that
+starts while the shared state is down stays up: it answers `503` to the
+readiness probe, it denies the callers that need a session, and it becomes
+ready when the server answers. The failure is reported once per outage.
 
 ## The policies of the routes
 

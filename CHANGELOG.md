@@ -3,6 +3,79 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
+## 0.3.0
+
+The release that replaces the hand-rolled parts of the trust boundary with
+the libraries that implement the standards, and that slides the window of
+the limits.
+
+### The signature of the identity is a JWS
+
+The signature of the identity was a hex digest of a canonical JSON array,
+with the version in front of the value. Every upstream that wanted to
+verify it had to implement the canonical form of Shuttle **and** compare a
+value, and a comparison can be written wrong.
+
+The signature is now a **JWS** (RFC 7515) signed with `HS256` and the
+derived key, with a **detached** payload: the payload is not transmitted.
+The upstream rebuilds it from the request and from the identity headers,
+rebuilds the compact serialization around it and verifies it with a
+standard library:
+
+```ts
+await jose.compactVerify(token, derivedKey)
+```
+
+The payload is a canonical JSON **object** with named fields, so a field
+cannot be confused with another one and no value can move from one field
+into another.
+
+**This is a change of the contract.** The value of the header is now
+`v4=<the detached JWS>` instead of `v3=<hex>`, and the payload is an
+object instead of an array. An upstream that verifies the signature has to
+be changed with the gateway. The migration is described in
+[spec.md](docs/spec.md) §7.4.
+
+### The cookies are parsed by the standard
+
+The gateway had two parsers of its own, with two slightly different rules:
+a quoted value, a value that carries an `=` and an `Expires` that carries
+a comma were not handled the way RFC 6265 describes them. The parsing and
+the rendering are now the ones of the library that implements the
+standard. The rules of the gateway do not change: the first value of a
+name that appears twice is kept, and the name of a cookie is case
+sensitive.
+
+### The window of the limits slides
+
+The limits were counted in **fixed** windows, and a fixed window has a
+property that a limit does not want: a caller that spent its whole budget
+at the end of a window and its whole budget again at the beginning of the
+next one crossed the gateway twice as fast as the limit allows.
+
+The window **slides**: the count of a caller is the number of its requests
+in the last `windowMs` milliseconds. It is counted in buckets of at most
+60, so the state of a caller does not grow with its traffic, and the
+boundary of a bucket is a moment every replica can compute, so the
+replicas count in the same buckets. The `retry-after` of a refusal is the
+time until the oldest requests of the window leave it.
+
+### The client of the shared state is the one of the `redis` package
+
+The client was the one of the runtime, so the shared state was tied to it
+and could not speak to a cluster nor to a sentinel. The client is now the
+one of the `redis` package:
+
+- a url that names several hosts is a **cluster**;
+- `SHUTTLE_REDIS_SENTINEL_MASTER` names the master, and the hosts of the
+  url are then the **sentinels**;
+- the offline queue stays disabled, so a command that is sent before the
+  connection is established fails right away and the gateway denies the
+  caller instead of piling up the requests;
+- the connection is established in the background, so a gateway that starts
+  while the shared state is down stays up and becomes ready when the
+  server answers.
+
 ## 0.2.0
 
 The release that closes the gap between the specification and the

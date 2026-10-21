@@ -11,6 +11,6 @@ resources:
   - ingress.yaml
 images:
   - name: ghcr.io/ggpwnkthx/shuttle
-    newTag: 0.2.0
+    newTag: 0.3.0
 commonLabels:
   app.kubernetes.io/part-of: platform

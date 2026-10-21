@@ -27,8 +27,9 @@ The documentation is in [docs/](docs/):
 | **Authentication** | OpenID Connect with PKCE for the browser, bearer tokens for the API clients, in four modes that decide predictably which credential a route accepts. |
 | **Authorization** | The access service decides who may use a workspace; the gateway asks and fails closed. |
 | **Proxying** | Streamed bodies, server sent events, uploads, a budget per phase of the upstream exchange and a limit on the body. |
-| **Header policy** | The hop-by-hop headers and the spoofable headers are removed, the identity is written by the gateway and signed, and the forwarding headers are only trusted from known proxies. |
+| **Header policy** | The hop-by-hop headers and the spoofable headers are removed, the identity is written by the gateway and signed with a JWS an upstream verifies with a standard library, and the forwarding headers are only trusted from known proxies. |
 | **Sessions** | Server side, in the process or in Redis, with an idle lifetime and a maximum age. |
+| **Limits** | Four scopes of sliding windows, shared by the replicas through Redis, that bound a flood without a boundary burst. |
 | **WebSockets** | The upstream handshake first, bounded buffers, keepalive, and a revalidation that closes a connection whose access was revoked. |
 | **Operations** | Health and readiness probes, Prometheus metrics, structured logs with redaction, a hot reload of the configuration and a graceful drain. |
 

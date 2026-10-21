@@ -10,7 +10,7 @@ which file owns what; [decisions.md](decisions.md) records the decisions
 behind the contract. Recommendations in an implementation guide do not
 become requirements until they are recorded here.
 
-Status: 0.2.0. Runtime: Bun ≥ 1.4.3 (§15, decision 20). Listener: HTTP and
+Status: 0.3.0. Runtime: Bun ≥ 1.4.3 (§15, decision 20). Listener: HTTP and
 WebSocket on `SHUTTLE_GATEWAY_HOST:SHUTTLE_GATEWAY_PORT` (default
 `0.0.0.0:8080`).
 
@@ -228,6 +228,18 @@ The full list, with the default of every value, is in
 | `SHUTTLE_ACCESS_TOKEN` | The token the gateway authenticates with. `SHUTTLE_ACCESS_ALLOW_ANONYMOUS=true` replaces it when the service authenticates the gateway by other means. |
 | One rate limit | At least one of `SHUTTLE_RATE_LIMIT_MAX`, `SHUTTLE_RATE_LIMIT_GLOBAL_MAX`, `SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX` and `SHUTTLE_RATE_LIMIT_TOTAL_MAX` must be non-zero. `SHUTTLE_ALLOW_NO_RATE_LIMITS=true` replaces them when another layer protects the deployment. |
 | The shared state | `SHUTTLE_SESSION_URL` and `SHUTTLE_SHARED_STATE_URL` must name a Redis server: a session that lives in the memory of one replica is unknown to the others, and a limit that lives in the memory of one replica is the limit of that replica. `SHUTTLE_ALLOW_MEMORY_STATE=true` replaces them when the deployment is a single node that accepts it. |
+
+The url of the shared state names the shape of the server:
+
+| The url | The server |
+| --- | --- |
+| `redis://host:6379/0` | A server. |
+| `redis://host-a:6379,host-b:6379/0` | A cluster: the hosts are its masters. |
+| `redis://host-a:26379,host-b:26379/0` with `SHUTTLE_REDIS_SENTINEL_MASTER` | The sentinels of a server: the master and the replicas are discovered from them. |
+
+`SHUTTLE_REDIS_SENTINEL_MASTER` is the name of the master, the one the
+sentinels agree on. It is empty by default: a deployment that is not
+behind sentinel does not set it.
 
 ---
 
@@ -451,23 +463,42 @@ replicas or restarts. The gateway refuses to start in production without
 it. The secret is never sent to an upstream; an upstream verifies the
 signature with the derived key.
 
-**The payload.** A canonical JSON array, so no value can move from one
-field into another:
+**The format.** The signature is a **JWS** (RFC 7515) signed with `HS256`
+and the derived key. The protected header names the algorithm and the type
+of the signature:
 
+```json
+{ "alg": "HS256", "typ": "shuttle-identity" }
 ```
-["v3", METHOD, path, query, host, subject, workspaceId, email, sortedRoles]
+
+**The payload.** The payload is **detached**: it is not transmitted. An
+upstream rebuilds it from the request and from the identity headers it
+received, so a signature that does not belong to the request is refused by
+the verification itself, and not by a comparison that could be written
+wrong.
+
+The payload is a canonical JSON **object**, so no value can move from one
+field into another and no field can be confused with another one:
+
+```json
+{"v":"v4","method":"GET","path":"/base/ws/123","query":"?x=1","host":"api.example.com","subject":"user-1","workspaceId":"…","email":"…","roles":["admin","dev"]}
 ```
 
 | Field | Value |
 | --- | --- |
-| `METHOD` | The method, upper-cased. |
+| `v` | The version of the format, `v4`. |
+| `method` | The method, upper-cased. |
 | `path` | The path **as the upstream received it**: the base path of the upstream in front of the request path. |
 | `query` | The query string as the upstream received it, with its leading `?`. The empty string when there is none. |
 | `host` | The effective host (§7.3), lower-cased. |
 | `subject` | The subject, sanitized as in §7.1. |
 | `workspaceId` | The workspace, sanitized. The empty string when there is none. |
 | `email` | The e-mail, sanitized. The empty string when it is not known. |
-| `sortedRoles` | The roles, sorted ascending. The order is not part of the meaning. |
+| `roles` | The roles, sorted ascending. The order is not part of the meaning. |
+
+The fields are written in this order, and the roles are sorted, so the
+payload is one string that every replica and every upstream rebuilds
+byte for byte.
 
 The signature covers exactly the values that are written into the headers:
 the **sanitized** subject, e-mail and workspace, and the **filtered** roles
@@ -475,9 +506,22 @@ the **sanitized** subject, e-mail and workspace, and the **filtered** roles
 would make the comma separated list of `x-shuttle-roles` ambiguous). The
 roles that are handed to the access service are not filtered.
 
-**The value.** `v3=<hex>`. The version is part of the value so the format
-can change without breaking the verification. The comparison is done in
-constant time.
+**The value.** `v4=<the detached compact JWS>`. The version is part of the
+value so the format can change without breaking the verification.
+
+**The verification of an upstream.** The upstream:
+
+1. reads `x-shuttle-signature` and removes the `v4=` prefix;
+2. splits the value into its three parts: the protected header, the
+   **empty** payload and the signature;
+3. rebuilds the payload from the request and from the identity headers;
+4. rebuilds the compact serialization around its own payload:
+   `<protected>.<base64url(payload)>.<signature>`;
+5. verifies it with the derived key.
+
+The last step is one call of a standard library: `jose.compactVerify(token,
+key)`. An upstream does not implement a signature of Shuttle, it verifies a
+JWS.
 
 **The test vector** (pinned in `src/domains/forwarding/identity-signature.test.ts`):
 
@@ -489,11 +533,18 @@ claims  = { subject: "user-1", email: "user@example.com",
             workspaceId: "11111111-1111-4111-8111-111111111111" }
 request = { method: "GET", path: "/base/ws/123", query: "?x=1",
             host: "api.example.com" }
-payload = ["v3","GET","/base/ws/123","?x=1","api.example.com","user-1",
-           "11111111-1111-4111-8111-111111111111","user@example.com",
-           ["admin","dev"]]
-signature = v3=d10099233a754d22506db9d4a8d397bb8f58c0cbfe93f2782309eea1c49c7e4c
+payload = {"v":"v4","method":"GET","path":"/base/ws/123","query":"?x=1",
+           "host":"api.example.com","subject":"user-1",
+           "workspaceId":"11111111-1111-4111-8111-111111111111",
+           "email":"user@example.com","roles":["admin","dev"]}
+signature = v4=eyJhbGciOiJIUzI1NiIsInR5cCI6InNodXR0bGUtaWRlbnRpdHkifQ..tIL7qgT7uQOhaHjjFpgmOHYSAcjNBrddkreDMFejQm8
 ```
+
+**The migration from `v3`.** The value of `v3` was a hex digest of a
+canonical JSON **array**. An upstream that verifies `v3` has to be changed:
+it rebuilds the payload as an object and verifies the JWS. The gateway
+writes `v4` only, so a deployment that changes the format changes the
+contract of its upstreams with it.
 
 ---
 
@@ -539,7 +590,7 @@ gateway, whatever the credential that authenticated it.
 
 ## 9. The limits
 
-Fixed-window counters.
+Sliding-window counters.
 
 | Scope | Key | Setting |
 | --- | --- | --- |
@@ -551,6 +602,36 @@ Fixed-window counters.
 | The login attempts | `<ip>` | `SHUTTLE_LOGIN_RATE_LIMIT_MAX` |
 
 A limit of `0` disables the limiter.
+
+**The window.** The window **slides**: the count of a caller is the number
+of its requests in the last `windowMs` milliseconds, and not the number of
+its requests since the last boundary of the clock.
+
+A fixed window has a property that a limit does not want: a caller that
+spends its whole budget at the end of a window and its whole budget again
+at the beginning of the next one crosses the gateway twice as fast as the
+limit allows. The window of the gateway slides, so the budget of a caller
+is the budget of the last `windowMs` milliseconds, always.
+
+The window is counted in **buckets**: it is divided into buckets of
+`bucketMs` milliseconds, and the count of the window is the sum of the
+counts of the buckets that are in it. Two properties matter:
+
+- a window holds at most 60 buckets, so the state of a caller does not grow
+  with its traffic;
+- the boundary of a bucket is a moment every replica can compute, so the
+  replicas of a deployment count in the same buckets and the limit of the
+  deployment is the limit of the configuration.
+
+The count is exact to the bucket: a request stays counted until the bucket
+of its moment leaves the window.
+
+A request that is over the limit is **not counted**: a client that keeps
+hammering does not push the window further away.
+
+The `retry-after` of a refusal is the time until the oldest requests of
+the window leave it: it is the moment the count of the window is under the
+limit again.
 
 Two of these scopes exist because the others cannot do their job:
 
@@ -833,6 +914,29 @@ for `SHUTTLE_SHUTDOWN_TIMEOUT_MS` (15 s) and then the process exits. The
 WebSocket connections are closed with the code 1001 and the exchanges that
 are running are cancelled when the deadline is reached.
 
+### 12.5 The shared state
+
+The sessions, the limits and the cached decisions live in a Redis server.
+The client of the server is the one of the `redis` package: the shared
+state is not tied to the runtime of the gateway, and one implementation
+covers every managed cache.
+
+**The queue of the commands is disabled.** A command that is sent before
+the connection is established fails right away instead of waiting in a
+queue that nobody drains. The gateway denies the caller when the store is
+down, it does not pile up requests. The commands that failed because the
+connection was not established are retried a few times.
+
+**The connection is established in the background.** A gateway that starts
+while the shared state is down stays up: it answers `503` to the readiness
+probe, it denies the callers that need a session, and it becomes ready
+when the server answers. The failure is reported once per outage, and the
+recovery is reported in the log.
+
+**The client is closed at the end of the drain**, and the wait is bounded:
+a client that is still trying to reach a server that is not there does not
+keep the gateway waiting for a reply that will never come.
+
 ---
 
 ## 13. What Shuttle does not do
@@ -860,7 +964,7 @@ Shuttle does not:
 | `src/domains/authentication/` | The principal, the policy of the modes, the selection of the credential, the OIDC and JWKS, the browser login and logout, the signed state, the sessions, the expiry and the cookies. |
 | `src/domains/workspace-access/` | The validation of the workspace, the requests and the decisions of the access service, the cache keys, the TTL and the cache adapters. |
 | `src/domains/forwarding/` | The peer and proxy trust, the cross-site policy, the filtering of the headers and the cookies, the target url, the sanitized identity and the signature. |
-| `src/domains/rate-limiting/` | The fixed windows, the scopes, the `retry-after`, the bounded memory and the Redis counter. |
+| `src/domains/rate-limiting/` | The sliding windows, the scopes, the `retry-after`, the bounded memory and the Redis counter. |
 | `src/domains/proxying/` | The state of the exchange, the limits of the body, the phase and idle budgets, the cancellation, the commitment outcomes and the registry of the active exchanges. |
 | `src/domains/websockets/` | The reservations of the slots, the handshake with the upstream first, the state of the bridge, the buffers, the keepalive, the revalidation and the registry of the pairs. |
 

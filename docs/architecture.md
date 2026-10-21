@@ -160,9 +160,11 @@ writes the headers and the cookies of the answers.
 | | `context.ts` | The peer address, the client address, the chain, the protocol and **the effective host**. |
 | | `origins.ts` | The cross-site policy: the normalization of the origins, the guard of the requests, the guard of the navigations, the origin of a handshake. |
 | | `headers.ts` | The header policy in both directions, and the cookies of the gateway. |
+| | `cookies.ts` | The parsing of a `Cookie` header, the rendering of a `Set-Cookie` header, and the name of a cookie. |
 | | `identity.ts` | The sanitization of the identity, the canonical payload, the signature and its verification. |
 | | `target.ts` | The url of the upstream, and the rewriting of the `Location` of an answer. |
-| `rate-limiting` | `policy.ts` | The scopes, the keys of the windows, the start of a window and the `retry-after`. |
+| `rate-limiting` | `policy.ts` | The scopes and the keys of the windows. |
+| | `window.ts` | The sliding window: the size of a bucket, the index of a bucket and the evaluation of the window. |
 | | `limiter.ts` | The limiter of the memory: the bounded table, the shared window of the overflow. |
 | | `adapters/redis-limiter.ts` | The limiter of Redis: the counter and the expiry are one script. It fails open. |
 | `proxying` | `transport.ts` | The ports of the transport: the request and the answer. |
@@ -185,7 +187,7 @@ decision.
 | `bun/access-transport.ts` | The call to the access service. |
 | `bun/client-upgrade.ts` | The upgrade of the caller, with the headers of the gateway. |
 | `bun/upstream-websocket.ts` | The handshake with the upstream, and the socket of the upstream. |
-| `redis/client.ts` | The construction of the client, the TLS, the disposal. |
+| `redis/client.ts` | The construction of the client, the shapes of the server (a server, a cluster, a sentinel), the TLS, the background connection and the disposal. |
 | `redis/commands.ts` | The commands of the shared state. |
 
 ### `src/runtime/` — the composition root

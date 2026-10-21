@@ -37,18 +37,18 @@ process and the traffic is plain http over the loopback interface.
 
 | Measurement | Result |
 | --- | --- |
-| 3000 requests, 50 in flight | 6272 req/s, p50 7.5 ms, p90 10.3 ms, p99 13.1 ms, 0 errors |
-| 20000 requests, 100 in flight | 6205 req/s, p50 15.8 ms, p90 18.0 ms, p99 21.7 ms, max 31.3 ms, 0 errors |
-| 500 WebSockets | 415 connections/second, p99 191 ms for the handshake, 0 errors |
+| 3000 requests, 50 in flight | 7541 req/s, p50 6.4 ms, p90 7.7 ms, p99 8.8 ms, 0 errors |
+| 20000 requests, 100 in flight | 7683 req/s, p50 13.5 ms, p90 16.7 ms, p99 19.3 ms, max 21.6 ms, 0 errors |
+| 500 WebSockets | 415 connections/second, p99 193 ms for the handshake, 0 errors |
 
 What the numbers say:
 
-- the gateway forwards about **6000 requests/second** per core-set of the
+- the gateway forwards about **7600 requests/second** per core-set of the
   reference machine when the upstream is in the same process. With a real
   upstream the number is lower, and the ingress is the limit of a
   deployment in any case;
-- the latency grows with the number of the requests in flight (p50 7.5 ms
-  with 50 in flight, p50 15.8 ms with 100 in flight): the queue of the
+- the latency grows with the number of the requests in flight (p50 6.4 ms
+  with 50 in flight, p50 13.5 ms with 100 in flight): the queue of the
   runtime is the bottleneck, not the gateway;
 - the handshake of a WebSocket costs about 2 ms of the gateway; the limit of
   the connections is the configuration, not the runtime.
