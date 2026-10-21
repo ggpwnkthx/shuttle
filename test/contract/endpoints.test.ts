@@ -6,18 +6,21 @@ import { METRICS_TOKEN, WORKSPACE_ID, createHarness, type Harness } from './harn
  *
  * The endpoints are the paths the gateway serves itself: they are matched
  * before the route table and they are never forwarded to an upstream.
+ *
+ * The three groups below share one gateway: they speak the same routes and
+ * they do not change the state of each other.
  */
+let harness: Harness
+
+beforeAll(async () => {
+  harness = await createHarness()
+})
+
+afterAll(async () => {
+  await harness.stop()
+})
+
 describe('the endpoints of the gateway', () => {
-  let harness: Harness
-
-  beforeAll(async () => {
-    harness = await createHarness()
-  })
-
-  afterAll(async () => {
-    await harness.stop()
-  })
-
   test('the health is always available', async () => {
     const response = await fetch(`${harness.gatewayUrl}/healthz`)
     expect(response.status).toBe(200)
@@ -90,10 +93,11 @@ describe('the endpoints of the gateway', () => {
 })
 
 describe('the reserved paths', () => {
-  let harness: Harness
+  // This group needs its own gateway: its route table matches every host.
+  let catchAll: Harness
 
   beforeAll(async () => {
-    harness = await createHarness({
+    catchAll = await createHarness({
       config: (context) => ({
         version: 1,
         routes: [
@@ -109,11 +113,11 @@ describe('the reserved paths', () => {
   })
 
   afterAll(async () => {
-    await harness.stop()
+    await catchAll.stop()
   })
 
   test('a route cannot shadow the paths of the gateway', async () => {
-    const response = await fetch(`${harness.gatewayUrl}/metrics`)
+    const response = await fetch(`${catchAll.gatewayUrl}/metrics`)
     // The answer comes from the gateway, not from the upstream: the route
     // that matches every host does not own the paths of the gateway.
     expect(response.status).toBe(401)
@@ -124,17 +128,7 @@ describe('the reserved paths', () => {
 })
 
 describe('the answer of an upstream', () => {
-  let harness: Harness
-
-  beforeAll(async () => {
-    harness = await createHarness()
-  })
-
-  afterAll(async () => {
-    await harness.stop()
-  })
-
-  test('a location that names the upstream becomes relative', async () => {
+  test('the location of the upstream is rewritten before it reaches the browser', async () => {
     const response = await fetch(
       `${harness.gatewayUrl}/redirect?to=${encodeURIComponent(`${harness.upstreamA.url}/login`)}`,
       {
@@ -147,7 +141,7 @@ describe('the answer of an upstream', () => {
     expect(response.headers.get('location')).toBe('/login')
   })
 
-  test('a location that names another host is left alone', async () => {
+  test('a location that names another host is left alone for the browser', async () => {
     const response = await fetch(
       `${harness.gatewayUrl}/redirect?to=${encodeURIComponent('https://accounts.example.com/login')}`,
       {
@@ -161,16 +155,6 @@ describe('the answer of an upstream', () => {
 })
 
 describe('the workspace of a request', () => {
-  let harness: Harness
-
-  beforeAll(async () => {
-    harness = await createHarness()
-  })
-
-  afterAll(async () => {
-    await harness.stop()
-  })
-
   test('a request without a credential is refused', async () => {
     const response = await fetch(`${harness.gatewayUrl}/ws/${WORKSPACE_ID}/`, {
       headers: { host: 'api.shuttle.test' },

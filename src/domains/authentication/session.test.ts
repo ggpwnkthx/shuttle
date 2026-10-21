@@ -66,6 +66,34 @@ describe('the lifetime of a session', () => {
 })
 
 describe('the store of the sessions of the process', () => {
+  test('the store reports its lifetime', () => {
+    const store = new MemorySessionStore({ ttlMs: 1000, maxAgeMs: 2000, touchIntervalMs: 100 })
+    expect(store.ttlMs).toBe(1000)
+    expect(store.maxAgeMs).toBe(2000)
+    expect(store.touchIntervalMs).toBe(100)
+  })
+
+  test('the store forgets every session when it is closed', async () => {
+    const store = new MemorySessionStore({ ttlMs: 60_000, maxAgeMs: 0, touchIntervalMs: 1000 })
+    const created = await store.create({ subject: 'user-1' })
+    expect(store.size).toBe(1)
+    await store.close()
+    expect(store.size).toBe(0)
+    expect(await store.get(created.id)).toBeNull()
+  })
+
+  test('the store reports the lifetime of the cookie of a session', async () => {
+    const store = new MemorySessionStore({ ttlMs: 60_000, maxAgeMs: 0, touchIntervalMs: 1000 })
+    const created = await store.create({ subject: 'user-1' })
+    expect(store.cookieMaxAgeSeconds(created.id)).toBeGreaterThan(0)
+    expect(store.cookieMaxAgeSeconds('unknown')).toBe(0)
+  })
+
+  test('the store answers the probe of the readiness', async () => {
+    const store = new MemorySessionStore()
+    expect(await store.ping()).toBe(true)
+  })
+
   test('a session that was created can be read', async () => {
     const store = new MemorySessionStore(lifetime)
     const created = await store.create({ subject: 'user-1', roles: ['admin'] })

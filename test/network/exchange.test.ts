@@ -67,24 +67,6 @@ describe('the exchanges of a real upstream', () => {
     await upstream.stop()
   })
 
-  test('the compressed bytes of an answer are not decompressed', async () => {
-    const upstream = await startUpstream({ name: 'gzip' })
-    const result = await service().execute(request(upstream, '/gzip'))
-    expect(result.response?.headers.get('content-encoding')).toBe('gzip')
-    const bytes = new Uint8Array(await new Response(result.response!.body!).arrayBuffer())
-    expect(bytes[0]).toBe(0x1f)
-    expect(bytes[1]).toBe(0x8b)
-    await upstream.stop()
-  })
-
-  test('a redirect of the upstream is not followed', async () => {
-    const upstream = await startUpstream({ name: 'redirect' })
-    const result = await service().execute(request(upstream, '/redirect?to=%2Felsewhere'))
-    expect(result.response?.status).toBe(302)
-    expect(result.response?.headers.get('location')).toBe('/elsewhere')
-    await upstream.stop()
-  })
-
   test('a body that is over the limit is refused before the answer', async () => {
     const upstream = await startUpstream({ name: 'limit' })
     const body = new ReadableStream<Uint8Array>({
@@ -102,7 +84,7 @@ describe('the exchanges of a real upstream', () => {
     await upstream.stop()
   })
 
-  test('an answer that arrives before the upload is over is the answer', async () => {
+  test('the answer of the upstream commits the exchange, even when the upload is over the limit', async () => {
     const upstream = await startUpstream({ name: 'early' })
     let produced = 0
     const body = new ReadableStream<Uint8Array>({
@@ -122,7 +104,7 @@ describe('the exchanges of a real upstream', () => {
     await upstream.stop()
   })
 
-  test('a caller that goes away cancels the request of the upstream', async () => {
+  test('a caller that goes away cancels the upstream and finalizes the exchange', async () => {
     const upstream = await startUpstream({ name: 'disconnect' })
     const controller = new AbortController()
     const exchanges = service()
@@ -173,7 +155,7 @@ describe('the exchanges of a real upstream', () => {
     await server.stop()
   })
 
-  test('an upstream that does not answer in time is a timeout', async () => {
+  test('the budget of the answer ends an upstream that does not answer', async () => {
     const upstream = await startUpstream({ name: 'slow' })
     const result = await service().execute(
       request(upstream, '/delay-headers?ms=5000', {

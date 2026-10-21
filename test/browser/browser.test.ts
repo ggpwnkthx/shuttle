@@ -135,7 +135,7 @@ describe('the gateway in a browser', () => {
   )
 
   test(
-    'a request from another site that changes the state is refused',
+    'a form of another site that changes the state is refused',
     async () => {
       const context = await browser.newContext()
       const page = await context.newPage()

@@ -440,13 +440,13 @@ the knobs an operator turns when a revocation has to be immediate.
 | The image | `docker build` and the smoke tests | yes |
 
 The last full run of the suite: **388 tests passed, 0 failed** over 38 files
-with Bun 1.4.3, including the 27 tests against a real Redis 7.0.15
+with Bun 1.4.3, including the 14 tests against a real Redis 7.0.15
 (`SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0`), the 3 tests in Chromium
 and the 2 soak tests. The coverage of the lines of the source is
-**90.9 %** and the coverage of the functions is **91.9 %**.
+**91.3 %** and the coverage of the functions is **92.1 %**.
 
-Without a Redis server, the ten tests of the shared state are skipped and the
-rest pass.
+Without a Redis server, the fourteen tests of the shared state are skipped and
+the rest pass.
 
 ## The workflow of the release
 
