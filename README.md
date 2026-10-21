@@ -77,8 +77,8 @@ fails.
 
 The environment is described in [.env.example](.env.example). Every variable
 has a default, except the ones a production deployment has to set: the
-session secret, the identity provider, the access service, and at least one
-rate limit.
+session secret, the identity provider, the access service, the shared state
+and at least one rate limit.
 
 ## The endpoints of the gateway
 

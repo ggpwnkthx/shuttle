@@ -41,8 +41,8 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_OIDC_REDIRECT_URI` | `https://<the public url of the gateway>/auth/callback` | Where the provider sends the browser back to. |
 | `SHUTTLE_ACCESS_URL` / `_ACCESS_TOKEN` | `https://access.example.com` | The access service. The token is in the secret store. |
 | `SHUTTLE_SESSION_SECRET` | A random value of at least 32 bytes | It signs the state of the login and the signature of the identity. It has to be the **same on every replica**. |
-| `SHUTTLE_SESSION_URL` | `rediss://:<password>@<redis>:6379/0` | The sessions of the callers. |
-| `SHUTTLE_SHARED_STATE_URL` | `rediss://:<password>@<redis>:6379/1` | The limits and the decisions. It defaults to the url of the sessions. |
+| `SHUTTLE_SESSION_URL` | `rediss://:<password>@<redis>:6379/0` | The sessions of the callers. It has to be a Redis server in production. |
+| `SHUTTLE_SHARED_STATE_URL` | `rediss://:<password>@<redis>:6379/1` | The limits and the decisions. It defaults to the url of the sessions. It has to be a Redis server in production. |
 | `SHUTTLE_METRICS_TOKEN` | A random value | The metrics are only served with it. |
 | `SHUTTLE_TRUSTED_PROXIES` | The ranges of the ingress | The forwarding headers are only trusted from them. |
 | `SHUTTLE_EXTERNAL_PROTO` | `https` | The protocol the callers use. |

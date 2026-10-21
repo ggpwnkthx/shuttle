@@ -267,6 +267,16 @@ const EnvSchema = z.object({
   SHUTTLE_SESSION_MAX_AGE_MS: intEnv(86_400_000, { min: 0 }),
   SHUTTLE_SESSION_TOUCH_INTERVAL_MS: intEnv(60_000, { min: 0 }),
   SHUTTLE_SESSION_MAX_SESSIONS: intEnv(5_000, { min: 1 }),
+  /**
+   * Allows a production deployment that keeps the state in the process.
+   *
+   * The state of a deployment has to be shared: a session that lives in the
+   * memory of one replica is unknown to the others, and a limit that lives
+   * in the memory of one replica is the limit of that replica and not the
+   * limit of the deployment. A deployment that is a single node may say
+   * explicitly that it accepts the in-process state.
+   */
+  SHUTTLE_ALLOW_MEMORY_STATE: boolEnv(),
   SHUTTLE_SESSION_TLS_CA: tlsCaEnv(),
   SHUTTLE_SESSION_TLS_CA_BASE64: tlsCaEnv(),
 
@@ -404,17 +414,39 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
     )
   }
 
-  const scopes =
-    parsed.SHUTTLE_OIDC_SCOPES.length > 0
-      ? parsed.SHUTTLE_OIDC_SCOPES
-      : ['openid', 'profile', 'email', 'groups']
-
   // The state the replicas share lives in the session server when that one
   // is a Redis server: a deployment that shares its sessions shares its
   // limits and its cached decisions as well.
   const sharedStateUrl =
     parsed.SHUTTLE_SHARED_STATE_URL ??
     (isRedisUrl(parsed.SHUTTLE_SESSION_URL) ? parsed.SHUTTLE_SESSION_URL : undefined)
+
+  // The state of a deployment has to be shared. A session that lives in the
+  // memory of a replica is unknown to the other replicas, so the callers
+  // are logged out at random; a limit that lives in the memory of a replica
+  // is the limit of that replica and not the limit of the deployment, so a
+  // flood is bounded by the number of the replicas.
+  //
+  // A deployment that is a single node may keep the state in the process,
+  // but it has to say so explicitly: a setting that looks active but is not
+  // is a security hole.
+  if (production && !parsed.SHUTTLE_ALLOW_MEMORY_STATE) {
+    if (!isRedisUrl(parsed.SHUTTLE_SESSION_URL)) {
+      throw new Error(
+        'SHUTTLE_SESSION_URL must name a Redis server in a production environment: the sessions of the callers have to be shared by the replicas, because a session that lives in the memory of one replica is unknown to the others, or SHUTTLE_ALLOW_MEMORY_STATE=true when the deployment is a single node that accepts it'
+      )
+    }
+    if (!isRedisUrl(sharedStateUrl)) {
+      throw new Error(
+        'SHUTTLE_SHARED_STATE_URL must name a Redis server in a production environment: the rate limits and the cached decisions have to be shared by the replicas, or SHUTTLE_ALLOW_MEMORY_STATE=true when the deployment is a single node that accepts it'
+      )
+    }
+  }
+
+  const scopes =
+    parsed.SHUTTLE_OIDC_SCOPES.length > 0
+      ? parsed.SHUTTLE_OIDC_SCOPES
+      : ['openid', 'profile', 'email', 'groups']
 
   return {
     production,

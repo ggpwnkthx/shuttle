@@ -221,6 +221,7 @@ The full list, with the default of every value, is in
 | `SHUTTLE_ACCESS_URL` | Names the access service. |
 | `SHUTTLE_ACCESS_TOKEN` | The token the gateway authenticates with. `SHUTTLE_ACCESS_ALLOW_ANONYMOUS=true` replaces it when the service authenticates the gateway by other means. |
 | One rate limit | At least one of `SHUTTLE_RATE_LIMIT_MAX`, `SHUTTLE_RATE_LIMIT_GLOBAL_MAX`, `SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX` and `SHUTTLE_RATE_LIMIT_TOTAL_MAX` must be non-zero. `SHUTTLE_ALLOW_NO_RATE_LIMITS=true` replaces them when another layer protects the deployment. |
+| The shared state | `SHUTTLE_SESSION_URL` and `SHUTTLE_SHARED_STATE_URL` must name a Redis server: a session that lives in the memory of one replica is unknown to the others, and a limit that lives in the memory of one replica is the limit of that replica. `SHUTTLE_ALLOW_MEMORY_STATE=true` replaces them when the deployment is a single node that accepts it. |
 
 ---
 
@@ -905,3 +906,4 @@ lists are numbered independently.
 | 24 | The metrics of the requests | Every answer of the gateway is counted, the refusals included. The labels are bounded: `unmatched` for the requests that matched no route, `other` for a method or a status that is not tracked (§12.1). |
 | 25 | The revalidation of a WebSocket | An open connection is revalidated: the route, the session and the access are checked again, and the connection is closed with `1008` when one of them fails (§10). |
 | 26 | The number of exchanges at the same time | The exchanges are bounded by `SHUTTLE_MAX_CONCURRENT_REQUESTS`, so a client that opens a request and never sends its body cannot hold the resources of the process (§11.2). |
+| 27 | The state of a deployment | The state of a production deployment is shared: `SHUTTLE_SESSION_URL` and `SHUTTLE_SHARED_STATE_URL` must name a Redis server, or `SHUTTLE_ALLOW_MEMORY_STATE=true` says explicitly that the deployment is a single node that accepts the in-process state (§4). |

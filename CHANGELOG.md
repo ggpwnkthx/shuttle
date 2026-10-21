@@ -8,6 +8,20 @@ decisions behind it are in [docs/decisions.md](docs/decisions.md).
 The release that closes the gap between the specification and the
 implementation, and that bounds the resources of the deployment.
 
+### The state of a production deployment
+
+The sessions and the state that the replicas share have to live in a Redis
+server in a production deployment: a session that lives in the memory of one
+replica is unknown to the others, so the callers are logged out at random,
+and a limit that lives in the memory of one replica is the limit of that
+replica and not the limit of the deployment, so a flood is bounded by the
+number of the replicas.
+
+The gateway refuses to start when `SHUTTLE_SESSION_URL` or
+`SHUTTLE_SHARED_STATE_URL` do not name a Redis server. A deployment that
+is a single node and that accepts the in-process state says so explicitly
+with `SHUTTLE_ALLOW_MEMORY_STATE=true`.
+
 ### The host of a request
 
 The `x-forwarded-host` of a **trusted proxy** is now honoured. It is the

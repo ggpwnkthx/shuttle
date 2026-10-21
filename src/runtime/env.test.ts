@@ -86,6 +86,7 @@ describe('the environment of a production deployment', () => {
     SHUTTLE_ACCESS_URL: 'https://access.example.com',
     SHUTTLE_ACCESS_TOKEN: 'access-token',
     SHUTTLE_RATE_LIMIT_MAX: '600',
+    SHUTTLE_SESSION_URL: 'redis://cache:6379/0',
   }
 
   test('a complete environment is accepted', () => {
@@ -157,5 +158,36 @@ describe('the environment of a production deployment', () => {
       readEnv({ ...production, SHUTTLE_OIDC_ALLOW_INSECURE: 'true' }).oidc.allowInsecureIssuer
     ).toBe(true)
     expect(readEnv(production).oidc.allowInsecureIssuer).toBe(false)
+  })
+
+  test('the state of the deployment has to be shared', () => {
+    // The in-process store is not shared: the callers are logged out at
+    // random when the deployment has more than one replica.
+    expect(() => readEnv({ ...production, SHUTTLE_SESSION_URL: 'memory://local' })).toThrow(
+      /SHUTTLE_SESSION_URL must name a Redis server/
+    )
+    // The limits and the decisions have to be shared as well.
+    expect(() => readEnv({ ...production, SHUTTLE_SHARED_STATE_URL: 'memory://local' })).toThrow(
+      /SHUTTLE_SHARED_STATE_URL must name a Redis server/
+    )
+  })
+
+  test('a single node deployment may keep the state in the process', () => {
+    const settings = readEnv({
+      ...production,
+      SHUTTLE_SESSION_URL: 'memory://local',
+      SHUTTLE_ALLOW_MEMORY_STATE: 'true',
+    })
+    expect(settings.session.url).toBe('memory://local')
+    expect(settings.sharedState.url).toBeUndefined()
+  })
+
+  test('the shared state follows the sessions of a deployment', () => {
+    const settings = readEnv({
+      ...production,
+      SHUTTLE_SESSION_URL: 'redis://cache:6379/0',
+      SHUTTLE_SHARED_STATE_URL: 'redis://cache:6379/1',
+    })
+    expect(settings.sharedState.url).toBe('redis://cache:6379/1')
   })
 })

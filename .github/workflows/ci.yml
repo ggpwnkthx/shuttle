@@ -121,6 +121,18 @@ jobs:
   image:
     name: the production image
     runs-on: ubuntu-latest
+    services:
+      # The state of a production deployment is shared: the image is
+      # started against a real Redis, the way a deployment runs.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - '6379:6379'
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -129,7 +141,10 @@ jobs:
 
       - name: the image starts with the configuration of a deployment
         run: |
+          # The state of the deployment is shared: the image reaches the
+          # Redis of the job through the host of the runner.
           docker run -d --name shuttle -p 8080:8080 \
+            --add-host host.docker.internal:host-gateway \
             -e SHUTTLE_SESSION_SECRET=ci-secret \
             -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
             -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
@@ -138,11 +153,22 @@ jobs:
             -e SHUTTLE_ACCESS_URL=https://access.example.com \
             -e SHUTTLE_ACCESS_TOKEN=ci-access-token \
             -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
+            -e SHUTTLE_SESSION_URL=redis://host.docker.internal:6379/0 \
+            -e SHUTTLE_SHARED_STATE_URL=redis://host.docker.internal:6379/1 \
             -v "$PWD/config/routes.json:/etc/shuttle/routes.json:ro" \
             shuttle:ci
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/healthz > /dev/null; then
               echo "the gateway is healthy"
+              break
+            fi
+            sleep 1
+          done
+          # The readiness of the gateway needs the shared state: the image
+          # is ready only when the sessions of the callers can be stored.
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/readyz > /dev/null; then
+              echo "the gateway is ready"
               exit 0
             fi
             sleep 1
@@ -152,7 +178,11 @@ jobs:
 
       - name: the image refuses to start without a session secret
         run: |
-          if docker run --rm shuttle:ci; then
+          # The state is shared: the only thing missing here is the secret.
+          if docker run --rm \
+            -e SHUTTLE_SESSION_URL=redis://127.0.0.1:6379/0 \
+            -e SHUTTLE_SHARED_STATE_URL=redis://127.0.0.1:6379/1 \
+            shuttle:ci; then
             echo "the gateway started without a session secret"
             exit 1
           fi
@@ -167,6 +197,8 @@ jobs:
             -e SHUTTLE_OIDC_REDIRECT_URI=https://shuttle.example.com/auth/callback \
             -e SHUTTLE_ACCESS_URL=https://access.example.com \
             -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
+            -e SHUTTLE_SESSION_URL=redis://127.0.0.1:6379/0 \
+            -e SHUTTLE_SHARED_STATE_URL=redis://127.0.0.1:6379/1 \
             shuttle:ci; then
             echo "the gateway started without a token for the access service"
             exit 1
@@ -179,6 +211,8 @@ jobs:
             -e SHUTTLE_ACCESS_URL=https://access.example.com \
             -e SHUTTLE_ACCESS_TOKEN=ci-access-token \
             -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
+            -e SHUTTLE_SESSION_URL=redis://127.0.0.1:6379/0 \
+            -e SHUTTLE_SHARED_STATE_URL=redis://127.0.0.1:6379/1 \
             shuttle:ci; then
             echo "the gateway started without an identity provider"
             exit 1
@@ -194,8 +228,26 @@ jobs:
             -e SHUTTLE_OIDC_REDIRECT_URI=https://shuttle.example.com/auth/callback \
             -e SHUTTLE_ACCESS_URL=https://access.example.com \
             -e SHUTTLE_ACCESS_TOKEN=ci-access-token \
+            -e SHUTTLE_SESSION_URL=redis://127.0.0.1:6379/0 \
+            -e SHUTTLE_SHARED_STATE_URL=redis://127.0.0.1:6379/1 \
             shuttle:ci; then
             echo "the gateway started without a rate limit"
+            exit 1
+          fi
+
+      - name: the image refuses to start with the state in the process
+        run: |
+          if docker run --rm \
+            -e SHUTTLE_SESSION_SECRET=ci-secret \
+            -e SHUTTLE_OIDC_ISSUER=https://dex.example.com/dex \
+            -e SHUTTLE_OIDC_CLIENT_ID=shuttle \
+            -e SHUTTLE_OIDC_CLIENT_SECRET=ci-client-secret \
+            -e SHUTTLE_OIDC_REDIRECT_URI=https://shuttle.example.com/auth/callback \
+            -e SHUTTLE_ACCESS_URL=https://access.example.com \
+            -e SHUTTLE_ACCESS_TOKEN=ci-access-token \
+            -e SHUTTLE_RATE_LIMIT_TOTAL_MAX=1000 \
+            shuttle:ci; then
+            echo "the gateway started with the state of the deployment in the process"
             exit 1
           fi
 
