@@ -77,7 +77,9 @@ number of round trips to the shared state:
 The last run: 20 000 requests at 50 in flight, two rounds, on the
 reference environment, with the gateway, the upstream, the Redis server
 and the Postgres server in the same machine and the traffic over the
-loopback interface.
+loopback interface. The table of the release 0.4.0 is another run of the
+same script on the same environment, and it differs by a few percent: a
+benchmark is a measurement, not a specification.
 
 | Scenario | Backend | req/s | p50 | p99 |
 | --- | --- | --- | --- | --- |
@@ -155,5 +157,5 @@ traffic stops.
 | --- | --- |
 | The capacity behind an ingress | There is no ingress in the build environment; the settings that matter are documented in [operations.md](operations.md). |
 | The capacity with TLS | The gateway does not terminate TLS: the ingress does, and the cost is the one of the ingress. |
-| The capacity with Redis | The shared state was not reachable in the build environment; the limiter and the store of the sessions are covered by the tests of the integration. |
+| The capacity with a shared state on another host | The comparison above was made with the servers on the same machine: a deployment that reaches them over the network pays the latency of the network on every round trip. |
 | Several replicas | The tests of the shared state prove that the counters are exact; the capacity of a deployment is the sum of the capacities of its replicas. |

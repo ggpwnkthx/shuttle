@@ -10,7 +10,7 @@ which file owns what; [decisions.md](decisions.md) records the decisions
 behind the contract. Recommendations in an implementation guide do not
 become requirements until they are recorded here.
 
-Status: 0.3.0. Runtime: Bun ≥ 1.4.3 (§15, decision 20). Listener: HTTP and
+Status: 0.4.0. Runtime: Bun ≥ 1.4.3 (§15, decision 20). Listener: HTTP and
 WebSocket on `SHUTTLE_GATEWAY_HOST:SHUTTLE_GATEWAY_PORT` (default
 `0.0.0.0:8080`).
 
@@ -742,7 +742,9 @@ upstream http://app:3000/base   + /ws/123      →  http://app:3000/base/ws/123
 
 The path is forwarded unchanged: the prefix that matched the route is not
 stripped, and the path is not rewritten. The WebSocket url is built the
-same way, with `http` → `ws` and `https` → `wss`.
+same way, with `http` → `ws` and `https` → `wss`. An upstream of a
+websocket is served over plain http: a `wss` upstream is refused
+(§11.1.1).
 
 ### 11.1.1 The TLS of the connections to the upstreams
 
@@ -973,14 +975,14 @@ append only file.
 
 ---
 
-## 12.6 The comparison of the backends
+### 12.6 The comparison of the backends
 
 The two backends are interchangeable and the gateway measures them side by
 side. The measurements are in [capacity.md](capacity.md).
 
 | | Redis | Postgres |
 | --- | --- | --- |
-| The cost of the shared state | about a tenth of the latency of a request | about a third of the latency of a request |
+| The cost of the shared state | about a tenth of the throughput of the baseline on the path of the limiter, about a third on the path of the whole request | about half of the throughput of the baseline on both paths, with a p50 about twice the one of Redis |
 | The concurrency | the server serializes the commands of a key | the transactions of a key are serialized by an advisory lock |
 | The connections | one per replica | a bounded pool per replica: the server has a low limit |
 | The failure | the limiter fails open, the sessions fail closed | the same |
@@ -1112,7 +1114,7 @@ lists are numbered independently.
 | 24 | The metrics of the requests | Every answer of the gateway is counted, the refusals included. The labels are bounded: `unmatched` for the requests that matched no route, `other` for a method or a status that is not tracked (§12.1). |
 | 25 | The revalidation of a WebSocket | An open connection is revalidated: the route, the session and the access are checked again, and the connection is closed with `1008` when one of them fails (§10). |
 | 26 | The number of exchanges at the same time | The exchanges are bounded by `SHUTTLE_MAX_CONCURRENT_REQUESTS`, so a client that opens a request and never sends its body cannot hold the resources of the process (§11.2). |
-| 27 | The state of a deployment | The state of a production deployment is shared: `SHUTTLE_SESSION_URL` and `SHUTTLE_SHARED_STATE_URL` must name a Redis server, or `SHUTTLE_ALLOW_MEMORY_STATE=true` says explicitly that the deployment is a single node that accepts the in-process state (§4). |
+| 27 | The state of a deployment | The state of a production deployment is shared: `SHUTTLE_SESSION_URL` and `SHUTTLE_SHARED_STATE_URL` must name a Redis server or a Postgres server, or `SHUTTLE_ALLOW_MEMORY_STATE=true` says explicitly that the deployment is a single node that accepts the in-process state (§4). |
 | 28 | The policy of the cross site requests | It is a property of the route: `crossSite` refuses the navigations from another site on the routes that declare it, and the policy of the deployment applies to the others (§8). |
 | 29 | The `Authorization` header of the caller | It is forwarded to the upstream by default, and a route that does not need it says so with `forwardAuthorization: false` (§7.1). |
 | 30 | The latency of a revocation | It is a property of the route: `accessCacheTtlMs` is the lifetime of the cached decisions of that route, and `0` makes the revocation on it immediate (§6). |

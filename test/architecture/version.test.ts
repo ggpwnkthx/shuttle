@@ -33,6 +33,19 @@ describe('the version of the release', () => {
     ])
   })
 
+  test('the status of the specification is the version of the release', () => {
+    const findings = checkVersionConsistency({
+      'package.json': JSON.stringify({ version: '1.2.3' }),
+      'docs/spec.md': 'Status: 0.3.0. Runtime: Bun ≥ 1.4.3.\n',
+    })
+    expect(findings).toEqual([
+      {
+        file: 'docs/spec.md',
+        message: 'the version is "0.3.0" and the package says "1.2.3"',
+      },
+    ])
+  })
+
   test('a package without a version is reported', () => {
     const findings = checkVersionConsistency({ 'package.json': JSON.stringify({}) })
     expect(findings).toEqual([

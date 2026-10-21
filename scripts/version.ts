@@ -1,9 +1,12 @@
 #!/usr/bin/env bun
 /**
  * The version of the release is written in several places: the package, the
- * image, the manifests of the deployment and the changelog. They have to
- * name the same release, because a manifest that points at an image of
- * another version deploys something else than the one that was released.
+ * image, the manifests of the deployment, the changelog and the status of
+ * the specification. They have to name the same release, because a
+ * manifest that points at an image of another version deploys something
+ * else than the one that was released, and a specification that carries
+ * the status of another release describes a contract that was not
+ * shipped.
  *
  * This script checks that they agree. It runs in the test suite and in the
  * CI workflow, so a drift fails the build instead of shipping.
@@ -63,6 +66,11 @@ export const VERSION_SOURCES: ReadonlyArray<{
     path: 'CHANGELOG.md',
     // The latest release of the changelog: the first heading of a version.
     read: (content) => /^##\s+(\d+\.\d+\.\d+)/m.exec(content)?.[1] ?? null,
+  },
+  {
+    path: 'docs/spec.md',
+    // The status of the specification: the release it describes.
+    read: (content) => /^Status:\s*(\d+\.\d+\.\d+)/m.exec(content)?.[1] ?? null,
   },
 ]
 

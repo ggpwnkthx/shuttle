@@ -554,21 +554,23 @@ the knobs an operator turns when a revocation has to be immediate.
 | The comparison of the backends | `bun run benchmark` | no |
 | The image | `docker build` and the smoke tests | yes |
 
-The last full run of the suite: **519 tests passed, 0 failed** over 50 files
+The last full run of the suite: **524 tests passed, 0 failed** over 52 files
 with Bun 1.4.3, including the tests against a real Redis 7.0.15
 (`SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0`) and against a real
 Postgres 15.18 (`SHUTTLE_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5432/shuttle`),
-the 3 tests in Chromium and the 2 soak tests. The coverage of the lines of
-the source is **94.0 %** and the coverage of the functions is **93.6 %**.
+the 3 tests in Chromium and the 2 soak tests. The coverage of the source
+(`src/`) is **94.1 %** of the lines and **90.6 %** of the functions; the
+coverage of the whole tree, the tests included, is **93.9 %** of the lines
+and **93.5 %** of the functions.
 
-Without a Redis server and without a Postgres server, the tests of the
+Without a Redis server and without a Postgres server, the 36 tests of the
 shared state are skipped and the rest pass. The tests of the shared state
 of a Postgres server run without a server when none is named: they run
 against the in-process engine of Postgres itself.
 
 ## The workflow of the release
 
-The CI workflow (`.github/workflows/ci.yml`) runs seven jobs:
+The CI workflow (`.github/workflows/ci.yml`) runs six jobs:
 
 | Job | What it proves |
 | --- | --- |

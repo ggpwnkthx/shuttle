@@ -28,8 +28,8 @@ The documentation is in [docs/](docs/):
 | **Authorization** | The access service decides who may use a workspace; the gateway asks and fails closed. |
 | **Proxying** | Streamed bodies, server sent events, uploads, a budget per phase of the upstream exchange and a limit on the body. |
 | **Header policy** | The hop-by-hop headers and the spoofable headers are removed, the identity is written by the gateway and signed with a JWS an upstream verifies with a standard library, and the forwarding headers are only trusted from known proxies. |
-| **Sessions** | Server side, in the process or in Redis, with an idle lifetime and a maximum age. |
-| **Limits** | Four scopes of sliding windows, shared by the replicas through Redis, that bound a flood without a boundary burst. |
+| **Sessions** | Server side, in the process or in a server the replicas share (Redis or Postgres), with an idle lifetime and a maximum age. |
+| **Limits** | Four scopes of sliding windows, shared by the replicas through the shared state (Redis or Postgres), that bound a flood without a boundary burst. |
 | **WebSockets** | The upstream handshake first, bounded buffers, keepalive, and a revalidation that closes a connection whose access was revoked. |
 | **Operations** | Health and readiness probes, Prometheus metrics, structured logs with redaction, a hot reload of the configuration and a graceful drain. |
 

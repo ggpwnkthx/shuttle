@@ -41,7 +41,9 @@ with several processes that count at the same time.
 
 The script `bun run benchmark` runs the same traffic against the same
 gateway with the two backends and prints the table of the comparison. The
-measurements are in [docs/capacity.md](docs/capacity.md).
+measurements of the last run are in
+[docs/capacity.md](docs/capacity.md); the table below is the run of the
+release.
 
 On the reference environment, with 20 000 requests at 50 in flight:
 
