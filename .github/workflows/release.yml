@@ -49,11 +49,13 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
+      # The outputs of this step are the tag and the version of the
+      # release. They are written by the **same** step: an output that is
+      # written by another step of the job is not readable here, the
+      # expression is empty, and the build of the image fails with an
+      # empty tag.
       - name: the version of the release
         id: version
-        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-
-      - name: the tag names the version of the package
         run: |
           expected=$(node -p "require('./package.json').version")
           tag="${GITHUB_REF_NAME#v}"
@@ -61,7 +63,16 @@ jobs:
             echo "the tag $GITHUB_REF_NAME does not name the version $expected of the package"
             exit 1
           fi
+          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           echo "version=$expected" >> "$GITHUB_OUTPUT"
+
+      - name: the version of the release is known
+        run: |
+          if [ -z "${{ steps.version.outputs.tag }}" ] || [ -z "${{ steps.version.outputs.version }}" ]; then
+            echo "the version of the release is empty: the step that computes it did not write its outputs"
+            exit 1
+          fi
+          echo "the release is ${{ steps.version.outputs.tag }} (${{ steps.version.outputs.version }})"
 
       - name: the versions of the project agree
         run: bun run versions
