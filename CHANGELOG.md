@@ -116,6 +116,18 @@ A deployment that does not set the key keeps the symmetric format, and the
 upstreams keep the derived key. It is not the format a production
 deployment should use.
 
+### A burst of requests asks the access service once
+
+The cache of the decisions is empty every time its lifetime is over, and
+the lifetime is five seconds by default. A burst of requests for the same
+decision that arrived on the boundary of the lifetime asked the service as
+many times as there were requests.
+
+The calls that are in flight are shared now: the burst asks the service
+once, and every waiter of the call receives the decision it answers. The
+service that decides the access of the callers is not a cache that is
+warmed once, and a stampede on it is an outage of the deployment.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the

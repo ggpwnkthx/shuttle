@@ -338,6 +338,54 @@ describe('the cache of the decisions', () => {
     expect(calls).toBe(1)
   })
 
+  test('a burst of requests for the same decision asks the service once', async () => {
+    let calls = 0
+    let release = (): void => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const cache = new MemoryDecisionCache()
+    const access = new AccessClient({
+      baseUrl: 'http://access.test',
+      transport: {
+        async post() {
+          calls += 1
+          await gate
+          return { status: 200, body: '{"allow":true}' }
+        },
+      },
+      cache,
+    })
+    const request = { subject: 'user-1', workspaceId: 'workspace-1', routeId: 'route' }
+
+    // The cache is empty — the lifetime of the decision is over — and the
+    // requests arrive at the same time: the service is asked once.
+    const first = access.decide(request)
+    const second = access.decide(request)
+    const third = access.decide(request)
+    release()
+    const decisions = await Promise.all([first, second, third])
+    expect(calls).toBe(1)
+    for (const decision of decisions) {
+      expect(decision.allow).toBe(true)
+    }
+  })
+
+  test('the calls that are in flight are released', async () => {
+    let calls = 0
+    const { client: access } = client({
+      body: '{"allow":true}',
+      onRequest: () => {
+        calls += 1
+      },
+    })
+    const request = { subject: 'user-1', workspaceId: 'workspace-1', routeId: 'route' }
+    await access.decide(request)
+    // The decision is cached, so the second call does not ask the service.
+    await access.decide(request)
+    expect(calls).toBe(1)
+  })
+
   test('the cache of the process is bounded', async () => {
     const cache = new MemoryDecisionCache({ maxEntries: 10 })
     for (let index = 0; index < 100; index++) {

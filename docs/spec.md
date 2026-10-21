@@ -394,6 +394,12 @@ policy of the platform and it is not the business of the client.
 The decisions are cached for `SHUTTLE_ACCESS_CACHE_TTL_MS` (5 s). Only an
 **explicit** decision is cached: a transport failure is not a decision, and
 caching it would keep denying a caller that the service would have allowed.
+
+The calls that are **in flight are shared**: a burst of requests for the
+same decision asks the service once and not once per request. The cache is
+empty every time its lifetime is over, and the lifetime is short, so a
+burst that arrives on the boundary of the lifetime would otherwise ask the
+service as many times as there are requests.
 The cache key is the subject, the workspace, the route and the roles, so a
 decision made for a caller with a role is never served to a caller without
 it.

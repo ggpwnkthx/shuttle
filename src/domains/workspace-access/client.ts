@@ -90,6 +90,20 @@ export class AccessClient {
   #transport: AccessTransport
   #cache: DecisionCache
   #onError?: (error: unknown) => void
+  /**
+   * The decisions that are being asked for, by the key of the cache.
+   *
+   * The cache of the decisions is empty every time its lifetime is over,
+   * and the lifetime is short: a burst of requests for the same decision
+   * therefore asks the service once per decision and not once per
+   * request. The service that decides the access of the callers is not a
+   * cache that is warmed once, and a stampede on it is an outage of the
+   * deployment.
+   *
+   * The entry is removed when the answer arrives: the map holds the calls
+   * that are in flight and nothing else.
+   */
+  #inFlight = new Map<string, Promise<AccessDecision>>()
 
   constructor(options: AccessClientOptions) {
     this.#baseUrl = options.baseUrl.replace(/\/+$/, '')
@@ -128,6 +142,45 @@ export class AccessClient {
       }
     }
 
+    // The calls that are in flight are shared: a burst of requests for the
+    // same decision asks the service once.
+    const pending = this.#inFlight.get(key)
+    if (pending) {
+      const decision = await pending
+      return { ...decision, cached: decision.cached }
+    }
+
+    const ask = this.#askAndCache(request, key, options)
+      .catch((error: unknown) => {
+        // The failure of the service is never a crash of the gateway: the
+        // caller is refused and the operator sees an outage.
+        this.#onError?.(error)
+        return {
+          allow: false,
+          kind: 'unavailable' as const,
+          reason: 'the access service is not available',
+          cached: false,
+          decidedAt: Date.now(),
+        }
+      })
+      .finally(() => {
+        this.#inFlight.delete(key)
+      })
+    this.#inFlight.set(key, ask)
+    return await ask
+  }
+
+  /**
+   * Asks the service and caches the decision it answers.
+   *
+   * A failure of the service is the unavailability of the service and it
+   * is never cached: the service may be able to answer the next request.
+   */
+  async #askAndCache(
+    request: AccessRequest,
+    key: string,
+    options: { fresh?: boolean; cacheTtlMs?: number }
+  ): Promise<AccessDecision> {
     let decision: AccessDecision
     try {
       decision = await this.#ask(request)
