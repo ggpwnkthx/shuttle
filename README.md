@@ -18,6 +18,7 @@ The documentation is in [docs/](docs/):
 | [docs/operations.md](docs/operations.md) | How to deploy, configure, run and review it. |
 | [docs/capacity.md](docs/capacity.md) | The measurements of the capacity. |
 | [docs/runtime.md](docs/runtime.md) | The capabilities of the runtime the gateway is written against. |
+| [docs/upstream-identity.md](docs/upstream-identity.md) | How an upstream verifies the identity of a request, with the code. |
 
 ## What it does
 

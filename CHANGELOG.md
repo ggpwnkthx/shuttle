@@ -188,6 +188,23 @@ setting that looks active but is not is a security hole.
 The check found two variables that were missing from the example the day it
 was written.
 
+### A guide and a reference implementation for the upstreams
+
+The signature of the identity is a contract: every upstream has to rebuild
+the payload of the signature and verify it, and a format that an upstream
+cannot reproduce is a format that only the gateway understands.
+
+[docs/upstream-identity.md](docs/upstream-identity.md) is the guide for an
+upstream — the headers, the key, the payload, the verification and the
+code in TypeScript and in Go — and
+[examples/upstream-identity/verify.ts](examples/upstream-identity/verify.ts)
+is a **standalone** reference implementation: it imports nothing of the
+gateway, so an upstream copies it or reads it and writes its own.
+
+The test of the example signs with the key of the gateway and verifies with
+the implementation of the upstream: a change of the format that breaks the
+contract of the upstreams fails the build.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the
