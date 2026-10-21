@@ -24,11 +24,11 @@ The documentation is in [docs/](docs/):
 
 | | |
 | --- | --- |
-| **Routing** | One upstream per route, matched on host and path, with a fixed precedence and an ambiguity check at load time. |
+| **Routing** | One upstream or several per route, matched on host and path, with a fixed precedence and an ambiguity check at load time. A route may declare the path its upstream receives. |
 | **Authentication** | OpenID Connect with PKCE for the browser, bearer tokens for the API clients, in four modes that decide predictably which credential a route accepts. |
 | **Authorization** | The access service decides who may use a workspace; the gateway asks and fails closed. |
 | **Proxying** | Streamed bodies, server sent events, uploads, a budget per phase of the upstream exchange and a limit on the body. |
-| **Header policy** | The hop-by-hop headers and the spoofable headers are removed, the identity is written by the gateway and signed with a JWS an upstream verifies with a standard library, and the forwarding headers are only trusted from known proxies. |
+| **Header policy** | The hop-by-hop headers and the spoofable headers are removed, the identity is written by the gateway and signed with a JWS an upstream verifies with a standard library, and the forwarding headers are only trusted from known proxies. The gateway writes the trace of the request. |
 | **Sessions** | Server side, in the process or in a server the replicas share (Redis or Postgres), with an idle lifetime and a maximum age. |
 | **Limits** | Four scopes of sliding windows, shared by the replicas through the shared state (Redis or Postgres), that bound a flood without a boundary burst. |
 | **WebSockets** | The upstream handshake first, bounded buffers, keepalive, and a revalidation that closes a connection whose access was revoked. |
@@ -117,10 +117,13 @@ caller reaches its upstream, and `accessCacheTtlMs` is the lifetime of the
 cached decisions of the access service on that route — the latency of a
 revocation there. They are described in [docs/operations.md](docs/operations.md).
 
+A route may also declare the path its upstream receives — `rewrite` — and
+several upstreams, which are tried in the order of the list.
+
 The environment is described in [.env.example](.env.example). Every variable
 has a default, except the ones a production deployment has to set: the
-session secret, the identity provider, the access service, the shared state
-and at least one rate limit.
+session secret, the key of the identity signature, the identity provider,
+the access service, the shared state and at least one rate limit.
 
 ## The endpoints of the gateway
 
