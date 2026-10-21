@@ -652,6 +652,20 @@ Sliding-window counters.
 
 A limit of `0` disables the limiter.
 
+**The three budgets of a request are counted at the same time.** They are
+independent: they are counted in three different windows and none of them
+changes the answer of another one. They are checked together, so the state
+the replicas share is asked **once** instead of three times: the round trip
+is on the path of every request, and the measurements of
+[capacity.md](capacity.md) attribute the cost of the shared state to the
+number of round trips.
+
+The refusal that is reported is the first of the order of the table: the
+deployment, then the caller over all the routes, then the caller on the
+route. **Every budget is counted**, even when one of them refuses: the
+request was made, and the budget of the caller is spent by the requests
+that were made.
+
 **The window.** The window **slides**: the count of a caller is the number
 of its requests in the last `windowMs` milliseconds, and not the number of
 its requests since the last boundary of the clock.

@@ -128,6 +128,7 @@ writes the headers and the cookies of the answers.
 | --- | --- |
 | `app.ts` | The Hono application, the middleware of the request id, the endpoints of the gateway. |
 | `dispatcher.ts` | The order of the pipeline (§2.3 of the spec). The only place where the domains are combined. |
+| `limits.ts` | The budgets of a request: the three independent budgets of §9 are counted at the same time, so the shared state is asked once instead of three times. |
 | `endpoints.ts` | The handlers of `/healthz`, `/readyz`, `/metrics`, `/auth/login`, `/auth/callback` and `/auth/logout`. |
 | `revalidation.ts` | The revalidation of an open WebSocket: the route, the session and the access are checked again. |
 | `dependencies.ts` | The interfaces the application is built with. It names the domains, never their adapters. |

@@ -56,6 +56,29 @@ The check of the nonce is on by default and
 `SHUTTLE_OIDC_REJECT_NONCE_TOKEN=false` turns it off for a provider whose
 access tokens carry a nonce anyway.
 
+### The three budgets of a request cost one round trip
+
+The path of a request through the state the replicas share was six round
+trips: the budget of the deployment, the budget of the caller over all the
+routes, the budget of the caller on the route, the session of the caller,
+the budget of the authenticated caller and the cached decision of the access
+service.
+
+The three budgets of the first group are independent, so they are counted
+**at the same time** now: the client of the `redis` package writes the
+commands that were queued in the same tick in one go, so the three of them
+reach the server in one round trip. The path is four round trips now, and
+the measurements of the next release will show it.
+
+Every budget is counted, even when one of them refuses: the request was
+made, and the budget of the caller is spent by the requests that were made.
+The refusal that is reported is the first of the order of the
+specification.
+
+The order of the pipeline did not change: the budgets are counted before
+the authentication, so a flood is stopped before it reaches the session
+store.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the

@@ -45,6 +45,7 @@ import type { ExchangeFailure } from '../domains/proxying'
 import { validateWorkspace } from '../domains/workspace-access'
 import { UNMATCHED_ROUTE, redactUrl } from '../observability'
 import type { GatewayDependencies } from './dependencies'
+import { checkLimits } from './limits'
 import { readCookie } from './cookies'
 import { clientGoneResponse, jsonError } from './errors'
 import { buildRevalidation } from './revalidation'
@@ -138,21 +139,26 @@ export async function dispatch(
   // 5. The limits: the budget of the deployment, the budget of the caller
   // over all the routes and the budget of the caller on this route. The
   // requests that match no route are counted in a bucket of their own.
-  const total = await dependencies.totalRateLimiter.check(TOTAL_RATE_LIMIT_KEY)
-  const global = await dependencies.globalRateLimiter.check(
-    rateLimitKey('global', { clientIp: forwarding.clientIp })
-  )
-  const scoped = await dependencies.rateLimiter.check(
-    route
+  //
+  // The three budgets are independent, so they are counted at the same
+  // time: the shared state is asked once instead of three times.
+  const limits = await checkLimits({
+    total: dependencies.totalRateLimiter,
+    global: dependencies.globalRateLimiter,
+    route: dependencies.rateLimiter,
+    totalKey: TOTAL_RATE_LIMIT_KEY,
+    globalKey: rateLimitKey('global', { clientIp: forwarding.clientIp }),
+    routeKey: route
       ? rateLimitKey('route', { clientIp: forwarding.clientIp, routeId: route.id })
-      : rateLimitKey('unmatched', { clientIp: forwarding.clientIp })
-  )
-  const limit = !total.allowed ? total : !global.allowed ? global : scoped
-  if (!limit.allowed) {
+      : rateLimitKey('unmatched', { clientIp: forwarding.clientIp }),
+  })
+  const limit = limits.refusal
+  if (limit) {
     logger.warn('the request rate limit was reached', {
       requestId,
       client: forwarding.clientIp,
       routeId: route?.id ?? null,
+      scope: limit.scope,
     })
     observer.recordRateLimit()
     recordOutcome(dependencies, route?.id ?? UNMATCHED_ROUTE, method, 429, started)
@@ -162,7 +168,7 @@ export async function dispatch(
         status: 429,
         headers: {
           'content-type': 'application/json',
-          'retry-after': String(Math.max(1, Math.ceil(limit.retryAfterMs / 1000))),
+          'retry-after': String(Math.max(1, Math.ceil(limit.decision.retryAfterMs / 1000))),
         },
       }
     )
