@@ -5,5 +5,5 @@
  * domain itself knows nothing about them.
  */
 
-export { COUNT_SCRIPT, RedisRateLimiter } from './redis-limiter'
+export { RedisRateLimiter, WINDOW_SCRIPT } from './redis-limiter'
 export type { RedisCommandPort, RedisRateLimiterOptions } from './redis-limiter'

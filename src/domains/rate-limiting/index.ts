@@ -10,5 +10,14 @@
 export { MAX_TRACKED_KEYS, MemoryRateLimiter } from './limiter'
 export type { RateLimitDecision, RateLimiterOptions, RequestLimiter } from './limiter'
 
-export { rateLimitKey, retryAfterMs, windowStart, TOTAL_RATE_LIMIT_KEY } from './policy'
+export { rateLimitKey, TOTAL_RATE_LIMIT_KEY } from './policy'
 export type { RateLimitKeyInput, RateLimitScope } from './policy'
+
+export {
+  MAX_WINDOW_BUCKETS,
+  bucketIndex,
+  bucketSizeMs,
+  evaluateWindow,
+  windowBucketCount,
+} from './window'
+export type { WindowBucket, WindowEvaluation } from './window'

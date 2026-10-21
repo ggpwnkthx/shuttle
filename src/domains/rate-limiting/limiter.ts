@@ -13,7 +13,7 @@
  */
 
 import { LRUCache } from 'lru-cache'
-import { retryAfterMs, windowStart } from './policy'
+import { bucketIndex, bucketSizeMs, evaluateWindow, windowBucketCount } from './window'
 
 /** The number of keys the in-process limiter keeps at the same time. */
 export const MAX_TRACKED_KEYS = 10_000
@@ -57,14 +57,14 @@ export interface RateLimiterOptions {
   windowMs: number
 }
 
-/** A window of the in-process limiter. */
-interface Window {
-  startedAt: number
-  count: number
+/** The buckets of the window of a caller. */
+interface CallerWindow {
+  /** The requests of a bucket, indexed by the index of the bucket. */
+  buckets: Map<number, number>
 }
 
 /**
- * A fixed window rate limiter that lives in the memory of the process.
+ * A sliding window rate limiter that lives in the memory of the process.
  *
  * It is the right one for a single node deployment and the one the tests
  * use. A deployment with more than one replica uses the Redis
@@ -85,14 +85,20 @@ interface Window {
 export class MemoryRateLimiter implements RequestLimiter {
   readonly max: number
   readonly windowMs: number
-  #windows: LRUCache<string, Window>
+  /** The size of a bucket of the window, in milliseconds. */
+  readonly bucketMs: number
+  /** The number of buckets of the window. */
+  readonly bucketCount: number
+  #windows: LRUCache<string, CallerWindow>
   /** The window of the keys the table could not hold. */
-  #overflow: Window | null = null
+  #overflow: CallerWindow | null = null
 
   constructor(options: RateLimiterOptions) {
     this.max = options.max
     this.windowMs = options.windowMs
-    this.#windows = new LRUCache<string, Window>({
+    this.bucketMs = bucketSizeMs(options.windowMs)
+    this.bucketCount = windowBucketCount(options.windowMs, this.bucketMs)
+    this.#windows = new LRUCache<string, CallerWindow>({
       max: MAX_TRACKED_KEYS,
       // The window is removed by the logic below, the ttl is a safety net.
       ttl: Math.max(this.windowMs * 2, 1_000),
@@ -124,20 +130,36 @@ export class MemoryRateLimiter implements RequestLimiter {
         retryAfterMs: 0,
       }
     }
-    // The window is fixed: it starts at a moment every replica can compute,
-    // so the windows of two deployments are the same windows.
-    const start = windowStart(now, this.windowMs)
-    const window = this.#windowOf(key, start)
-    if (window.count >= this.max) {
+    const current = bucketIndex(now, this.bucketMs)
+    const oldest = current - this.bucketCount + 1
+    const window = this.#windowOf(key)
+    // The buckets that left the window are forgotten: their requests are
+    // not counted any more.
+    for (const index of window.buckets.keys()) {
+      if (index < oldest) window.buckets.delete(index)
+    }
+    const evaluation = evaluateWindow(
+      [...window.buckets].map(([index, count]) => ({ index, count })),
+      now,
+      this.windowMs,
+      this.bucketMs,
+      this.max
+    )
+    if (!evaluation.allowed) {
       return {
         allowed: false,
         limit: this.max,
         remaining: 0,
-        retryAfterMs: retryAfterMs(now, this.windowMs),
+        retryAfterMs: evaluation.retryAfterMs,
       }
     }
-    window.count += 1
-    return { allowed: true, limit: this.max, remaining: this.max - window.count, retryAfterMs: 0 }
+    window.buckets.set(current, (window.buckets.get(current) ?? 0) + 1)
+    return {
+      allowed: true,
+      limit: this.max,
+      remaining: Math.max(0, this.max - evaluation.count),
+      retryAfterMs: 0,
+    }
   }
 
   /** Forgets the windows of a key. */
@@ -152,27 +174,18 @@ export class MemoryRateLimiter implements RequestLimiter {
    * tracked is added when the table has room, and counted in the shared
    * window when it has not.
    */
-  #windowOf(key: string, start: number): Window {
+  #windowOf(key: string): CallerWindow {
     const tracked = this.#windows.get(key)
-    if (tracked) {
-      if (tracked.startedAt !== start) {
-        tracked.startedAt = start
-        tracked.count = 0
-      }
-      return tracked
-    }
+    if (tracked) return tracked
     if (this.#windows.size < MAX_TRACKED_KEYS) {
-      const window: Window = { startedAt: start, count: 0 }
+      const window: CallerWindow = { buckets: new Map() }
       this.#windows.set(key, window)
       return window
     }
     // The table is full: the request is counted in the shared window.
-    if (!this.#overflow || this.#overflow.startedAt !== start) {
-      this.#overflow = { startedAt: start, count: 0 }
+    if (!this.#overflow) {
+      this.#overflow = { buckets: new Map() }
     }
     return this.#overflow
   }
 }
-
-/** The window of a caller, as the memory limiter computes it. */
-export { windowStart }

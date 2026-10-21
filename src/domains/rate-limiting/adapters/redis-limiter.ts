@@ -1,18 +1,25 @@
 /**
- * A fixed window rate limiter whose windows live in a Redis server.
+ * A sliding window rate limiter whose windows live in a Redis server.
  *
  * Every replica counts in the same window, so the limit of the deployment is
  * the configured limit and not the limit of one replica.
  *
- * The increment and the expiry are **one** operation: a script of the server
- * does both, so a window can never be counted without an expiry and two
- * replicas can never count the same request in two windows. An ambiguous
- * write is not retried: a counter that was incremented twice is refused
- * once more than it should be, which is the safe direction.
+ * The counting, the pruning of the buckets that left the window and the
+ * expiry are **one** operation: a script of the server does all of it, so
+ * two replicas can never count the same request in two windows and a window
+ * can never be counted without an expiry. An ambiguous write is not
+ * retried: a counter that was incremented twice is refused once more than
+ * it should be, which is the safe direction.
+ *
+ * The buckets of a window are the fields of a hash: the index of the bucket
+ * is the field and the number of requests of the bucket is the value. The
+ * hash holds at most the buckets of a window, and the expiry of the key
+ * removes it when the caller is gone.
  */
 
 import { createHash } from 'node:crypto'
-import { rateLimitKey, retryAfterMs, windowStart } from '../policy'
+import { rateLimitKey } from '../policy'
+import { bucketSizeMs, windowBucketCount } from '../window'
 import type { RateLimitDecision, RequestLimiter } from '../limiter'
 
 /**
@@ -26,18 +33,68 @@ export interface RedisCommandPort {
 }
 
 /**
- * The script that counts a request.
+ * The script that counts a request in the window of a key.
  *
- * The counter is incremented and the expiry is set in the same operation,
- * and the expiry is only set when the window is created: the window lasts
- * exactly as long as it should.
+ * It returns three values: whether the request is allowed, the number of
+ * requests in the window and the number of milliseconds the caller has to
+ * wait when it is refused.
+ *
+ * The buckets that left the window are removed first, so the count is the
+ * count of the last `windowMs` milliseconds. A request that is over the
+ * limit is not counted, so a client that keeps hammering does not push the
+ * window further away.
  */
-export const COUNT_SCRIPT = `
-local current = redis.call('INCR', KEYS[1])
-if current == 1 then
-  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+export const WINDOW_SCRIPT = `
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local bucket = tonumber(ARGV[2])
+local buckets = tonumber(ARGV[3])
+local max = tonumber(ARGV[4])
+local current = math.floor(now / bucket)
+local oldest = current - buckets + 1
+
+-- The buckets that left the window are forgotten.
+local fields = redis.call('HKEYS', key)
+for i = 1, #fields do
+  if tonumber(fields[i]) < oldest then
+    redis.call('HDEL', key, fields[i])
+  end
 end
-return current
+
+-- The buckets of the window, in the order of their index.
+local all = redis.call('HGETALL', key)
+local entries = {}
+for i = 1, #all, 2 do
+  local index = tonumber(all[i])
+  if index >= oldest then
+    entries[#entries + 1] = { index, tonumber(all[i + 1]) }
+  end
+end
+table.sort(entries, function(left, right) return left[1] < right[1] end)
+
+local total = 0
+for i = 1, #entries do
+  total = total + entries[i][2]
+end
+
+if total >= max then
+  -- The caller waits for the oldest requests of the window to leave it.
+  local needed = total - (max - 1)
+  local prefix = 0
+  local retry = (current + buckets) * bucket - now
+  for i = 1, #entries do
+    if prefix + entries[i][2] >= needed then
+      retry = (entries[i][1] + buckets) * bucket - now
+      break
+    end
+    prefix = prefix + entries[i][2]
+  end
+  return {0, total, retry}
+end
+
+redis.call('HINCRBY', key, tostring(current), 1)
+redis.call('PEXPIRE', key, bucket * buckets * 2)
+return {1, total + 1, 0}
 `
 
 export interface RedisRateLimiterOptions {
@@ -82,10 +139,9 @@ export class RedisRateLimiter implements RequestLimiter {
   /**
    * Counts a request in the window of the key.
    *
-   * The key of the window contains the moment the window started, so a new
-   * window is a new key and the old one expires on its own. The count is
-   * atomic, the expiry is set with it, so the key of a window never outlives
-   * the window by more than the grace period.
+   * The window slides: the key holds the buckets of the last `windowMs`
+   * milliseconds, and the count of the window is the sum of their counts.
+   * The key does not carry the moment of the window: the buckets do.
    */
   async check(key: string, now: number = Date.now()): Promise<RateLimitDecision> {
     if (this.disabled) {
@@ -96,22 +152,33 @@ export class RedisRateLimiter implements RequestLimiter {
         retryAfterMs: 0,
       }
     }
-    const start = windowStart(now, this.windowMs)
-    const redisKey = `${this.#prefix}:rl:${hashKey(key)}:${start}`
-    // The key outlives the window a little, so a request that arrives at the
-    // end of the window still finds its window.
-    const ttlMs = this.windowMs + Math.floor(this.windowMs / 2)
+    const bucketMs = bucketSizeMs(this.windowMs)
+    const buckets = windowBucketCount(this.windowMs, bucketMs)
+    const redisKey = `${this.#prefix}:rl:${hashKey(key)}`
     try {
-      const result = await this.#client.eval(COUNT_SCRIPT, 1, redisKey, ttlMs)
-      const count = Number(result)
-      if (!Number.isFinite(count)) {
-        throw new Error('the counter of the window is not a number')
+      const result = await this.#client.eval(
+        WINDOW_SCRIPT,
+        1,
+        redisKey,
+        now,
+        bucketMs,
+        buckets,
+        this.max
+      )
+      if (!Array.isArray(result) || result.length < 3) {
+        throw new Error('the answer of the limiter is not a window')
+      }
+      const allowed = Number(result[0]) === 1
+      const count = Number(result[1])
+      const retryAfterMs = Number(result[2])
+      if (!Number.isFinite(count) || !Number.isFinite(retryAfterMs)) {
+        throw new Error('the answer of the limiter is not a number')
       }
       return {
-        allowed: count <= this.max,
+        allowed,
         limit: this.max,
-        remaining: Math.max(0, this.max - count),
-        retryAfterMs: count <= this.max ? 0 : retryAfterMs(now, this.windowMs),
+        remaining: allowed ? Math.max(0, this.max - count) : 0,
+        retryAfterMs: allowed ? 0 : retryAfterMs,
       }
     } catch (error) {
       // The limiter fails open: the protection against a flood is worth
@@ -123,8 +190,8 @@ export class RedisRateLimiter implements RequestLimiter {
 
   /** Forgets the windows of a key. */
   async reset(key: string): Promise<void> {
-    // The windows of a key are removed by their expiry, the reset is a
-    // courtesy for the callers that use it.
+    // The buckets leave the window on their own, the reset is a courtesy
+    // for the callers that use it.
     void key
   }
 }

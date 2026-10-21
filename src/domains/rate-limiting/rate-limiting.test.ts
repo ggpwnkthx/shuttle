@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { COUNT_SCRIPT, RedisRateLimiter } from './adapters'
+import { RedisRateLimiter, WINDOW_SCRIPT } from './adapters'
 import {
   MAX_TRACKED_KEYS,
   MemoryRateLimiter,
   TOTAL_RATE_LIMIT_KEY,
+  bucketSizeMs,
   rateLimitKey,
-  retryAfterMs,
-  windowStart,
+  windowBucketCount,
 } from './index'
 
 describe('the scopes of the limiters', () => {
@@ -35,16 +35,9 @@ describe('the scopes of the limiters', () => {
 })
 
 describe('the window of a caller', () => {
-  test('the window starts at a moment every replica can compute', () => {
-    expect(windowStart(960_000, 60_000)).toBe(960_000)
-    expect(windowStart(1_059_999, 60_000)).toBe(1_020_000)
-    expect(windowStart(1_020_000, 60_000)).toBe(1_020_000)
-  })
-
-  test('the time that is left is the time that is really left', () => {
-    expect(retryAfterMs(960_000, 60_000)).toBe(60_000)
-    expect(retryAfterMs(990_000, 60_000)).toBe(30_000)
-    expect(retryAfterMs(1_019_999, 60_000)).toBe(1)
+  test('the window is divided into a bounded number of buckets', () => {
+    expect(bucketSizeMs(60_000)).toBe(1_000)
+    expect(windowBucketCount(60_000, 1_000)).toBe(60)
   })
 })
 
@@ -75,11 +68,20 @@ describe('the limiter of the memory', () => {
     expect((await limiter.check('caller:1', 960_000)).allowed).toBe(false)
   })
 
-  test('a new window starts when the old one is over', async () => {
+  test('the window slides: the budget of the last milliseconds is the budget', async () => {
+    const limiter = new MemoryRateLimiter({ max: 1, windowMs: 60_000 })
+    // The request at the end of a fixed window and the request at the
+    // beginning of the next one are two requests in one millisecond: a
+    // fixed window lets the second one through, a sliding window does not.
+    expect((await limiter.check('caller:1', 959_999)).allowed).toBe(true)
+    expect((await limiter.check('caller:1', 960_000)).allowed).toBe(false)
+  })
+
+  test('a request leaves the window when its bucket leaves it', async () => {
     const limiter = new MemoryRateLimiter({ max: 1, windowMs: 60_000 })
     expect((await limiter.check('caller:1', 960_000)).allowed).toBe(true)
     expect((await limiter.check('caller:1', 990_000)).allowed).toBe(false)
-    // The next window starts at the next boundary of the clock.
+    // The bucket of the request leaves the window a window later.
     expect((await limiter.check('caller:1', 1_020_000)).allowed).toBe(true)
   })
 
@@ -128,46 +130,61 @@ describe('the limiter of the memory', () => {
 })
 
 describe('the limiter of the shared state', () => {
-  /** A client that counts in a map, like a server would. */
-  function fakeRedis() {
-    const counters = new Map<string, number>()
+  /** A client that answers like the server of the script does. */
+  function fakeRedis(answer: unknown) {
+    const calls: { key: string; args: (string | number)[] }[] = []
     return {
-      counters,
-      eval(script: string, numkeys: number, ...keysAndArgs: (string | number)[]) {
-        if (!script.includes('INCR') || numkeys !== 1) throw new Error('unexpected script')
-        const key = String(keysAndArgs[0])
-        const count = (counters.get(key) ?? 0) + 1
-        counters.set(key, count)
-        return Promise.resolve(count)
+      calls,
+      eval(_script: string, numkeys: number, ...keysAndArgs: (string | number)[]) {
+        if (numkeys !== 1) throw new Error('unexpected script')
+        calls.push({ key: String(keysAndArgs[0]), args: keysAndArgs.slice(1) })
+        return Promise.resolve(answer)
       },
     }
   }
 
-  test('the requests over the limit are refused', async () => {
-    const client = fakeRedis()
+  test('the answer of the server is the answer of the limiter', async () => {
+    const client = fakeRedis([0, 2, 60_000])
     const limiter = new RedisRateLimiter({
       client,
       max: 2,
       windowMs: 60_000,
     })
-    expect((await limiter.check('caller:1', 960_000)).allowed).toBe(true)
-    expect((await limiter.check('caller:1', 960_000)).allowed).toBe(true)
-    const refused = await limiter.check('caller:1', 960_000)
-    expect(refused.allowed).toBe(false)
-    expect(refused.retryAfterMs).toBe(60_000)
+    const decision = await limiter.check('caller:1', 960_000)
+    expect(decision.allowed).toBe(false)
+    expect(decision.remaining).toBe(0)
+    expect(decision.retryAfterMs).toBe(60_000)
   })
 
-  test('the counter and the expiry are one operation', async () => {
-    const client = fakeRedis()
+  test('an allowed request reports what is left of the budget', async () => {
+    const client = fakeRedis([1, 1, 0])
+    const limiter = new RedisRateLimiter({ client, max: 2, windowMs: 60_000 })
+    const decision = await limiter.check('caller:1', 960_000)
+    expect(decision.allowed).toBe(true)
+    expect(decision.remaining).toBe(1)
+    expect(decision.retryAfterMs).toBe(0)
+  })
+
+  test('the key of a window does not carry a moment', async () => {
+    const client = fakeRedis([1, 1, 0])
     const limiter = new RedisRateLimiter({ client, max: 10, windowMs: 60_000 })
     await limiter.check('caller:1', 960_000)
-    const keys = [...client.counters.keys()]
-    expect(keys).toHaveLength(1)
-    expect(keys[0]).toContain(':rl:')
-    expect(keys[0]).toContain(':960000')
-    // The script carries the expiry of the window with the counter.
-    expect(COUNT_SCRIPT).toContain('INCR')
-    expect(COUNT_SCRIPT).toContain('PEXPIRE')
+    // The buckets of the window carry the moment, so the key of a caller
+    // is the same for the whole window.
+    const key = client.calls[0]!.key
+    expect(key).toContain(':rl:')
+    expect(key).toMatch(/:rl:[0-9a-f]{32}$/)
+  })
+
+  test('the script carries the count and the expiry', async () => {
+    const client = fakeRedis([1, 1, 0])
+    const limiter = new RedisRateLimiter({ client, max: 10, windowMs: 60_000 })
+    await limiter.check('caller:1', 960_000)
+    // The buckets of the window are the fields of a hash, and the expiry
+    // of the key is set with the count.
+    expect(WINDOW_SCRIPT).toContain('HINCRBY')
+    expect(WINDOW_SCRIPT).toContain('PEXPIRE')
+    expect(WINDOW_SCRIPT).toContain('HGETALL')
   })
 
   test('a server that cannot be reached fails open', async () => {
@@ -187,13 +204,19 @@ describe('the limiter of the shared state', () => {
     expect(errors).toHaveLength(1)
   })
 
-  test('an answer that is not a number fails open', async () => {
+  test('an answer that is not a window fails open', async () => {
     const limiter = new RedisRateLimiter({
       client: { eval: () => Promise.resolve('not a number') },
       max: 1,
       windowMs: 60_000,
     })
     expect((await limiter.check('caller:1', 960_000)).allowed).toBe(true)
+    const other = new RedisRateLimiter({
+      client: { eval: () => Promise.resolve([1, 'not a number', 0]) },
+      max: 1,
+      windowMs: 60_000,
+    })
+    expect((await other.check('caller:1', 960_000)).allowed).toBe(true)
   })
 
   test('a limit of zero disables the limiter', async () => {
