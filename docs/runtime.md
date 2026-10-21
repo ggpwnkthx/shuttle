@@ -25,7 +25,9 @@ decision 1).
 | A compressed answer | the fixture answers with `content-encoding: gzip` | The runtime decompresses the answers **by default**. The transport therefore asks for `decompress: false`, so the bytes of the upstream and its `content-encoding` reach the caller as they are. |
 | The handshake with an upstream websocket | the fixture answers `403` instead of a handshake | The refusal is reported with its status, its headers and its body. It is not a network failure and the caller deserves to see it. |
 | The subprotocol of the upstream | the fixture selects the first offered subprotocol | The subprotocol the upstream selected is reported and is mirrored to the caller. |
+| The TLS of the handshake of a websocket | the websocket client of the runtime against a server of TLS | The client of the runtime cannot speak TLS: the handshake fails with an error that says nothing about the cause, against a server of the runtime and against a server of OpenSSL alike. The gateway refuses the handshake with the reason `tls` instead, and the operator reads it in the log. **An upstream of a websocket is served over plain http.** |
 | The upgrade of the caller | a raw client reads the `101` answer | The handshake answer carries the headers of the gateway (the request id, the refreshed cookie). Neither a browser nor the websocket client of the runtime exposes them, so a test has to read the socket. |
+| The TLS of the connections to the upstreams | `test/network/tls.test.ts`: the upstream asks for a certificate of the client | The gateway presents the certificate of the deployment and verifies the certificate of the upstream with the authority of the deployment. The upstream that does not accept the certificate refuses the connection, and the gateway answers `502`. |
 
 ## The versions that were measured
 

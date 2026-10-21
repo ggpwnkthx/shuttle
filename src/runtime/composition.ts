@@ -228,7 +228,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
       })
 
   const exchanges = new HttpExchangeService({
-    transport: new BunHttpTransport(),
+    transport: new BunHttpTransport({ tls: settings.upstreamTls }),
     maxConcurrent: settings.resources.maxConcurrentRequests,
   })
 
@@ -238,7 +238,7 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     maxConnections: settings.websockets.maxConnections,
   })
   const websockets = new WebSocketService({
-    upstream: new WsUpstreamHandshake(),
+    upstream: new WsUpstreamHandshake({ tls: settings.upstreamTls }),
     reservations,
     settings: {
       maxConnections: settings.websockets.maxConnections,

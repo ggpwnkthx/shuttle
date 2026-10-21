@@ -61,7 +61,7 @@ export interface UpstreamHandshakeRequest {
 export type UpstreamHandshakeOutcome =
   | { kind: 'accepted'; protocol: string; headers: Headers; socket: UpstreamSocket }
   | { kind: 'refused'; status: number; headers: Headers; body: string }
-  | { kind: 'failed'; reason: 'timeout' | 'network'; message: string }
+  | { kind: 'failed'; reason: 'timeout' | 'network' | 'tls'; message: string }
 
 /**
  * The port of the handshake with the upstream.

@@ -74,6 +74,22 @@ export interface NetworkSettings {
 }
 
 /** The settings of the browser. */
+/**
+ * The TLS of the connections to the upstreams.
+ *
+ * The gateway presents the certificate of the deployment to the upstreams
+ * that ask for one, and it verifies the certificate of the upstream with the
+ * authority of the deployment.
+ */
+export interface UpstreamTlsSettings {
+  /** The authority that signs the certificate of the upstream, in PEM. */
+  ca?: string
+  /** The certificate of the gateway, in PEM. */
+  cert?: string
+  /** The private key of the certificate of the gateway, in PEM. */
+  key?: string
+}
+
 export interface BrowserSettings {
   /** The `Secure` attribute of the cookies. */
   cookieSecure: boolean
@@ -161,6 +177,8 @@ export interface RuntimeSettings {
   session: SessionSettings
   sharedState: SharedStateSettings
   browser: BrowserSettings
+  /** The TLS of the connections to the upstreams. */
+  upstreamTls: UpstreamTlsSettings
   limits: LimitSettings
   /** The bounds of the resources of the process. */
   resources: ResourceSettings
@@ -223,6 +241,22 @@ function tlsCaEnv() {
   return z.string().optional()
 }
 
+/**
+ * A PEM value, given directly or as base64.
+ *
+ * The secret stores hand out the certificates of a deployment in base64,
+ * because a PEM in an environment variable is hard to read.
+ */
+function pemOf(pem: string | undefined, base64: string | undefined): string | undefined {
+  if (pem) return pem
+  if (!base64) return undefined
+  try {
+    return Buffer.from(base64, 'base64').toString('utf8')
+  } catch {
+    throw new Error('the value is not base64')
+  }
+}
+
 const EnvSchema = z.object({
   NODE_ENV: z.string().optional(),
 
@@ -279,6 +313,21 @@ const EnvSchema = z.object({
   SHUTTLE_ALLOW_MEMORY_STATE: boolEnv(),
   SHUTTLE_SESSION_TLS_CA: tlsCaEnv(),
   SHUTTLE_SESSION_TLS_CA_BASE64: tlsCaEnv(),
+
+  /**
+   * The TLS of the connections to the upstreams.
+   *
+   * The authority that signs the certificate of the upstream, and the
+   * certificate of the gateway with its private key for the upstreams that
+   * ask for one. The certificate and the key belong together: a certificate
+   * without a key is a setting that looks active but is not.
+   */
+  SHUTTLE_UPSTREAM_TLS_CA: z.string().optional(),
+  SHUTTLE_UPSTREAM_TLS_CA_BASE64: z.string().optional(),
+  SHUTTLE_UPSTREAM_TLS_CERT: z.string().optional(),
+  SHUTTLE_UPSTREAM_TLS_CERT_BASE64: z.string().optional(),
+  SHUTTLE_UPSTREAM_TLS_KEY: z.string().optional(),
+  SHUTTLE_UPSTREAM_TLS_KEY_BASE64: z.string().optional(),
 
   SHUTTLE_SHARED_STATE_URL: z.string().optional(),
   SHUTTLE_SHARED_STATE_KEY_PREFIX: z.string().default('shuttle'),
@@ -448,6 +497,21 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       ? parsed.SHUTTLE_OIDC_SCOPES
       : ['openid', 'profile', 'email', 'groups']
 
+  // The TLS of the connections to the upstreams. The certificate of the
+  // gateway and its private key belong together: a certificate without a
+  // key is a setting that looks active but is not, and the upstreams that
+  // ask for a client certificate would refuse every request.
+  const upstreamCert = pemOf(
+    parsed.SHUTTLE_UPSTREAM_TLS_CERT,
+    parsed.SHUTTLE_UPSTREAM_TLS_CERT_BASE64
+  )
+  const upstreamKey = pemOf(parsed.SHUTTLE_UPSTREAM_TLS_KEY, parsed.SHUTTLE_UPSTREAM_TLS_KEY_BASE64)
+  if (Boolean(upstreamCert) !== Boolean(upstreamKey)) {
+    throw new Error(
+      'SHUTTLE_UPSTREAM_TLS_CERT and SHUTTLE_UPSTREAM_TLS_KEY must be set together: the certificate of the gateway is useless without its private key, and a private key without a certificate identifies nothing'
+    )
+  }
+
   return {
     production,
     configPath: parsed.SHUTTLE_CONFIG,
@@ -506,6 +570,11 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       cookieSecure: parsed.SHUTTLE_COOKIE_SECURE ?? production,
       allowedOrigins: parsed.SHUTTLE_ALLOWED_ORIGINS,
       csrfStrict: parsed.SHUTTLE_CSRF_STRICT ?? false,
+    },
+    upstreamTls: {
+      ca: pemOf(parsed.SHUTTLE_UPSTREAM_TLS_CA, parsed.SHUTTLE_UPSTREAM_TLS_CA_BASE64),
+      cert: upstreamCert,
+      key: upstreamKey,
     },
     limits: {
       maxBodyBytes: parsed.SHUTTLE_MAX_BODY_BYTES,

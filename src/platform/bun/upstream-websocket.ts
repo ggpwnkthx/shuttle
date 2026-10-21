@@ -86,8 +86,37 @@ class WsUpstreamSocket implements UpstreamSocket {
   }
 }
 
+/**
+ * The TLS of the connections to the upstream.
+ *
+ * The values are PEM: the authority that signs the certificate of the
+ * upstream, the certificate of the gateway and its private key.
+ */
+export interface UpstreamTlsOptions {
+  ca?: string
+  cert?: string
+  key?: string
+}
+
 export class WsUpstreamHandshake implements UpstreamHandshakePort {
+  #tls?: UpstreamTlsOptions
+
+  constructor(options: { tls?: UpstreamTlsOptions } = {}) {
+    this.#tls = options.tls
+  }
+
   async connect(request: UpstreamHandshakeRequest): Promise<UpstreamHandshakeOutcome> {
+    // The websocket client of the runtime cannot speak TLS: the handshake
+    // fails with an error that says nothing about the cause. The gateway
+    // says it plainly instead, and the operator reads the reason in the log
+    // (the measurements are in docs/runtime.md).
+    if (request.url.startsWith('wss://')) {
+      return {
+        kind: 'failed',
+        reason: 'tls',
+        message: 'the websocket client of the runtime cannot connect to an upstream over TLS',
+      }
+    }
     return await new Promise<UpstreamHandshakeOutcome>((resolve) => {
       const socket = new NodeWebSocket(request.url, request.protocols, {
         headers: request.headers,
@@ -97,6 +126,10 @@ export class WsUpstreamHandshake implements UpstreamHandshakePort {
         // that negotiates it on its own would send frames the other side
         // cannot read.
         perMessageDeflate: false,
+        // The TLS of the connections to the upstream: the authority that
+        // signs its certificate, and the certificate of the gateway for the
+        // upstreams that ask for one.
+        ...(this.#tls ?? {}),
       })
 
       let settled = false

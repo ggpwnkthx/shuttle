@@ -73,6 +73,37 @@ describe('the environment of the gateway', () => {
     expect(first).not.toBe(second)
     expect(first.length).toBeGreaterThanOrEqual(32)
   })
+
+  test('the TLS of the upstreams is read from the environment', () => {
+    const settings = readEnv({
+      SHUTTLE_UPSTREAM_TLS_CA: 'the-ca',
+      SHUTTLE_UPSTREAM_TLS_CERT: 'the-cert',
+      SHUTTLE_UPSTREAM_TLS_KEY: 'the-key',
+    })
+    expect(settings.upstreamTls.ca).toBe('the-ca')
+    expect(settings.upstreamTls.cert).toBe('the-cert')
+    expect(settings.upstreamTls.key).toBe('the-key')
+  })
+
+  test('the certificates of the upstreams may be given as base64', () => {
+    const settings = readEnv({
+      SHUTTLE_UPSTREAM_TLS_CA_BASE64: Buffer.from('the-ca').toString('base64'),
+      SHUTTLE_UPSTREAM_TLS_CERT_BASE64: Buffer.from('the-cert').toString('base64'),
+      SHUTTLE_UPSTREAM_TLS_KEY_BASE64: Buffer.from('the-key').toString('base64'),
+    })
+    expect(settings.upstreamTls.ca).toBe('the-ca')
+    expect(settings.upstreamTls.cert).toBe('the-cert')
+    expect(settings.upstreamTls.key).toBe('the-key')
+  })
+
+  test('the certificate of the gateway and its key belong together', () => {
+    expect(() => readEnv({ SHUTTLE_UPSTREAM_TLS_CERT: 'the-cert' })).toThrow(
+      /SHUTTLE_UPSTREAM_TLS_CERT and SHUTTLE_UPSTREAM_TLS_KEY/
+    )
+    expect(() => readEnv({ SHUTTLE_UPSTREAM_TLS_KEY: 'the-key' })).toThrow(
+      /SHUTTLE_UPSTREAM_TLS_CERT and SHUTTLE_UPSTREAM_TLS_KEY/
+    )
+  })
 })
 
 describe('the environment of a production deployment', () => {

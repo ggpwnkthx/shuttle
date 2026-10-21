@@ -31,6 +31,25 @@ export interface BunHttpTransportOptions {
    * the network of the runtime.
    */
   fetchImpl?: typeof fetch
+  /**
+   * The TLS of the connections to the upstream.
+   *
+   * The authority that signs the certificate of the upstream, and the
+   * certificate of the gateway for the upstreams that ask for one.
+   */
+  tls?: UpstreamTlsOptions
+}
+
+/**
+ * The TLS of the connections to the upstreams.
+ *
+ * The values are PEM: the authority that signs the certificate of the
+ * upstream, the certificate of the gateway and its private key.
+ */
+export interface UpstreamTlsOptions {
+  ca?: string
+  cert?: string
+  key?: string
 }
 
 /** A request with a body needs the `duplex` option of the runtime. */
@@ -38,9 +57,11 @@ type StreamingRequestInit = RequestInit & { duplex: 'half' }
 
 export class BunHttpTransport implements HttpTransport {
   #fetch: typeof fetch
+  #tls?: UpstreamTlsOptions
 
   constructor(options: BunHttpTransportOptions = {}) {
     this.#fetch = options.fetchImpl ?? fetch
+    this.#tls = options.tls
   }
 
   async send(request: UpstreamRequest): Promise<UpstreamResponse> {
@@ -57,6 +78,12 @@ export class BunHttpTransport implements HttpTransport {
     // decompresses the answers by default, which would change the bytes the
     // caller receives and the length the upstream announced.
     Object.assign(init, { decompress: false })
+    if (this.#tls) {
+      // The TLS of the connections to the upstream: the authority that
+      // signs its certificate, and the certificate of the gateway for the
+      // upstreams that ask for one.
+      Object.assign(init, { tls: this.#tls })
+    }
     if (request.body) {
       Object.assign(init, { body: request.body, duplex: 'half' } satisfies StreamingRequestInit)
     }

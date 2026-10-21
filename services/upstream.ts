@@ -30,6 +30,20 @@ export interface UpstreamOptions {
   name?: string
   port?: number
   hostname?: string
+  /**
+   * The TLS of the upstream.
+   *
+   * With `requireClientCert`, the upstream asks the caller for a
+   * certificate and refuses the connections that do not present a valid
+   * one: it is the mutual TLS the tests of the gateway need.
+   */
+  tls?: {
+    cert: string
+    key: string
+    /** The authority that signs the certificate of the caller. */
+    ca?: string
+    requireClientCert?: boolean
+  }
 }
 
 export interface StartedUpstream {
@@ -84,6 +98,18 @@ export function createUpstream(options: UpstreamOptions = {}): StartedUpstream {
   const server = Bun.serve<{ service: string; headers: Record<string, string> }>({
     port: options.port ?? 0,
     hostname: options.hostname ?? '127.0.0.1',
+    ...(options.tls
+      ? {
+          tls: {
+            cert: options.tls.cert,
+            key: options.tls.key,
+            ...(options.tls.ca ? { ca: options.tls.ca } : {}),
+            // The upstream asks the caller for a certificate: a caller
+            // without a valid one is refused during the handshake.
+            ...(options.tls.requireClientCert ? { requestCert: true } : {}),
+          },
+        }
+      : {}),
     idleTimeout: 60,
     async fetch(request, server) {
       const url = new URL(request.url)
@@ -281,7 +307,7 @@ export function createUpstream(options: UpstreamOptions = {}): StartedUpstream {
   })
 
   return {
-    url: `http://127.0.0.1:${server.port ?? 0}`,
+    url: `${options.tls ? 'https' : 'http'}://127.0.0.1:${server.port ?? 0}`,
     port: server.port ?? 0,
     uploads,
     stop: async () => {

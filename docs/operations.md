@@ -44,6 +44,8 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_SESSION_URL` | `rediss://:<password>@<redis>:6379/0` | The sessions of the callers. It has to be a Redis server in production. |
 | `SHUTTLE_SHARED_STATE_URL` | `rediss://:<password>@<redis>:6379/1` | The limits and the decisions. It defaults to the url of the sessions. It has to be a Redis server in production. |
 | `SHUTTLE_METRICS_TOKEN` | A random value | The metrics are only served with it. |
+| `SHUTTLE_UPSTREAM_TLS_CA` | The authority of the deployment | The certificate of the upstream is verified with it. |
+| `SHUTTLE_UPSTREAM_TLS_CERT` / `_KEY` | The certificate of the gateway and its private key | They are presented to the upstreams that ask for a client certificate. They belong together. |
 | `SHUTTLE_TRUSTED_PROXIES` | The ranges of the ingress | The forwarding headers are only trusted from them. |
 | `SHUTTLE_EXTERNAL_PROTO` | `https` | The protocol the callers use. |
 | `SHUTTLE_COOKIE_SECURE` | `true` | The cookies of the gateway are `Secure`. |
@@ -503,3 +505,4 @@ deployment:
 | The revocation of an access takes the TTL of the cache | The TTL is the knob: `SHUTTLE_ACCESS_CACHE_TTL_MS`, and `accessCacheTtlMs` on the route that has to be revoked at once. |
 | The latency of a decision that is not cached | The control plane has to be fast. The cache absorbs the rest. |
 | One hostname per product surface | Subdomains, or one host with distinct path prefixes. |
+| The upstream of a websocket over TLS | The websocket client of the runtime cannot speak TLS: the upstream of a websocket is served over plain http. The measurements are in [runtime.md](runtime.md). |

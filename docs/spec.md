@@ -659,6 +659,25 @@ The path is forwarded unchanged: the prefix that matched the route is not
 stripped, and the path is not rewritten. The WebSocket url is built the
 same way, with `http` → `ws` and `https` → `wss`.
 
+### 11.1.1 The TLS of the connections to the upstreams
+
+An upstream that is served over `https` is reached over TLS. The gateway
+verifies the certificate of the upstream with the authority of the
+deployment (`SHUTTLE_UPSTREAM_TLS_CA`) and presents the certificate of the
+deployment (`SHUTTLE_UPSTREAM_TLS_CERT` and `SHUTTLE_UPSTREAM_TLS_KEY`)
+when the upstream asks for one. The certificate and its key belong
+together: a deployment that sets one without the other is refused at the
+start.
+
+The upstream that does not accept the certificate refuses the connection:
+the gateway answers `502 bad_gateway` and the reason is in the log.
+
+**An upstream of a websocket is served over plain http.** The websocket
+client of the runtime cannot speak TLS (the measurements are in
+[runtime.md](runtime.md)), so a handshake with an upstream over `wss` is
+refused with the reason `tls` instead of failing with an error that hides
+the cause.
+
 ### 11.2 The phases and their budgets
 
 Bodies are streamed in both directions, so server sent events and large
@@ -941,3 +960,4 @@ lists are numbered independently.
 | 29 | The `Authorization` header of the caller | It is forwarded to the upstream by default, and a route that does not need it says so with `forwardAuthorization: false` (§7.1). |
 | 30 | The latency of a revocation | It is a property of the route: `accessCacheTtlMs` is the lifetime of the cached decisions of that route, and `0` makes the revocation on it immediate (§6). |
 | 31 | The handshake of a websocket | It follows the header policy of the http path: the cookies of the gateway never reach an upstream (§7.1, §10). |
+| 32 | The TLS of the connections to the upstreams | The gateway verifies the certificate of the upstream with the authority of the deployment and presents the certificate of the deployment when the upstream asks for one (§11.1.1). The upstream of a websocket is served over plain http: the websocket client of the runtime cannot speak TLS. |

@@ -67,6 +67,23 @@ caller. The cookies of the gateway are stripped now, the identity of the
 caller is written by the gateway, and the token of the caller is forwarded
 only when the route says so.
 
+### The TLS of the connections to the upstreams
+
+An upstream that is served over `https` is reached over TLS. The gateway
+verifies its certificate with the authority of the deployment and presents
+the certificate of the deployment when the upstream asks for one:
+
+- `SHUTTLE_UPSTREAM_TLS_CA` — the authority that signs the certificate of
+  the upstream.
+- `SHUTTLE_UPSTREAM_TLS_CERT` and `SHUTTLE_UPSTREAM_TLS_KEY` — the
+  certificate of the gateway and its private key. They belong together: a
+  deployment that sets one without the other is refused at the start.
+
+The upstream of a websocket is served over plain http: the websocket client
+of the runtime cannot speak TLS, and the gateway refuses such a handshake
+with the reason `tls` instead of failing with an error that hides the
+cause.
+
 ### The host of a request
 
 The `x-forwarded-host` of a **trusted proxy** is now honoured. It is the
