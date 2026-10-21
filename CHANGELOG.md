@@ -67,6 +67,27 @@ every transaction of the limiter. With `on`, the scope of the deployment
 serializes the requests of the whole deployment and every one of them
 waits for the disk.
 
+### The binaries of the release
+
+The release workflow compiles the gateway for the seven platforms of the
+release and publishes them on the release of the tag:
+
+| Platform | The file |
+| --- | --- |
+| Linux x64 (glibc) | `shuttle-<version>-linux-x64` |
+| Linux x64 (musl, Alpine) | `shuttle-<version>-linux-x64-musl` |
+| Linux arm64 | `shuttle-<version>-linux-arm64` |
+| macOS x64 | `shuttle-<version>-darwin-x64` |
+| macOS arm64 | `shuttle-<version>-darwin-arm64` |
+| Windows x64 | `shuttle-<version>-windows-x64.exe` |
+| Windows arm64 | `shuttle-<version>-windows-arm64.exe` |
+
+The binaries carry the runtime of the release inside them: nothing else has
+to be installed. The workflow refuses a tag that does not name the version
+of the package, it checks that every binary is of the format of its
+platform, and it starts the binary of the runner and waits for its health
+probe before it publishes anything. The checksums are published with them.
+
 ### The schema of the shared state
 
 The gateway builds the schema of a Postgres server when it connects

@@ -568,12 +568,13 @@ against the in-process engine of Postgres itself.
 
 ## The workflow of the release
 
-The CI workflow (`.github/workflows/ci.yml`) runs six jobs:
+The CI workflow (`.github/workflows/ci.yml`) runs seven jobs:
 
 | Job | What it proves |
 | --- | --- |
 | `check` | The types, the lint, the format, the import boundaries, the unit and contract tests, the network tests and the soak. |
 | `redis` | The shared state against a real Redis 7. |
+| `postgres` | The shared state against a real Postgres 16, and the migration of the schema. |
 | `load` | The capacity: 20 000 requests at 100 in flight, and 500 WebSockets. |
 | `browser` | The cookies and the origins in a real Chromium. |
 | `image` | The image builds, starts with the configuration of a deployment, refuses to start without a session secret, without an access service, without an identity provider and without a rate limit, and does not contain the fixtures. |
@@ -582,6 +583,31 @@ The release workflow (`.github/workflows/release.yml`) builds the image of a
 tag, starts it with the configuration of a deployment and exports it as an
 artifact of the run. The image carries the version and the revision as
 labels, and holds the dependencies of the gateway alone.
+
+The workflow of the binaries (`.github/workflows/release-binaries.yml`)
+compiles the gateway for the seven platforms of the release and publishes
+them on the release of the tag:
+
+| Platform | The target of the compilation |
+| --- | --- |
+| Linux x64 (glibc) | `bun-linux-x64` |
+| Linux x64 (musl, Alpine) | `bun-linux-x64-musl` |
+| Linux arm64 | `bun-linux-arm64` |
+| macOS x64 | `bun-darwin-x64` |
+| macOS arm64 | `bun-darwin-arm64` |
+| Windows x64 | `bun-windows-x64` |
+| Windows arm64 | `bun-windows-arm64` |
+
+The binaries carry the runtime of the release inside them: nothing else has
+to be installed. The workflow refuses a tag that does not name the version
+of the package, it checks that every binary is of the format of its
+platform, and it starts the binary of the runner and waits for its health
+probe before it publishes anything. The checksums of the binaries are
+published with them.
+
+The libc of a binary is the one of its platform: a binary of `linux-x64`
+needs glibc and a binary of `linux-x64-musl` needs musl, so a deployment on
+Alpine takes the second one.
 
 ## The gaps of the deployment
 

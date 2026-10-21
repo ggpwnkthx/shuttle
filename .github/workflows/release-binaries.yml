@@ -1,0 +1,256 @@
+name: release-binaries
+
+# The release of the standalone binaries.
+#
+# The workflow runs on a tag: it checks that the tag names the version of
+# the package, it compiles the gateway for every supported platform, it
+# proves that the binary of the runner starts and serves, and it publishes
+# the binaries on the release of the tag.
+#
+#   git tag v0.4.0 && git push origin v0.4.0
+#
+# The binaries are the gateway and nothing else: the fixtures of the
+# development stack are not part of them. The container image of the same
+# release is built by the workflow of the release (release.yml).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The tag of the release'
+        required: true
+        type: string
+
+permissions:
+  # The release is created by the job that publishes it: the jobs that
+  # only build the binaries need nothing but the source.
+  contents: read
+
+env:
+  # The version of the runtime the binaries are built and released with.
+  # It is the version of the release: the boundaries the specification
+  # relies on are only observable on it (see docs/runtime.md).
+  BUN_VERSION: '1.4.3'
+
+jobs:
+  version:
+    name: the version of the release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: the tag names the version of the package
+        id: version
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="${tag#v}"
+          expected=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$expected" ]; then
+            echo "the tag $tag does not name the version $expected of the package"
+            exit 1
+          fi
+          echo "version=$expected" >> "$GITHUB_OUTPUT"
+          echo "tag=v$expected" >> "$GITHUB_OUTPUT"
+
+      - name: the versions of the project agree
+        run: bun run versions
+
+  binaries:
+    name: the binary of ${{ matrix.platform }}
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      # One platform that fails does not hide the state of the others.
+      fail-fast: false
+      matrix:
+        include:
+          - target: 'bun-linux-x64'
+            platform: 'linux-x64'
+          - target: 'bun-linux-x64-musl'
+            platform: 'linux-x64-musl'
+          - target: 'bun-linux-arm64'
+            platform: 'linux-arm64'
+          - target: 'bun-darwin-x64'
+            platform: 'darwin-x64'
+          - target: 'bun-darwin-arm64'
+            platform: 'darwin-arm64'
+          - target: 'bun-windows-x64'
+            platform: 'windows-x64'
+          - target: 'bun-windows-arm64'
+            platform: 'windows-arm64'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: install the dependencies of the gateway
+        run: bun install --frozen-lockfile --production
+
+      - name: compile
+        run: |
+          bun build src/main.ts --compile \
+            --target=${{ matrix.target }} \
+            --outfile "dist/shuttle-${{ needs.version.outputs.version }}-${{ matrix.platform }}"
+          ls -la dist
+
+      - name: the binary is of the expected format
+        run: |
+          set -euo pipefail
+          binary=$(ls dist/shuttle-* | head -1)
+          magic=$(head -c 4 "${binary}" | od -An -tx1 | tr -d ' \n')
+          case "${{ matrix.target }}" in
+            bun-windows-*) expected="4d5a7800" ;;
+            bun-darwin-*) expected="cffaedfe" ;;
+            *) expected="7f454c46" ;;
+          esac
+          if [ "${magic}" != "${expected}" ]; then
+            echo "the binary of ${{ matrix.target }} starts with ${magic} and not with ${expected}"
+            exit 1
+          fi
+          echo "the binary of ${{ matrix.target }} is of the expected format"
+
+      - name: the binary of this machine starts and serves
+        if: matrix.target == 'bun-linux-x64'
+        run: |
+          set -euo pipefail
+          cat > routes.json <<'JSON'
+          {
+            "version": 1,
+            "defaults": { "auth": { "mode": "none" } },
+            "routes": [
+              {
+                "id": "smoke",
+                "match": { "host": "smoke.shuttle.test", "path": "/" },
+                "upstream": "http://127.0.0.1:1",
+                "auth": { "mode": "none" }
+              }
+            ]
+          }
+          JSON
+          SHUTTLE_CONFIG=routes.json \
+          SHUTTLE_GATEWAY_HOST=127.0.0.1 \
+          SHUTTLE_GATEWAY_PORT=18099 \
+          SHUTTLE_OIDC_ISSUER=http://127.0.0.1:1 \
+          SHUTTLE_OIDC_CLIENT_ID=smoke \
+          SHUTTLE_OIDC_CLIENT_SECRET=smoke \
+          SHUTTLE_OIDC_REDIRECT_URI=http://127.0.0.1:1/auth/callback \
+          SHUTTLE_OIDC_ALLOW_INSECURE=true \
+          SHUTTLE_ACCESS_URL=http://127.0.0.1:1 \
+          SHUTTLE_SESSION_SECRET=smoke \
+          SHUTTLE_SESSION_URL=memory://smoke \
+          SHUTTLE_LOG_LEVEL=error \
+          ./dist/shuttle-* > gateway.log 2>&1 &
+          pid=$!
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18099/healthz > /dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          kill "${pid}" 2>/dev/null || true
+          wait "${pid}" 2>/dev/null || true
+          if [ "${ready}" != "1" ]; then
+            echo "the compiled binary did not answer the health probe:"
+            cat gateway.log
+            exit 1
+          fi
+          echo "the compiled binary starts, serves the health probe and stops"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shuttle-${{ matrix.platform }}
+          path: dist/shuttle-*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: the release of the binaries
+    needs: [version, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      # The release of the tag is created here.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: 'shuttle-*'
+          merge-multiple: true
+
+      - name: the binaries of the release
+        run: |
+          ls -la dist
+          test -n "$(ls dist/shuttle-*)"
+
+      - name: the checksums of the binaries
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum shuttle-* > checksums.txt
+          cat checksums.txt
+
+      - name: the notes of the release
+        run: |
+          cat > notes.md <<EOF
+          The gateway of Shuttle, as a standalone executable. The runtime is
+          inside the binary: nothing else has to be installed.
+          | Platform | File |
+          | --- | --- |
+          | Linux x64 (glibc) | \`shuttle-${{ needs.version.outputs.version }}-linux-x64\` |
+          | Linux x64 (musl, Alpine) | \`shuttle-${{ needs.version.outputs.version }}-linux-x64-musl\` |
+          | Linux arm64 | \`shuttle-${{ needs.version.outputs.version }}-linux-arm64\` |
+          | macOS x64 | \`shuttle-${{ needs.version.outputs.version }}-darwin-x64\` |
+          | macOS arm64 | \`shuttle-${{ needs.version.outputs.version }}-darwin-arm64\` |
+          | Windows x64 | \`shuttle-${{ needs.version.outputs.version }}-windows-x64.exe\` |
+          | Windows arm64 | \`shuttle-${{ needs.version.outputs.version }}-windows-arm64.exe\` |
+
+          The binaries carry the runtime of the release (Bun ${{ env.BUN_VERSION }}) and
+          the version of the gateway (${{ needs.version.outputs.version }}). The route
+          table is a file that is read at the start and watched afterwards; the
+          environment is described in [the documentation](https://github.com/ggpwnkthx/shuttle/blob/${{ needs.version.outputs.tag }}/docs/operations.md).
+
+          The checksums are in \`checksums.txt\`:
+
+          \`\`\`bash
+          sha256sum --check checksums.txt
+          \`\`\`
+
+          The container image of the same release is on the registry of the
+          repository:
+          \`\`\`bash
+          docker pull ghcr.io/ggpwnkthx/shuttle:${{ needs.version.outputs.version }}
+          \`\`\`
+          EOF
+
+      - name: publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # The release is created once: a run that is repeated uploads the
+          # binaries again and replaces them.
+          if ! gh release view "${TAG}" > /dev/null 2>&1; then
+            gh release create "${TAG}" \
+              --title "Shuttle ${TAG}" \
+              --notes-file notes.md \
+              --verify-tag
+          fi
+          gh release upload "${TAG}" dist/* --clobber
+          gh release view "${TAG}"
