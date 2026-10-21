@@ -20,10 +20,13 @@
  */
 
 import { match, parse, type MatchFunction, type ParamData } from 'path-to-regexp'
-import { normalizeHost, parseHostPattern, type HostPattern } from './schema'
+import { REST_PLACEHOLDER, normalizeHost, parseHostPattern, type HostPattern } from './schema'
 
 /** A segment of a path template. */
 export type PathSegment = { kind: 'literal'; value: string } | { kind: 'param'; name: string }
+
+/** A segment of a rewrite: a literal or a placeholder. */
+export type RewriteSegment = { kind: 'literal'; value: string } | { kind: 'param'; name: string }
 
 /**
  * The identity of a route, as the matcher knows it.
@@ -36,6 +39,8 @@ export interface RouteMatchDefinition {
   id: string
   host: string
   path: string
+  /** The path the route forwards to its upstream, when it is not the path of the request. */
+  rewrite?: string
 }
 
 /** The order of the routes, as a comparable tuple. */
@@ -54,6 +59,8 @@ export interface CompiledRoute<TPayload = unknown> {
   literalPrefixLength: number
   /** The canonical shape of the template; the placeholders are all the same. */
   skeleton: string
+  /** The segments of the rewrite, when the route rewrites the path. */
+  rewrite?: RewriteSegment[]
   precedence: Precedence
   /** The policy of the route, as the configuration domain built it. */
   payload: TPayload
@@ -68,9 +75,17 @@ export interface RouteMatch<TPayload = unknown> {
    * The part of the path the route matched, as it was received.
    *
    * The request path is forwarded unchanged, so the upstream application
-   * sees the prefix as part of its own paths.
+   * sees the prefix as part of its own paths — unless the route rewrites
+   * the path.
    */
   prefix: string
+  /**
+   * The path that is forwarded to the upstream.
+   *
+   * It is the path of the request when the route does not rewrite it, and
+   * the rewritten path when it does.
+   */
+  path: string
 }
 
 /** A template that the matcher cannot use. */
@@ -175,6 +190,83 @@ export function placeholderNames(template: string): string[] {
   return names
 }
 
+/**
+ * The segments of a rewrite.
+ *
+ * A rewrite is a list of segments like a path template. The placeholder
+ * `{rest}` stands for the part of the path that follows the prefix the
+ * route matched, and it may only be the last segment.
+ */
+function rewriteSegmentsOf(template: string): RewriteSegment[] {
+  const segments: RewriteSegment[] = []
+  const parts = template.split('/').filter((segment) => segment !== '')
+  for (const [index, part] of parts.entries()) {
+    const match = /^\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(part)
+    if (!match) {
+      segments.push({ kind: 'literal', value: part })
+      continue
+    }
+    const name = match[1]!
+    if (name === REST_PLACEHOLDER) {
+      if (index !== parts.length - 1) {
+        throw new RouteTemplateError(
+          `the rewrite "${template}" uses the placeholder "{rest}" and it is not the last segment: the rest of the path is the end of the path`
+        )
+      }
+      segments.push({ kind: 'param', name: REST_PLACEHOLDER })
+      continue
+    }
+    segments.push({ kind: 'param', name })
+  }
+  return segments
+}
+
+/**
+ * The part of the path that follows the prefix the route matched.
+ *
+ * It is empty when the request path is the prefix, and it never starts with
+ * a slash: it is a list of segments.
+ */
+function restOf(path: string, prefix: string): string {
+  if (prefix === '/' || prefix === '') return path === '/' ? '' : path.replace(/^\//, '')
+  if (!path.startsWith(prefix)) return ''
+  return path.slice(prefix.length).replace(/^\//, '')
+}
+
+/**
+ * Builds the path that is forwarded to the upstream.
+ *
+ * The rewrite is a list of segments: a literal is used as it is, a
+ * placeholder of the path of the route is the value the caller sent, and
+ * `{rest}` is the part of the path that follows the prefix the route
+ * matched.
+ *
+ * The values are the ones of the request as they were received: the
+ * encoding of the path is not touched, so a value that carries an encoded
+ * character reaches the upstream as it was sent.
+ */
+export function rewrittenPath(
+  segments: readonly RewriteSegment[],
+  params: Record<string, string>,
+  rest: string
+): string {
+  const parts: string[] = []
+  for (const segment of segments) {
+    if (segment.kind === 'literal') {
+      parts.push(segment.value)
+      continue
+    }
+    if (segment.name === REST_PLACEHOLDER) {
+      if (rest !== '') parts.push(rest)
+      continue
+    }
+    const value = params[segment.name]
+    if (value === undefined) continue
+    parts.push(value)
+  }
+  return parts.length === 0 ? '/' : `/${parts.join('/')}`
+}
+
 /** Prepares a route for the matching. */
 export function compileRoute<TPayload>(
   definition: RouteMatchDefinition,
@@ -185,6 +277,7 @@ export function compileRoute<TPayload>(
   const segments = segmentsOf(template)
   const literal = literalPrefixLength(segments)
   const hostRank = host.kind === 'exact' ? 0 : host.kind === 'wildcard' ? 1 : 2
+  const rewrite = definition.rewrite ? rewriteSegmentsOf(definition.rewrite) : undefined
   return {
     id: definition.id,
     definition,
@@ -193,6 +286,7 @@ export function compileRoute<TPayload>(
     segments,
     literalPrefixLength: literal,
     skeleton: skeletonOf(segments),
+    rewrite,
     precedence: [hostRank, -literal, -segments.length, definition.id],
     payload,
   }
@@ -272,8 +366,13 @@ export function matchRoute<TPayload>(
     const result = matcherFor(route as CompiledRoute<unknown>)(path)
     if (!result) continue
     const params: Record<string, string> = {}
+    const rawParams: Record<string, string> = {}
     for (const [name, value] of Object.entries(result.params)) {
       if (typeof value !== 'string') continue
+      // The raw value is the one the caller sent: it is what a rewrite
+      // writes into the path of the upstream, so the encoding of the path
+      // is not touched.
+      rawParams[name] = value
       let decoded: string
       try {
         decoded = decodeURIComponent(value)
@@ -287,7 +386,10 @@ export function matchRoute<TPayload>(
       }
       params[name] = decoded
     }
-    return { route, params, prefix: result.path }
+    const forwarded = route.rewrite
+      ? rewrittenPath(route.rewrite, rawParams, restOf(path, result.path))
+      : path
+    return { route, params, prefix: result.path, path: forwarded }
   }
   return null
 }

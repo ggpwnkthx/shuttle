@@ -244,7 +244,7 @@ export class ConfigurationStore {
     const compiled = routes.map((route) => {
       const policy = effectivePolicy(route, defaults, this.#defaultMaxBodyBytes)
       return compileRoute(
-        { id: route.id, host: route.match.host, path: route.match.path },
+        { id: route.id, host: route.match.host, path: route.match.path, rewrite: route.rewrite },
         {
           id: route.id,
           upstream: route.upstream,

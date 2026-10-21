@@ -248,10 +248,15 @@ location / {
 }
 ```
 
-The path of a request is forwarded unchanged. The ingress must not rewrite
-it and must not add a prefix: the upstream application is mounted under the
-path of its route, and the signature of the identity covers the path the
-upstream receives.
+The path of a request is forwarded unchanged, unless the route declares a
+`rewrite`. The ingress must not rewrite it and must not add a prefix: the
+upstream application is mounted under the path of its route, and the
+signature of the identity covers the path the upstream receives.
+
+A route that declares a `rewrite` writes the path its upstream receives —
+`/{rest}` removes the prefix of the route — and the ingress still must not
+rewrite the path: the rewrite of the route is applied to the path the
+caller sent.
 
 ## The metrics
 

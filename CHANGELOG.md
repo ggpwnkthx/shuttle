@@ -128,6 +128,32 @@ once, and every waiter of the call receives the decision it answers. The
 service that decides the access of the callers is not a cache that is
 warmed once, and a stampede on it is an outage of the deployment.
 
+### A route may declare the path its upstream receives
+
+The prefix of the route was part of the path of the request, so an
+application that is mounted somewhere else had to know the prefix of the
+gateway: every upstream had to be built around the shape of the urls of the
+gateway.
+
+A route may declare the path its upstream receives now:
+
+```jsonc
+{
+  "id": "workspace-api",
+  "match": { "host": "api.example.com", "path": "/ws/{workspaceId}/" },
+  "upstream": "http://upstream:3000",
+  "rewrite": "/v1/workspaces/{workspaceId}/{rest}"
+}
+```
+
+The placeholders of the rewrite are the placeholders of the path of the
+route, and `{rest}` is the part of the path that follows the prefix the
+route matched. A rewrite of `/{rest}` removes the prefix of the route, and
+a rewrite without `{rest}` does not forward the rest of the path.
+
+A route that does not declare a rewrite forwards the path of the request:
+the behaviour of a deployment that declares none does not change.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the

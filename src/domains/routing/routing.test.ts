@@ -78,6 +78,51 @@ describe('the matching of a route', () => {
   })
 })
 
+describe('the rewrite of the path of a route', () => {
+  test('a route that does not rewrite forwards the path of the request', () => {
+    const routes = table([{ id: 'a', host: '*', path: '/ws/{id}/' }])
+    expect(matchRoute(routes, 'api.example.com', '/ws/abc/assets')?.path).toBe('/ws/abc/assets')
+  })
+
+  test('the rest of the path is the part that follows the prefix', () => {
+    const routes = table([{ id: 'a', host: '*', path: '/ws/{id}/', rewrite: '/{rest}' }])
+    expect(matchRoute(routes, 'api.example.com', '/ws/abc/assets')?.path).toBe('/assets')
+    expect(matchRoute(routes, 'api.example.com', '/ws/abc')?.path).toBe('/')
+  })
+
+  test('a rewrite writes the values of the placeholders of the path', () => {
+    const routes = table([
+      { id: 'a', host: '*', path: '/ws/{id}/', rewrite: '/v1/workspaces/{id}/{rest}' },
+    ])
+    expect(matchRoute(routes, 'api.example.com', '/ws/abc/assets')?.path).toBe(
+      '/v1/workspaces/abc/assets'
+    )
+  })
+
+  test('a rewrite without the rest does not forward the rest of the path', () => {
+    const routes = table([{ id: 'a', host: '*', path: '/ws/{id}/', rewrite: '/v1' }])
+    expect(matchRoute(routes, 'api.example.com', '/ws/abc/assets')?.path).toBe('/v1')
+  })
+
+  test('the encoding of the values is not touched', () => {
+    const routes = table([{ id: 'a', host: '*', path: '/ws/{id}/', rewrite: '/{id}/{rest}' }])
+    // The value the caller sent is the one the upstream receives.
+    expect(matchRoute(routes, 'api.example.com', '/ws/a%20b/assets')?.path).toBe('/a%20b/assets')
+  })
+
+  test('a rewrite of the root of a route keeps the whole path', () => {
+    const routes = table([{ id: 'a', host: '*', path: '/', rewrite: '/{rest}' }])
+    expect(matchRoute(routes, 'api.example.com', '/assets')?.path).toBe('/assets')
+    expect(matchRoute(routes, 'api.example.com', '/')?.path).toBe('/')
+  })
+
+  test('the rest may only be the last segment of a rewrite', () => {
+    expect(() =>
+      compileRoute({ id: 'a', host: '*', path: '/ws/{id}/', rewrite: '/{rest}/more' }, 'a')
+    ).toThrow(/rest/)
+  })
+})
+
 describe('the precedence of the routes', () => {
   test('an exact host wins over a wildcard and over the catch-all', () => {
     const routes = table([

@@ -173,6 +173,7 @@ A route:
 | `id` | Lowercase kebab-case, at most 63 characters, unique. |
 | `match.host` | `example.com`, `*.example.com` (the subdomains, not the domain itself), or `*` for any host. |
 | `match.path` | A list of segments. A segment is a literal or a `{placeholder}`. |
+| `rewrite` | The path the route forwards to its upstream. A list of segments; the placeholders of the path of the route are the values the caller sent, and `{rest}` is the part of the path that follows the prefix the route matched. A route without one forwards the path of the request (§11.1). |
 | `upstream` | An `http` or `https` url. It may not carry a query string or a fragment. |
 | `auth` | The policy of the route. It replaces `defaults.auth`; it is not merged with it. |
 | `timeouts` | The budgets of the route. Merged field by field with `defaults.timeouts`. |
@@ -835,12 +836,49 @@ upstream http://app:3000/base   + /ws/123      →  http://app:3000/base/ws/123
 ```
 
 The path is forwarded unchanged: the prefix that matched the route is not
-stripped, and the path is not rewritten. The WebSocket url is built the
-same way, with `http` → `ws` and `https` → `wss`. An upstream of a
-websocket is served over plain http: a `wss` upstream is refused
-(§11.1.1).
+stripped, and the path is not rewritten — unless the route declares a
+**rewrite**.
 
-### 11.1.1 The TLS of the connections to the upstreams
+### 11.1.1 The rewrite of the path
+
+A route may declare the path its upstream receives:
+
+```jsonc
+{
+  "id": "workspace-api",
+  "match": { "host": "api.example.com", "path": "/ws/{workspaceId}/" },
+  "upstream": "http://upstream:3000",
+  "rewrite": "/v1/workspaces/{workspaceId}/{rest}"
+}
+```
+
+| The rewrite | The path the upstream receives |
+| --- | --- |
+| — | The path of the request: `/ws/123/assets`. |
+| `/{rest}` | `/assets`: the prefix of the route is removed. |
+| `/v1/workspaces/{workspaceId}/{rest}` | `/v1/workspaces/123/assets`. |
+| `/v1/fixed` | `/v1/fixed`: the rest of the path is **not** forwarded. |
+
+The rules:
+
+- a placeholder of the rewrite is a placeholder of the **path of the
+  route**: a rewrite that names one the path does not have is a
+  configuration error;
+- `{rest}` is the part of the path that follows the prefix the route
+  matched, and it may only be the last segment of the rewrite;
+- a rewrite **without** `{rest}` does not forward the rest of the path;
+- the values are the ones the caller sent: the encoding of the path is not
+  touched, so a value that carries an encoded character reaches the
+  upstream as it was sent;
+- the query string is not part of the rewrite and it is forwarded unchanged;
+- the signature of the identity covers the path **as the upstream receives
+  it** (§7.4), so a rewritten path is covered by the signature.
+
+The WebSocket url is built the same way, with `http` → `ws` and `https` →
+`wss`. An upstream of a websocket is served over plain http: a `wss`
+upstream is refused (§11.1.2).
+
+### 11.1.2 The TLS of the connections to the upstreams
 
 An upstream that is served over `https` is reached over TLS. The gateway
 verifies the certificate of the upstream with the authority of the
@@ -1094,7 +1132,9 @@ Shuttle does not:
 
 - terminate TLS (a proxy in front of it does);
 - decide access on its own, or check roles;
-- rewrite the path of the request;
+- rewrite the path of the request in any way but the one of §11.1.1 (a
+  route declares the path its upstream receives, and the gateway does not
+  rewrite the body, the query string or the headers);
 - buffer or cache responses;
 - aggregate WebSockets;
 - support more than one upstream per route;
@@ -1214,5 +1254,5 @@ lists are numbered independently.
 | 29 | The `Authorization` header of the caller | It is forwarded to the upstream by default, and a route that does not need it says so with `forwardAuthorization: false` (§7.1). |
 | 30 | The latency of a revocation | It is a property of the route: `accessCacheTtlMs` is the lifetime of the cached decisions of that route, and `0` makes the revocation on it immediate (§6). |
 | 31 | The handshake of a websocket | It follows the header policy of the http path: the cookies of the gateway never reach an upstream (§7.1, §10). |
-| 32 | The TLS of the connections to the upstreams | The gateway verifies the certificate of the upstream with the authority of the deployment and presents the certificate of the deployment when the upstream asks for one (§11.1.1). The upstream of a websocket is served over plain http: the websocket client of the runtime cannot speak TLS. |
+| 32 | The TLS of the connections to the upstreams | The gateway verifies the certificate of the upstream with the authority of the deployment and presents the certificate of the deployment when the upstream asks for one (§11.1.2). The upstream of a websocket is served over plain http: the websocket client of the runtime cannot speak TLS. |
 | 33 | The backend of the shared state | The sessions, the limits and the cached decisions live in a Redis server or in a Postgres server: the scheme of the url picks one of them, and the two hold the same three things with the same contract (§4, §12.5, §12.6). |

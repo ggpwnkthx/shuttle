@@ -138,6 +138,72 @@ describe('the schema of the configuration', () => {
       )
     ).toThrow()
   })
+
+  test('the rewrite of a route is validated', () => {
+    // A rewrite is a list of segments that starts with a slash.
+    expect(() =>
+      parseConfig(
+        baseConfig({
+          routes: [
+            {
+              id: 'a',
+              match: { host: '*', path: '/ws/{workspaceId}/' },
+              upstream: 'http://upstream:3000',
+              rewrite: 'v1/{rest}',
+            },
+          ],
+        })
+      )
+    ).toThrow()
+    // The rest of the path may only be the last segment.
+    expect(() =>
+      parseConfig(
+        baseConfig({
+          routes: [
+            {
+              id: 'a',
+              match: { host: '*', path: '/ws/{workspaceId}/' },
+              upstream: 'http://upstream:3000',
+              rewrite: '/{rest}/more',
+            },
+          ],
+        })
+      )
+    ).toThrow()
+  })
+
+  test('a rewrite that names a placeholder the path does not have is refused', () => {
+    expect(() =>
+      parseConfig(
+        baseConfig({
+          routes: [
+            {
+              id: 'a',
+              match: { host: '*', path: '/ws/{workspaceId}/' },
+              upstream: 'http://upstream:3000',
+              rewrite: '/v1/{otherId}/{rest}',
+            },
+          ],
+        })
+      )
+    ).toThrow()
+  })
+
+  test('a rewrite that names a placeholder of the path is accepted', () => {
+    const configuration = parseConfig(
+      baseConfig({
+        routes: [
+          {
+            id: 'a',
+            match: { host: '*', path: '/ws/{workspaceId}/' },
+            upstream: 'http://upstream:3000',
+            rewrite: '/v1/{workspaceId}/{rest}',
+          },
+        ],
+      })
+    )
+    expect(configuration.routes[0]?.rewrite).toBe('/v1/{workspaceId}/{rest}')
+  })
 })
 
 describe('the effective policy of a route', () => {

@@ -366,7 +366,9 @@ export async function dispatch(
       return jsonError(503, 'websocket_unavailable', 'the websockets are not available')
     }
     const identity = principal ? writtenIdentity(identityOf(principal, workspaceId)) : undefined
-    const target = buildUpstreamTarget(route.upstream, path, url.search)
+    // The path the route forwards: the path of the request, or the path
+    // the route rewrites it to.
+    const target = buildUpstreamTarget(route.upstream, match.path, url.search)
     const targetUrl = new URL(target)
     const upgrade = context.env.upgrade
     if (!upgrade) {
@@ -400,7 +402,9 @@ export async function dispatch(
       {
         routeId: route.id,
         upstream: route.upstream,
-        path,
+        // The path the route forwards: the path of the request, or the
+        // path the route rewrites it to.
+        path: match.path,
         search: url.search,
         method,
         headers: context.req.raw.headers,
@@ -434,7 +438,9 @@ export async function dispatch(
   }
 
   // The http path.
-  const target = buildUpstreamTarget(route.upstream, path, url.search)
+  // The path the route forwards: the path of the request, or the path the
+  // route rewrites it to.
+  const target = buildUpstreamTarget(route.upstream, match.path, url.search)
   const targetUrl = new URL(target)
   const identity = principal ? writtenIdentity(identityOf(principal, workspaceId)) : undefined
   const headers = buildUpstreamHeaders({

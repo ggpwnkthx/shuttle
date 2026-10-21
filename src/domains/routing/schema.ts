@@ -59,6 +59,22 @@ export const PathTemplateSchema = z
   })
 
 /**
+ * The path a route forwards to its upstream.
+ *
+ * It is a list of segments like a path template, and it may carry the
+ * placeholder `{rest}`: the part of the path that follows the prefix the
+ * route matched.
+ */
+export const RewriteTemplateSchema = z
+  .string()
+  .min(1)
+  .max(PATH_TEMPLATE_MAX)
+  .refine(isValidRewriteTemplate, {
+    message:
+      'a rewrite is a list of segments; a segment is a literal or a {placeholder}, "{rest}" is the part of the path that follows the prefix the route matched and it may only be the last segment',
+  })
+
+/**
  * Reports whether a host pattern has a shape the gateway can match.
  *
  * A host is a name, a wildcard or the catch-all. A host that carries a port
@@ -90,6 +106,41 @@ export function isValidPathTemplate(value: string): boolean {
   return segments.every(
     (segment) => LITERAL_SEGMENT_PATTERN.test(segment) || PLACEHOLDER_PATTERN.test(segment)
   )
+}
+
+/**
+ * The placeholder that stands for the rest of the path.
+ *
+ * It is the part of the path that follows the prefix the route matched,
+ * and it may only be the last segment of a rewrite.
+ */
+export const REST_PLACEHOLDER = 'rest'
+
+/**
+ * Reports whether a rewrite template has a shape the gateway can use.
+ *
+ * A rewrite is a list of segments separated by `/`. A segment is either a
+ * literal or a `{placeholder}`; the placeholder `{rest}` stands for the
+ * part of the path that follows the prefix the route matched, and it may
+ * only be the last segment.
+ */
+export function isValidRewriteTemplate(value: string): boolean {
+  if (!value.startsWith('/')) return false
+  const segments = value.split('/').filter((segment) => segment !== '')
+  if (segments.length === 0) return false
+  let seenRest = false
+  for (const [index, segment] of segments.entries()) {
+    if (seenRest) return false
+    if (segment === `{${REST_PLACEHOLDER}}`) {
+      seenRest = true
+      continue
+    }
+    if (!LITERAL_SEGMENT_PATTERN.test(segment) && !PLACEHOLDER_PATTERN.test(segment)) {
+      return false
+    }
+    if (index === segments.length - 1 && segment === `{${REST_PLACEHOLDER}}`) continue
+  }
+  return true
 }
 
 /** The kind of a host pattern. */

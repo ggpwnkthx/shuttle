@@ -16,10 +16,13 @@ export {
   PARAM_NAME_PATTERN,
   PATH_TEMPLATE_MAX,
   PathTemplateSchema,
+  REST_PLACEHOLDER,
   ROUTE_ID_PATTERN,
+  RewriteTemplateSchema,
   RouteIdSchema,
   isValidHostPattern,
   isValidPathTemplate,
+  isValidRewriteTemplate,
   normalizeHost,
   parseHostPattern,
 } from './schema'
@@ -33,12 +36,14 @@ export {
   hostMatches,
   matchRoute,
   placeholderNames,
+  rewrittenPath,
   sortRoutes,
 } from './match'
 export type {
   CompiledRoute,
   PathSegment,
   Precedence,
+  RewriteSegment,
   RouteMatch,
   RouteMatchDefinition,
 } from './match'

@@ -13,7 +13,14 @@
 
 import { z } from 'zod'
 import { AuthPolicySchema, type AuthPolicy } from '../authentication'
-import { HostPatternSchema, PathTemplateSchema, RouteIdSchema, placeholderNames } from '../routing'
+import {
+  HostPatternSchema,
+  PathTemplateSchema,
+  REST_PLACEHOLDER,
+  RewriteTemplateSchema,
+  RouteIdSchema,
+  placeholderNames,
+} from '../routing'
 
 /** The maximum size of a body, in bytes. */
 export const MAX_BODY_BYTES_LIMIT = 1_073_741_824
@@ -89,6 +96,19 @@ export const RouteSchema = z.strictObject({
     path: PathTemplateSchema,
   }),
   upstream: UpstreamSchema,
+  /**
+   * The path the route forwards to its upstream.
+   *
+   * It is the path of the request when the route does not declare one: the
+   * upstream application sees the prefix of the route as part of its own
+   * paths. A route that declares one writes the path of the upstream
+   * instead: the placeholders of the path of the route are the values the
+   * caller sent, and `{rest}` is the part of the path that follows the
+   * prefix the route matched.
+   *
+   * A rewrite without `{rest}` does not forward the rest of the path.
+   */
+  rewrite: RewriteTemplateSchema.optional(),
   /**
    * The policy of the route.
    *
@@ -188,18 +208,29 @@ export const ShuttleConfigSchema = z
   })
   .superRefine((config, ctx) => {
     for (const [index, route] of config.routes.entries()) {
-      const workspace = route.auth?.workspace
-      if (!workspace) continue
-      // The workspace check names a placeholder of the path of the route: a
-      // policy that names one the path does not have could never be
-      // satisfied.
       const placeholders = placeholderNames(route.match.path)
-      if (!placeholders.includes(workspace.param)) {
+      const workspace = route.auth?.workspace
+      if (workspace && !placeholders.includes(workspace.param)) {
         ctx.addIssue({
           code: 'custom',
           path: ['routes', index, 'auth', 'workspace', 'param'],
           message: `the path "${route.match.path}" has no placeholder "${workspace.param}"`,
         })
+      }
+      // A rewrite names the placeholders of the path of the route: a
+      // rewrite that names one the path does not have could never be
+      // satisfied.
+      if (route.rewrite) {
+        for (const name of placeholderNames(route.rewrite)) {
+          if (name === REST_PLACEHOLDER) continue
+          if (!placeholders.includes(name)) {
+            ctx.addIssue({
+              code: 'custom',
+              path: ['routes', index, 'rewrite'],
+              message: `the path "${route.match.path}" has no placeholder "${name}"`,
+            })
+          }
+        }
       }
     }
   })
