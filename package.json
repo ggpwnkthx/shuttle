@@ -20,7 +20,9 @@
     "format:check": "biome format .",
     "architecture": "bun run scripts/architecture.ts",
     "versions": "bun run scripts/version.ts",
-    "load": "bun run scripts/load.ts"
+    "load": "bun run scripts/load.ts",
+    "benchmark": "bun run scripts/benchmark.ts",
+    "postgres:migrate": "bun run scripts/postgres-migrate.ts"
   },
   "dependencies": {
     "chokidar": "4.0.3",
@@ -32,6 +34,7 @@
     "lru-cache": "11.5.3",
     "openid-client": "6.8.8",
     "path-to-regexp": "8.4.2",
+    "pg": "^8.23.1",
     "pino": "10.4.0",
     "prom-client": "15.1.3",
     "redis": "^6.3.0",
@@ -40,7 +43,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
+    "@electric-sql/pglite": "^0.5.11",
     "@types/bun": "1.4.3",
+    "@types/pg": "^8.23.1",
     "@types/ws": "8.18.2",
     "oidc-provider": "9.12.2",
     "playwright": "1.64.1",

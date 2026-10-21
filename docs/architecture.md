@@ -19,6 +19,7 @@ being noticed in a review.
 | `src/domains/<domain>/adapters/` | The concrete implementations of the ports of the domain. The composition root is their only consumer. |
 | `src/platform/bun/` | The listener, the peer address, the outbound HTTP transport and the socket primitives. |
 | `src/platform/redis/` | The construction, the TLS settings and the disposal of the shared Redis clients. |
+| `src/platform/postgres/` | The construction, the pool, the TLS settings, the schema and the disposal of the shared Postgres clients. |
 | `src/runtime/` | The environment, the composition root, the file watcher, the signals and the drain. |
 | `src/observability/` | The logging, the metrics and the observation handles. It knows nothing else. |
 | `services/` | The deterministic fixtures of the identity provider, of the access service and of the upstreams. |
@@ -151,11 +152,13 @@ writes the headers and the cookies of the answers.
 | | `service.ts` | The use cases: authenticate, begin a login, complete a login, log out. |
 | | `adapters/memory-sessions.ts` | The store of the sessions in the memory of the process. |
 | | `adapters/redis-sessions.ts` | The store of the sessions in Redis. The refresh of the expiry is one script of the server. |
+| | `adapters/postgres-sessions.ts` | The store of the sessions in Postgres. The refresh of the expiry is one function of the server. |
 | `workspace-access` | `workspace.ts` | The validation of the identifier of a workspace. |
 | | `decision.ts` | The shape of a decision and the mapping of its reason to the metric. |
 | | `client.ts` | The client of the access service: the request, the answer, the cache, the fail-closed behavior. |
 | | `adapters/memory-cache.ts` | The cache of the decisions in the memory of the process. |
 | | `adapters/redis-cache.ts` | The cache of the decisions in Redis. |
+| | `adapters/postgres-cache.ts` | The cache of the decisions in Postgres. |
 | `forwarding` | `network.ts` | The parsing of the CIDR ranges and the evaluation of the trusted proxies. |
 | | `context.ts` | The peer address, the client address, the chain, the protocol and **the effective host**. |
 | | `origins.ts` | The cross-site policy: the normalization of the origins, the guard of the requests, the guard of the navigations, the origin of a handshake. |
@@ -167,6 +170,7 @@ writes the headers and the cookies of the answers.
 | | `window.ts` | The sliding window: the size of a bucket, the index of a bucket and the evaluation of the window. |
 | | `limiter.ts` | The limiter of the memory: the bounded table, the shared window of the overflow. |
 | | `adapters/redis-limiter.ts` | The limiter of Redis: the counter and the expiry are one script. It fails open. |
+| | `adapters/postgres-limiter.ts` | The limiter of Postgres: the counter and the expiry are one function. It fails open. |
 | `proxying` | `transport.ts` | The ports of the transport: the request and the answer. |
 | | `exchange.ts` | The state machine of an exchange: the phases, the budgets, the limits, the cancellation, the finalization. |
 | `websockets` | `ports.ts` | The ports of the sockets, of the handshake and of the revalidation. |
@@ -189,12 +193,16 @@ decision.
 | `bun/upstream-websocket.ts` | The handshake with the upstream, and the socket of the upstream. |
 | `redis/client.ts` | The construction of the client, the shapes of the server (a server, a cluster, a sentinel), the TLS, the background connection and the disposal. |
 | `redis/commands.ts` | The commands of the shared state. |
+| `postgres/client.ts` | The construction of the client, the pool of the connections, the TLS, the background connection and the disposal. |
+| `postgres/schema.ts` | The tables and the functions of the shared state, and the bootstrap of the schema. |
+| `postgres/commands.ts` | The commands of the shared state. |
 
 ### `src/runtime/` — the composition root
 
 | File | Owns |
 | --- | --- |
 | `env.ts` | The schema of the environment, the defaults, the validation of a production deployment. The only place that reads `process.env`. |
+| `shared-state.ts` | The backends the shared state may live in, and the choice of the backend by the scheme of the url. |
 | `composition.ts` | The construction of everything: the clients, the stores, the domains, the application, the listener. |
 | `lifecycle.ts` | The watcher of the configuration, the signals, the drain, the deadline. |
 | `version.ts` | The version of the build. |
@@ -242,7 +250,7 @@ image of the gateway.
 | Unit | `src/domains/*/*.test.ts` | The policy of one domain, without the network. |
 | Contract | `test/contract/` | The pipeline of the gateway, over a socket, with the real fixtures around it. |
 | Network | `test/network/` | The capabilities of the runtime that the proxying depends on. |
-| Integration | `test/integration/` | The shared state against a real Redis, and a deployment with several replicas. |
+| Integration | `test/integration/` | The shared state against a real Redis and a real Postgres, the contract the two backends share, and a deployment with several replicas. |
 | Browser | `test/browser/` | The cookies and the origins in a real browser. |
 | Load | `test/load/` | The soak and the resources that settle after the traffic. |
 | Architecture | `test/architecture/` | The import boundaries. |

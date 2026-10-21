@@ -13,7 +13,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import { isRedisUrl } from '../platform/redis'
+import { isSharedStateUrl } from './shared-state'
 
 /** The level of the log. */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent'
@@ -61,6 +61,37 @@ export interface SessionSettings {
   sentinelMaster?: string
   /** The secret that signs the state cookie and that derives the signature key. */
   secret: string
+  /** The settings of the pool of the connections, when the server is a Postgres server. */
+  postgres: PostgresSettings
+}
+
+/** The settings of the pool of the connections of a Postgres server. */
+export interface PostgresSettings {
+  /** The number of connections of the pool of a replica. */
+  poolMax: number
+  /** How long the client waits for a connection of the pool. */
+  connectionTimeoutMs: number
+  /** How long a statement of the gateway may run, in milliseconds. */
+  statementTimeoutMs: number
+  /**
+   * Whether the server waits for the disk before it answers.
+   *
+   * The state of the shared state is a protection and not a ledger: a
+   * counter that is lost when the server crashes costs a caller a few
+   * requests of its budget, and a session that is lost costs a caller its
+   * login. `off` is the same guarantee a Redis server gives without its
+   * append only file, and it is the default for that reason. `on` waits
+   * for the disk on every transaction.
+   */
+  synchronousCommit: 'on' | 'off'
+  /**
+   * Builds the schema of the shared state when the client connects.
+   *
+   * The statements are idempotent, so a deployment whose replicas start
+   * at the same time does not race with itself. A deployment that applies
+   * its own migrations says no here.
+   */
+  autoMigrate: boolean
 }
 
 /** The settings of the state the replicas share. */
@@ -70,6 +101,8 @@ export interface SharedStateSettings {
   tlsCa?: string
   /** The name of the master, when the server is behind sentinel. */
   sentinelMaster?: string
+  /** The settings of the pool of the connections, when the server is a Postgres server. */
+  postgres: PostgresSettings
 }
 
 /** The settings of the listener and of the network. */
@@ -344,6 +377,37 @@ const EnvSchema = z.object({
   SHUTTLE_SHARED_STATE_TLS_CA_BASE64: tlsCaEnv(),
 
   /**
+   * The number of connections of the pool of a replica, when the shared
+   * state lives in a Postgres server.
+   *
+   * A Postgres server has a limit of connections and it is much lower than
+   * the limit of a Redis server: a deployment with several replicas and a
+   * pool per replica has to fit in it, or behind a pooler.
+   */
+  SHUTTLE_POSTGRES_POOL_MAX: intEnv(10, { min: 1, max: 1000 }),
+  /** How long the client waits for a connection of the pool. */
+  SHUTTLE_POSTGRES_CONNECTION_TIMEOUT_MS: intEnv(5_000, { min: 100 }),
+  /** How long a statement of the gateway may run, in milliseconds. */
+  SHUTTLE_POSTGRES_STATEMENT_TIMEOUT_MS: intEnv(5_000, { min: 100 }),
+  /**
+   * Whether the server waits for the disk before it answers.
+   *
+   * The state of the shared state is a protection and not a ledger: the
+   * default is `off`, the same guarantee a Redis server gives without its
+   * append only file. It is the difference between a millisecond and a
+   * tenth of a millisecond on every transaction of the limiter.
+   */
+  SHUTTLE_POSTGRES_SYNCHRONOUS_COMMIT: z.enum(['on', 'off']).optional(),
+  /**
+   * Builds the schema of the shared state when the client connects.
+   *
+   * The statements are idempotent, so a deployment whose replicas start at
+   * the same time does not race with itself. A production deployment that
+   * applies its own migrations says no here.
+   */
+  SHUTTLE_POSTGRES_AUTO_MIGRATE: boolEnv(),
+
+  /**
    * The name of the master, when the shared state is behind sentinel.
    *
    * The hosts of the urls are then the sentinels. The master and the
@@ -482,11 +546,11 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
   }
 
   // The state the replicas share lives in the session server when that one
-  // is a Redis server: a deployment that shares its sessions shares its
-  // limits and its cached decisions as well.
+  // is a server whose state is shared: a deployment that shares its
+  // sessions shares its limits and its cached decisions as well.
   const sharedStateUrl =
     parsed.SHUTTLE_SHARED_STATE_URL ??
-    (isRedisUrl(parsed.SHUTTLE_SESSION_URL) ? parsed.SHUTTLE_SESSION_URL : undefined)
+    (isSharedStateUrl(parsed.SHUTTLE_SESSION_URL) ? parsed.SHUTTLE_SESSION_URL : undefined)
 
   // The state of a deployment has to be shared. A session that lives in the
   // memory of a replica is unknown to the other replicas, so the callers
@@ -498,14 +562,14 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
   // but it has to say so explicitly: a setting that looks active but is not
   // is a security hole.
   if (production && !parsed.SHUTTLE_ALLOW_MEMORY_STATE) {
-    if (!isRedisUrl(parsed.SHUTTLE_SESSION_URL)) {
+    if (!isSharedStateUrl(parsed.SHUTTLE_SESSION_URL)) {
       throw new Error(
-        'SHUTTLE_SESSION_URL must name a Redis server in a production environment: the sessions of the callers have to be shared by the replicas, because a session that lives in the memory of one replica is unknown to the others, or SHUTTLE_ALLOW_MEMORY_STATE=true when the deployment is a single node that accepts it'
+        'SHUTTLE_SESSION_URL must name a Redis or a Postgres server in a production environment: the sessions of the callers have to be shared by the replicas, because a session that lives in the memory of one replica is unknown to the others, or SHUTTLE_ALLOW_MEMORY_STATE=true when the deployment is a single node that accepts it'
       )
     }
-    if (!isRedisUrl(sharedStateUrl)) {
+    if (!isSharedStateUrl(sharedStateUrl)) {
       throw new Error(
-        'SHUTTLE_SHARED_STATE_URL must name a Redis server in a production environment: the rate limits and the cached decisions have to be shared by the replicas, or SHUTTLE_ALLOW_MEMORY_STATE=true when the deployment is a single node that accepts it'
+        'SHUTTLE_SHARED_STATE_URL must name a Redis or a Postgres server in a production environment: the rate limits and the cached decisions have to be shared by the replicas, or SHUTTLE_ALLOW_MEMORY_STATE=true when the deployment is a single node that accepts it'
       )
     }
   }
@@ -514,6 +578,18 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
     parsed.SHUTTLE_OIDC_SCOPES.length > 0
       ? parsed.SHUTTLE_OIDC_SCOPES
       : ['openid', 'profile', 'email', 'groups']
+
+  // The settings of the pool of the connections of a Postgres server.
+  const postgresSettings: PostgresSettings = {
+    poolMax: parsed.SHUTTLE_POSTGRES_POOL_MAX,
+    connectionTimeoutMs: parsed.SHUTTLE_POSTGRES_CONNECTION_TIMEOUT_MS,
+    statementTimeoutMs: parsed.SHUTTLE_POSTGRES_STATEMENT_TIMEOUT_MS,
+    synchronousCommit: parsed.SHUTTLE_POSTGRES_SYNCHRONOUS_COMMIT ?? 'off',
+    // The schema is built by the gateway outside a production deployment:
+    // a production deployment applies its own migrations, so a gateway
+    // that is started with a read-only database account does not fail.
+    autoMigrate: parsed.SHUTTLE_POSTGRES_AUTO_MIGRATE ?? !production,
+  }
 
   // The TLS of the connections to the upstreams. The certificate of the
   // gateway and its private key belong together: a certificate without a
@@ -570,6 +646,7 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       maxSessions: parsed.SHUTTLE_SESSION_MAX_SESSIONS,
       tlsCa: parsed.SHUTTLE_SESSION_TLS_CA ?? parsed.SHUTTLE_SESSION_TLS_CA_BASE64,
       sentinelMaster: parsed.SHUTTLE_REDIS_SENTINEL_MASTER,
+      postgres: postgresSettings,
       // A secret that is generated per process is only valid on the replica
       // that generated it: the signatures of the identity are not verifiable
       // by the upstreams of the other replicas and every restart invalidates
@@ -585,6 +662,7 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
         parsed.SHUTTLE_SESSION_TLS_CA ??
         parsed.SHUTTLE_SESSION_TLS_CA_BASE64,
       sentinelMaster: parsed.SHUTTLE_REDIS_SENTINEL_MASTER,
+      postgres: postgresSettings,
     },
     browser: {
       cookieSecure: parsed.SHUTTLE_COOKIE_SECURE ?? production,

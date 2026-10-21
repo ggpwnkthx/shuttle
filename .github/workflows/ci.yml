@@ -83,6 +83,42 @@ jobs:
         env:
           SHUTTLE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
 
+  postgres:
+    name: the shared state against a real postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        ports:
+          - '5432:5432'
+        env:
+          POSTGRES_PASSWORD: shuttle
+          POSTGRES_DB: shuttle
+        options: >-
+          --health-cmd "pg_isready -U postgres -d shuttle"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: install
+        run: bun install --frozen-lockfile
+
+      - name: the atomic operations of the shared state
+        run: bun test test/integration
+        env:
+          SHUTTLE_TEST_POSTGRES_URL: postgres://postgres:shuttle@127.0.0.1:5432/shuttle
+
+      - name: the migration of the schema
+        run: bun run postgres:migrate -- postgres://postgres:shuttle@127.0.0.1:5432/shuttle
+        env:
+          SHUTTLE_TEST_POSTGRES_URL: postgres://postgres:shuttle@127.0.0.1:5432/shuttle
+
   load:
     name: the capacity of the gateway
     runs-on: ubuntu-latest

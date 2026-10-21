@@ -30,6 +30,15 @@ services:
       # The secret of the sessions: it signs the state of the login and it
       # derives the key of the signature of the identity.
       SHUTTLE_SESSION_SECRET: ${SHUTTLE_SESSION_SECRET:?the secret of the sessions is required}
+      # The shared state lives in a Redis server. A deployment that runs on
+      # a database it already has points these two urls at a Postgres
+      # server instead:
+      #
+      #   SHUTTLE_SESSION_URL: postgres://user:password@postgres:5432/shuttle
+      #   SHUTTLE_SHARED_STATE_URL: postgres://user:password@postgres:5432/shuttle
+      #
+      # The two backends hold the same state with the same contract, and
+      # `bun run benchmark` measures them side by side.
       SHUTTLE_SESSION_URL: redis://redis:6379/0
       SHUTTLE_SHARED_STATE_URL: redis://redis:6379/1
       SHUTTLE_METRICS_TOKEN: ${SHUTTLE_METRICS_TOKEN:?the token of the metrics is required}
@@ -83,5 +92,34 @@ services:
       timeout: 3s
       retries: 5
 
+  # The other backend of the shared state. It is not started by default: a
+  # deployment brings its own database, and this one is here for a stack
+  # that measures the two backends side by side.
+  #
+  #   docker compose -f deploy/compose.production.yaml --profile postgres up -d
+  #
+  # and the gateway reads:
+  #
+  #   SHUTTLE_SESSION_URL=postgres://postgres:postgres@postgres:5432/shuttle
+  #   SHUTTLE_SHARED_STATE_URL=postgres://postgres:postgres@postgres:5432/shuttle
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shuttle
+      # The schema of the shared state is built by the gateway itself when
+      # it connects. A deployment that applies its own migrations sets
+      # SHUTTLE_POSTGRES_AUTO_MIGRATE=false and runs the migration script.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shuttle"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
 volumes:
   redis-data:
+  postgres-data:

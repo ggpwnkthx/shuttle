@@ -147,8 +147,14 @@ describe('the manifests of the deployment', () => {
       services: Record<string, { image: string; environment: Record<string, string> }>
     }
     // The stack of a deployment holds the gateway and the shared state, and
-    // nothing else: the fixtures are not part of a deployment.
-    expect(Object.keys(stack.services).sort()).toEqual(['gateway', 'redis'])
+    // nothing else: the fixtures are not part of a deployment. The shared
+    // state is a Redis server or a Postgres server; the Postgres one is
+    // behind a profile, so it is not started by default.
+    expect(Object.keys(stack.services).sort()).toEqual(['gateway', 'postgres', 'redis'])
+    expect(stack.services.postgres!.image).toContain('postgres')
+    // The Postgres service is not part of the default stack: a deployment
+    // brings its own database.
+    expect((stack.services.postgres as { profiles?: string[] }).profiles).toEqual(['postgres'])
     const gateway = stack.services.gateway!
     expect(gateway.image).toContain('ghcr.io/ggpwnkthx/shuttle')
     // The secrets of the deployment are not in the file: the stack refuses

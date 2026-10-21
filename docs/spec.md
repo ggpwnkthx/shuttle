@@ -227,15 +227,17 @@ The full list, with the default of every value, is in
 | `SHUTTLE_ACCESS_URL` | Names the access service. |
 | `SHUTTLE_ACCESS_TOKEN` | The token the gateway authenticates with. `SHUTTLE_ACCESS_ALLOW_ANONYMOUS=true` replaces it when the service authenticates the gateway by other means. |
 | One rate limit | At least one of `SHUTTLE_RATE_LIMIT_MAX`, `SHUTTLE_RATE_LIMIT_GLOBAL_MAX`, `SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX` and `SHUTTLE_RATE_LIMIT_TOTAL_MAX` must be non-zero. `SHUTTLE_ALLOW_NO_RATE_LIMITS=true` replaces them when another layer protects the deployment. |
-| The shared state | `SHUTTLE_SESSION_URL` and `SHUTTLE_SHARED_STATE_URL` must name a Redis server: a session that lives in the memory of one replica is unknown to the others, and a limit that lives in the memory of one replica is the limit of that replica. `SHUTTLE_ALLOW_MEMORY_STATE=true` replaces them when the deployment is a single node that accepts it. |
+| The shared state | `SHUTTLE_SESSION_URL` and `SHUTTLE_SHARED_STATE_URL` must name a Redis server or a Postgres server: a session that lives in the memory of one replica is unknown to the others, and a limit that lives in the memory of one replica is the limit of that replica. `SHUTTLE_ALLOW_MEMORY_STATE=true` replaces them when the deployment is a single node that accepts it. |
 
 The url of the shared state names the shape of the server:
 
 | The url | The server |
 | --- | --- |
-| `redis://host:6379/0` | A server. |
-| `redis://host-a:6379,host-b:6379/0` | A cluster: the hosts are its masters. |
-| `redis://host-a:26379,host-b:26379/0` with `SHUTTLE_REDIS_SENTINEL_MASTER` | The sentinels of a server: the master and the replicas are discovered from them. |
+| `redis://host:6379/0` | A Redis server. |
+| `redis://host-a:6379,host-b:6379/0` | A Redis cluster: the hosts are its masters. |
+| `redis://host-a:26379,host-b:26379/0` with `SHUTTLE_REDIS_SENTINEL_MASTER` | The sentinels of a Redis server: the master and the replicas are discovered from them. |
+| `postgres://user:password@host:5432/shuttle` | A Postgres server. |
+| `postgresql://user:password@host:5432/shuttle` | The same Postgres server. |
 
 `SHUTTLE_REDIS_SENTINEL_MASTER` is the name of the master, the one the
 sentinels agree on. It is empty by default: a deployment that is not
@@ -297,8 +299,9 @@ The maximum age is the real bound. The cookie of the browser follows the
 session: its `Max-Age` is the smaller of the idle lifetime that is left and
 the maximum age that is left, so it never outlives the session it names.
 
-The store is in memory (`memory://local`) or in Redis. A deployment with
-several replicas needs Redis: a session that lives in the memory of one
+The store is in memory (`memory://local`) or in a server that the replicas
+share: a Redis server or a Postgres server. A deployment with several
+replicas needs one of the two: a session that lives in the memory of one
 replica is unknown to the others.
 
 A store that cannot be reached denies the caller. The gateway never lets
@@ -648,6 +651,7 @@ The refusal is `429 too_many_requests` with a `retry-after`, and it is
 counted in `shuttle_rate_limited_total`.
 
 The Redis limiter fails **open**: a cache hiccup is not an outage. The
+Postgres limiter fails **open** as well, for the same reason. The
 in-process limiter is bounded by a table of 10 000 keys. A key leaves the
 table when its window is over, never because another key needed its place:
 a limiter that evicts a live window hands the evicted caller a fresh
@@ -916,10 +920,14 @@ are running are cancelled when the deadline is reached.
 
 ### 12.5 The shared state
 
-The sessions, the limits and the cached decisions live in a Redis server.
-The client of the server is the one of the `redis` package: the shared
-state is not tied to the runtime of the gateway, and one implementation
-covers every managed cache.
+The sessions, the limits and the cached decisions live in a server that the
+replicas share: a Redis server or a Postgres server. The scheme of the url
+picks the backend, and the two hold the same three things.
+
+**The Redis client** is the one of the `redis` package: the shared state is
+not tied to the runtime of the gateway, and one implementation covers every
+managed cache. **The Postgres client** is the one of the `pg` package, with
+a bounded pool of connections.
 
 **The queue of the commands is disabled.** A command that is sent before
 the connection is established fails right away instead of waiting in a
@@ -936,6 +944,50 @@ recovery is reported in the log.
 **The client is closed at the end of the drain**, and the wait is bounded:
 a client that is still trying to reach a server that is not there does not
 keep the gateway waiting for a reply that will never come.
+
+#### 12.5.1 The atomicity of the shared state
+
+The three operations of the shared state have to be **one** operation of the
+server, because two replicas that count the same request at the same time
+must not count it twice:
+
+| Operation | Redis | Postgres |
+| --- | --- | --- |
+| Read a session and refresh its expiry | the `TOUCH_SCRIPT` | the function `shuttle.session_touch` |
+| Count a request in the window of a caller | the `WINDOW_SCRIPT` | the function `shuttle.rate_limit_check` |
+| Read or write a cached decision | one command | one command |
+
+A function call of Postgres is a transaction of the server, so it is the
+equivalent of a script of Redis. The counters of the replicas are exact:
+the checks of one key are serialized with an advisory lock, and the
+function that counts a request refuses to count it twice.
+
+The expiry of a row of Postgres is a column, not a key that disappears: the
+rows that are over are removed by a sweep, and the server never serves
+them whatever the sweep did.
+
+**The server does not wait for the disk** (`SHUTTLE_POSTGRES_SYNCHRONOUS_COMMIT=off`,
+the default): the state of the shared state is a protection and not a
+ledger, and the guarantee is the one a Redis server gives without its
+append only file.
+
+---
+
+## 12.6 The comparison of the backends
+
+The two backends are interchangeable and the gateway measures them side by
+side. The measurements are in [capacity.md](capacity.md).
+
+| | Redis | Postgres |
+| --- | --- | --- |
+| The cost of the shared state | about a tenth of the latency of a request | about a third of the latency of a request |
+| The concurrency | the server serializes the commands of a key | the transactions of a key are serialized by an advisory lock |
+| The connections | one per replica | a bounded pool per replica: the server has a low limit |
+| The failure | the limiter fails open, the sessions fail closed | the same |
+
+A deployment that runs on a managed Redis pays less latency and operates
+less. A deployment that runs on a database it already has pays one more
+service to operate and one more connection to plan.
 
 ---
 
@@ -964,7 +1016,7 @@ Shuttle does not:
 | `src/domains/authentication/` | The principal, the policy of the modes, the selection of the credential, the OIDC and JWKS, the browser login and logout, the signed state, the sessions, the expiry and the cookies. |
 | `src/domains/workspace-access/` | The validation of the workspace, the requests and the decisions of the access service, the cache keys, the TTL and the cache adapters. |
 | `src/domains/forwarding/` | The peer and proxy trust, the cross-site policy, the filtering of the headers and the cookies, the target url, the sanitized identity and the signature. |
-| `src/domains/rate-limiting/` | The sliding windows, the scopes, the `retry-after`, the bounded memory and the Redis counter. |
+| `src/domains/rate-limiting/` | The sliding windows, the scopes, the `retry-after`, the bounded memory and the counters of the shared state. |
 | `src/domains/proxying/` | The state of the exchange, the limits of the body, the phase and idle budgets, the cancellation, the commitment outcomes and the registry of the active exchanges. |
 | `src/domains/websockets/` | The reservations of the slots, the handshake with the upstream first, the state of the bridge, the buffers, the keepalive, the revalidation and the registry of the pairs. |
 
@@ -976,6 +1028,7 @@ Shuttle does not:
 | `src/app/` | The Hono application: the thin handlers, the middleware, the order of the pipeline and the mapping of the failures to the answers of the protocol. |
 | `src/platform/bun/` | The listener, the actual peer address, the outbound HTTP transport, the upgrade and the socket primitives. |
 | `src/platform/redis/` | The construction, the TLS settings and the disposal of the shared Redis clients. |
+| `src/platform/postgres/` | The construction, the pool, the TLS settings, the schema and the disposal of the shared Postgres clients. |
 | `src/runtime/` | The environment, the composition root, the file watcher, the signals and the drain. |
 | `src/observability/` | The logging, the metrics and the observation handles. It knows nothing else. |
 | `services/` | The deterministic fixtures of the identity provider, of the access service and of the upstreams. |
@@ -1065,3 +1118,4 @@ lists are numbered independently.
 | 30 | The latency of a revocation | It is a property of the route: `accessCacheTtlMs` is the lifetime of the cached decisions of that route, and `0` makes the revocation on it immediate (§6). |
 | 31 | The handshake of a websocket | It follows the header policy of the http path: the cookies of the gateway never reach an upstream (§7.1, §10). |
 | 32 | The TLS of the connections to the upstreams | The gateway verifies the certificate of the upstream with the authority of the deployment and presents the certificate of the deployment when the upstream asks for one (§11.1.1). The upstream of a websocket is served over plain http: the websocket client of the runtime cannot speak TLS. |
+| 33 | The backend of the shared state | The sessions, the limits and the cached decisions live in a Redis server or in a Postgres server: the scheme of the url picks one of them, and the two hold the same three things with the same contract (§4, §12.5, §12.6). |

@@ -96,6 +96,33 @@ spec:
                 secretKeyRef:
                   name: shuttle-secrets
                   key: SHUTTLE_METRICS_TOKEN
+            # The shared state may live in a Postgres server instead of a
+            # Redis server: the two hold the same state with the same
+            # contract, and the gateway measures them side by side.
+            #
+            # The urls above then name the database, the pool of the
+            # connections is bounded, and the schema is built by the
+            # migration of the platform:
+            #
+            #   - name: SHUTTLE_SESSION_URL
+            #     valueFrom:
+            #       secretKeyRef:
+            #         name: shuttle-secrets
+            #         key: SHUTTLE_SESSION_URL
+            #   - name: SHUTTLE_SHARED_STATE_URL
+            #     valueFrom:
+            #       secretKeyRef:
+            #         name: shuttle-secrets
+            #         key: SHUTTLE_SHARED_STATE_URL
+            #   - name: SHUTTLE_POSTGRES_POOL_MAX
+            #     value: "10"
+            #   - name: SHUTTLE_POSTGRES_AUTO_MIGRATE
+            #     value: "false"
+            #
+            # The server does not wait for the disk: the state of the
+            # shared state is a protection and not a ledger.
+            # - name: SHUTTLE_POSTGRES_SYNCHRONOUS_COMMIT
+            #   value: "off"
             # The protocol the callers use towards the gateway: the ingress
             # terminates the tls.
             - name: SHUTTLE_EXTERNAL_PROTO

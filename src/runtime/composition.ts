@@ -10,17 +10,26 @@
 import { createGatewayApp, createGatewayHandler } from '../app/app'
 import type { GatewayDependencies } from '../app/dependencies'
 import { AuthenticationService } from '../domains/authentication'
-import { MemorySessionStore, RedisSessionStore } from '../domains/authentication/adapters'
+import type { SessionStore } from '../domains/authentication'
+import {
+  MemorySessionStore,
+  PostgresSessionStore,
+  RedisSessionStore,
+} from '../domains/authentication/adapters'
 import { OidcClient } from '../domains/authentication'
 import { ConfigurationStore } from '../domains/configuration'
 import { deriveIdentityKey } from '../domains/forwarding'
 import { HttpExchangeService } from '../domains/proxying'
-import { MemoryRateLimiter } from '../domains/rate-limiting'
-import { RedisRateLimiter } from '../domains/rate-limiting/adapters'
+import { MemoryRateLimiter, type RequestLimiter } from '../domains/rate-limiting'
+import { PostgresRateLimiter, RedisRateLimiter } from '../domains/rate-limiting/adapters'
 import { AccessClient } from '../domains/workspace-access'
+import type { DecisionCache } from '../domains/workspace-access'
 import { ReservationManager, WebSocketService } from '../domains/websockets'
-import { MemoryDecisionCache } from '../domains/workspace-access/adapters'
-import { RedisDecisionCache } from '../domains/workspace-access/adapters'
+import {
+  MemoryDecisionCache,
+  PostgresDecisionCache,
+  RedisDecisionCache,
+} from '../domains/workspace-access/adapters'
 import { createLogger, type Logger } from '../observability'
 import { MetricsStore, type Observer } from '../observability'
 import { FetchAccessTransport } from '../platform/bun/access-transport'
@@ -31,7 +40,15 @@ import { startListener, type StartedListener } from '../platform/bun/listener'
 import { drain as drainRuntime } from './lifecycle'
 import { VERSION } from './version'
 import { createRedisClient, isRedisUrl, withRetries } from '../platform/redis'
-import type { RuntimeSettings } from './env'
+import type { SharedStateClient } from '../platform/redis'
+import {
+  createPostgresClient,
+  ensureSchema,
+  isPostgresUrl,
+  withPostgresRetries,
+} from '../platform/postgres'
+import type { PostgresClient } from '../platform/postgres'
+import type { PostgresSettings, RuntimeSettings } from './env'
 
 /** The runtime of the gateway. */
 export interface GatewayRuntime {
@@ -45,6 +62,14 @@ export interface GatewayRuntime {
   config: ConfigurationStore
   /** The authentication of the callers. */
   auth: AuthenticationService
+  /**
+   * The store of the sessions of the callers.
+   *
+   * The runtime exposes it so that a caller of the runtime — a test, a
+   * benchmark — can create the session of the caller it authenticates,
+   * whatever the backend of the store is.
+   */
+  sessions: SessionStore
   /** The exchanges with the upstreams. */
   exchanges: HttpExchangeService
   /** The websockets of the gateway. */
@@ -67,6 +92,103 @@ export interface GatewayRuntime {
  * The dependencies of the domains are assembled here and nowhere else: a
  * domain never builds a client and never reads the environment.
  */
+
+/**
+ * A connection to the server whose state the replicas share.
+ *
+ * The scheme of the url picks the backend: a Redis server and a Postgres
+ * server hold the same three things, and a deployment measures them side by
+ * side (see `docs/capacity.md`).
+ */
+type SharedStateConnection =
+  | { kind: 'redis'; client: SharedStateClient }
+  | { kind: 'postgres'; client: PostgresClient }
+
+/** The options of a connection to the server whose state the replicas share. */
+interface SharedStateConnectionOptions {
+  /** The url of the server; undefined when the state stays in the process. */
+  url?: string
+  /** The authority that signs the certificate of the server. */
+  tlsCa?: string
+  /** The name of the master, when the server is a Redis server behind sentinel. */
+  sentinelMaster?: string
+  /** The settings of the pool of the connections of a Postgres server. */
+  postgres: PostgresSettings
+  /** Called when the server cannot be reached. */
+  onError: (error: unknown) => void
+}
+
+/**
+ * Opens a connection to the server whose state the replicas share.
+ *
+ * The scheme of the url picks the backend. A url that names no server
+ * returns nothing: the state stays in the memory of the process, which a
+ * production deployment refuses.
+ */
+async function connectSharedState(
+  options: SharedStateConnectionOptions
+): Promise<SharedStateConnection | undefined> {
+  const { url } = options
+  if (isRedisUrl(url)) {
+    return {
+      kind: 'redis',
+      client: withRetries(
+        createRedisClient({
+          url: url!,
+          tlsCa: options.tlsCa,
+          sentinelMaster: options.sentinelMaster,
+          onError: options.onError,
+        })
+      ),
+    }
+  }
+  if (isPostgresUrl(url)) {
+    const client = createPostgresClient({
+      url: url!,
+      tlsCa: options.tlsCa,
+      poolMax: options.postgres.poolMax,
+      connectionTimeoutMs: options.postgres.connectionTimeoutMs,
+      statementTimeoutMs: options.postgres.statementTimeoutMs,
+      synchronousCommit: options.postgres.synchronousCommit,
+      onError: options.onError,
+    })
+    if (options.postgres.autoMigrate) {
+      // The schema is built by the client itself, every time the
+      // connection is established: the statements are idempotent and a
+      // gateway that starts while the database is down builds the schema
+      // when the database answers.
+      client.onConnect = async () => {
+        await ensureSchema(client)
+      }
+    }
+    return { kind: 'postgres', client: withPostgresRetries(client) }
+  }
+  return undefined
+}
+
+/**
+ * Builds a limiter of a scope.
+ *
+ * The window lives in the server whose state the replicas share when there
+ * is one, and in the memory of the process otherwise.
+ */
+function createLimiter(options: {
+  max: number
+  windowMs: number
+  keyPrefix: string
+  connection: SharedStateConnection | undefined
+  onError: (error: unknown) => void
+}): RequestLimiter {
+  const { max, windowMs, keyPrefix, connection, onError } = options
+  if (connection?.kind === 'redis') {
+    return new RedisRateLimiter({ max, windowMs, client: connection.client, keyPrefix, onError })
+  }
+  if (connection?.kind === 'postgres') {
+    return new PostgresRateLimiter({ max, windowMs, client: connection.client, keyPrefix, onError })
+  }
+  return new MemoryRateLimiter({ max, windowMs })
+}
+
 export async function createRuntime(settings: RuntimeSettings): Promise<GatewayRuntime> {
   const logger = createLogger({
     level: settings.observability.logLevel,
@@ -80,50 +202,65 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     trustedProxies: settings.network.trustedProxies,
   })
 
-  // The state the replicas share: the rate limits and the cached decisions.
-  // It lives in a Redis server when one is configured, and in the memory of
-  // the process otherwise.
+  // The failure of the shared state is reported once per outage.
   const onSharedStateError = (error: unknown): void => {
     logger.warn('the shared state is not reachable', { error })
     observer.recordSharedStateError()
   }
-  const sharedClient = isRedisUrl(settings.sharedState.url)
-    ? withRetries(
-        createRedisClient({
-          url: settings.sharedState.url!,
-          tlsCa: settings.sharedState.tlsCa,
-          sentinelMaster: settings.sharedState.sentinelMaster,
-          onError: onSharedStateError,
-        })
-      )
-    : undefined
 
   // The store of the sessions. The scheme of the url selects the backend,
   // so the infrastructure only has to provide a single value.
-  const sessionClient = isRedisUrl(settings.session.url)
-    ? withRetries(
-        createRedisClient({
-          url: settings.session.url,
-          tlsCa: settings.session.tlsCa,
-          sentinelMaster: settings.session.sentinelMaster,
-          onError: onSharedStateError,
+  const sessionConnection = await connectSharedState({
+    url: settings.session.url,
+    tlsCa: settings.session.tlsCa,
+    sentinelMaster: settings.session.sentinelMaster,
+    postgres: settings.session.postgres,
+    onError: onSharedStateError,
+  })
+
+  // The state the replicas share: the rate limits and the cached decisions.
+  // It lives in a server when one is configured, and in the memory of the
+  // process otherwise.
+  //
+  // A deployment that names the same server twice gets **one** connection
+  // and not two: a Postgres server has a low limit of connections, and the
+  // pool of the sessions and the pool of the shared state would double it.
+  const sameServer =
+    settings.sharedState.url !== undefined &&
+    settings.sharedState.url === settings.session.url &&
+    (settings.sharedState.tlsCa ?? undefined) === (settings.session.tlsCa ?? undefined)
+  const sharedConnection = sameServer
+    ? sessionConnection
+    : await connectSharedState({
+        url: settings.sharedState.url,
+        tlsCa: settings.sharedState.tlsCa,
+        sentinelMaster: settings.sharedState.sentinelMaster,
+        postgres: settings.sharedState.postgres,
+        onError: onSharedStateError,
+      })
+  const sessions: SessionStore =
+    sessionConnection?.kind === 'redis'
+      ? new RedisSessionStore({
+          client: sessionConnection.client,
+          keyPrefix: settings.session.keyPrefix,
+          ttlMs: settings.session.ttlMs,
+          maxAgeMs: settings.session.maxAgeMs,
+          touchIntervalMs: settings.session.touchIntervalMs,
         })
-      )
-    : undefined
-  const sessions = sessionClient
-    ? new RedisSessionStore({
-        client: sessionClient,
-        keyPrefix: settings.session.keyPrefix,
-        ttlMs: settings.session.ttlMs,
-        maxAgeMs: settings.session.maxAgeMs,
-        touchIntervalMs: settings.session.touchIntervalMs,
-      })
-    : new MemorySessionStore({
-        ttlMs: settings.session.ttlMs,
-        maxAgeMs: settings.session.maxAgeMs,
-        touchIntervalMs: settings.session.touchIntervalMs,
-        maxSessions: settings.session.maxSessions,
-      })
+      : sessionConnection?.kind === 'postgres'
+        ? new PostgresSessionStore({
+            client: sessionConnection.client,
+            keyPrefix: settings.session.keyPrefix,
+            ttlMs: settings.session.ttlMs,
+            maxAgeMs: settings.session.maxAgeMs,
+            touchIntervalMs: settings.session.touchIntervalMs,
+          })
+        : new MemorySessionStore({
+            ttlMs: settings.session.ttlMs,
+            maxAgeMs: settings.session.maxAgeMs,
+            touchIntervalMs: settings.session.touchIntervalMs,
+            maxSessions: settings.session.maxSessions,
+          })
 
   const oidc = new OidcClient({
     issuer: settings.oidc.issuer,
@@ -151,13 +288,20 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
 
   // The decisions of the access service are cached where the replicas share
   // their state, so every replica answers with the same decision.
-  const decisionCache = sharedClient
-    ? new RedisDecisionCache({
-        client: sharedClient,
-        keyPrefix: settings.sharedState.keyPrefix,
-        onError: onSharedStateError,
-      })
-    : new MemoryDecisionCache()
+  const decisionCache: DecisionCache =
+    sharedConnection?.kind === 'redis'
+      ? new RedisDecisionCache({
+          client: sharedConnection.client,
+          keyPrefix: settings.sharedState.keyPrefix,
+          onError: onSharedStateError,
+        })
+      : sharedConnection?.kind === 'postgres'
+        ? new PostgresDecisionCache({
+            client: sharedConnection.client,
+            keyPrefix: settings.sharedState.keyPrefix,
+            onError: onSharedStateError,
+          })
+        : new MemoryDecisionCache()
   const access = new AccessClient({
     baseUrl: settings.access.baseUrl,
     token: settings.access.token,
@@ -170,72 +314,47 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
 
   // The limiters. A deployment with more than one replica shares its
   // windows, so the limit of the deployment is the configured limit.
-  const limiterOptions = {
+  const rateLimiter = createLimiter({
     max: settings.limits.route.max,
     windowMs: settings.limits.route.windowMs,
-  }
-  const rateLimiter = sharedClient
-    ? new RedisRateLimiter({
-        ...limiterOptions,
-        client: sharedClient,
-        keyPrefix: settings.sharedState.keyPrefix,
-        onError: onSharedStateError,
-      })
-    : new MemoryRateLimiter(limiterOptions)
-  const globalRateLimiter = sharedClient
-    ? new RedisRateLimiter({
-        max: settings.limits.global.max,
-        windowMs: settings.limits.global.windowMs,
-        client: sharedClient,
-        keyPrefix: `${settings.sharedState.keyPrefix}:global`,
-        onError: onSharedStateError,
-      })
-    : new MemoryRateLimiter({
-        max: settings.limits.global.max,
-        windowMs: settings.limits.global.windowMs,
-      })
+    keyPrefix: settings.sharedState.keyPrefix,
+    connection: sharedConnection,
+    onError: onSharedStateError,
+  })
+  const globalRateLimiter = createLimiter({
+    max: settings.limits.global.max,
+    windowMs: settings.limits.global.windowMs,
+    keyPrefix: `${settings.sharedState.keyPrefix}:global`,
+    connection: sharedConnection,
+    onError: onSharedStateError,
+  })
   // The budget of an authenticated caller on one route. It is keyed by the
   // subject of the caller, so one tenant cannot spend the budget of the
   // others behind the same address.
-  const principalRateLimiter = sharedClient
-    ? new RedisRateLimiter({
-        max: settings.limits.principal.max,
-        windowMs: settings.limits.principal.windowMs,
-        client: sharedClient,
-        keyPrefix: `${settings.sharedState.keyPrefix}:principal`,
-        onError: onSharedStateError,
-      })
-    : new MemoryRateLimiter({
-        max: settings.limits.principal.max,
-        windowMs: settings.limits.principal.windowMs,
-      })
+  const principalRateLimiter = createLimiter({
+    max: settings.limits.principal.max,
+    windowMs: settings.limits.principal.windowMs,
+    keyPrefix: `${settings.sharedState.keyPrefix}:principal`,
+    connection: sharedConnection,
+    onError: onSharedStateError,
+  })
   // The budget of the whole deployment. The scopes that are keyed by an
   // address cannot bound a flood that spreads over many addresses; this one
   // can.
-  const totalRateLimiter = sharedClient
-    ? new RedisRateLimiter({
-        max: settings.limits.total.max,
-        windowMs: settings.limits.total.windowMs,
-        client: sharedClient,
-        keyPrefix: `${settings.sharedState.keyPrefix}:total`,
-        onError: onSharedStateError,
-      })
-    : new MemoryRateLimiter({
-        max: settings.limits.total.max,
-        windowMs: settings.limits.total.windowMs,
-      })
-  const loginRateLimiter = sharedClient
-    ? new RedisRateLimiter({
-        max: settings.limits.login.max,
-        windowMs: settings.limits.login.windowMs,
-        client: sharedClient,
-        keyPrefix: `${settings.sharedState.keyPrefix}:login`,
-        onError: onSharedStateError,
-      })
-    : new MemoryRateLimiter({
-        max: settings.limits.login.max,
-        windowMs: settings.limits.login.windowMs,
-      })
+  const totalRateLimiter = createLimiter({
+    max: settings.limits.total.max,
+    windowMs: settings.limits.total.windowMs,
+    keyPrefix: `${settings.sharedState.keyPrefix}:total`,
+    connection: sharedConnection,
+    onError: onSharedStateError,
+  })
+  const loginRateLimiter = createLimiter({
+    max: settings.limits.login.max,
+    windowMs: settings.limits.login.windowMs,
+    keyPrefix: `${settings.sharedState.keyPrefix}:login`,
+    connection: sharedConnection,
+    onError: onSharedStateError,
+  })
 
   const exchanges = new HttpExchangeService({
     transport: new BunHttpTransport({ tls: settings.upstreamTls }),
@@ -314,8 +433,8 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
 
   const closeResources = async (): Promise<void> => {
     await access.close()
-    await sharedClient?.close()
-    await sessionClient?.close()
+    await sharedConnection?.client.close()
+    await sessionConnection?.client.close()
   }
 
   return {
@@ -325,6 +444,14 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     config,
     auth,
     exchanges,
+    /**
+     * The store of the sessions.
+     *
+     * It is exposed so that a caller of the runtime can create the
+     * session of the caller it authenticates, whatever the backend of the
+     * store is.
+     */
+    sessions,
     /** The gateway stops accepting new work when it drains. */
     setDraining: (draining: boolean) => {
       state.draining = draining

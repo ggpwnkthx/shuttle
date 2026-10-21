@@ -10,3 +10,6 @@ export type { MemoryDecisionCacheOptions } from './memory-cache'
 
 export { RedisDecisionCache } from './redis-cache'
 export type { RedisCacheCommands, RedisDecisionCacheOptions } from './redis-cache'
+
+export { PostgresDecisionCache } from './postgres-cache'
+export type { PostgresCacheCommands, PostgresDecisionCacheOptions } from './postgres-cache'

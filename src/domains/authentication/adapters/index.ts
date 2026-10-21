@@ -10,3 +10,9 @@ export type { MemorySessionStoreOptions } from './memory-sessions'
 
 export { RedisSessionStore, TOUCH_SCRIPT } from './redis-sessions'
 export type { RedisSessionCommands, RedisSessionStoreOptions } from './redis-sessions'
+
+export { PostgresSessionStore } from './postgres-sessions'
+export type {
+  PostgresSessionCommands,
+  PostgresSessionStoreOptions,
+} from './postgres-sessions'

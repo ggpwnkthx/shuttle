@@ -41,9 +41,14 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_OIDC_REDIRECT_URI` | `https://<the public url of the gateway>/auth/callback` | Where the provider sends the browser back to. |
 | `SHUTTLE_ACCESS_URL` / `_ACCESS_TOKEN` | `https://access.example.com` | The access service. The token is in the secret store. |
 | `SHUTTLE_SESSION_SECRET` | A random value of at least 32 bytes | It signs the state of the login and the signature of the identity. It has to be the **same on every replica**. |
-| `SHUTTLE_SESSION_URL` | `rediss://:<password>@<redis>:6379/0` | The sessions of the callers. It has to be a Redis server in production. |
-| `SHUTTLE_SHARED_STATE_URL` | `rediss://:<password>@<redis>:6379/1` | The limits and the decisions. It defaults to the url of the sessions. It has to be a Redis server in production. |
+| `SHUTTLE_SESSION_URL` | `rediss://:<password>@<redis>:6379/0` | The sessions of the callers. It has to name a server whose state is shared in production: a Redis server or a Postgres server. |
+| `SHUTTLE_SHARED_STATE_URL` | `rediss://:<password>@<redis>:6379/1` | The limits and the decisions. It defaults to the url of the sessions. It has to name a server whose state is shared in production. |
 | `SHUTTLE_REDIS_SENTINEL_MASTER` | — | The name of the master, when the server is behind sentinel. The hosts of the urls are then the sentinels. Empty by default. |
+| `SHUTTLE_POSTGRES_POOL_MAX` | `10` | The connections of the pool of a replica, when the shared state is a Postgres server. |
+| `SHUTTLE_POSTGRES_CONNECTION_TIMEOUT_MS` | `5000` | How long the client waits for a connection of the pool. |
+| `SHUTTLE_POSTGRES_STATEMENT_TIMEOUT_MS` | `5000` | How long a statement of the gateway may run. |
+| `SHUTTLE_POSTGRES_SYNCHRONOUS_COMMIT` | `off` | Whether the server waits for the disk before it answers. `off` is the guarantee a Redis server gives without its append only file, and it is nine times faster on the path of the limiter. |
+| `SHUTTLE_POSTGRES_AUTO_MIGRATE` | `true` outside production | Builds the schema of the shared state when the client connects. A production deployment that applies its own migrations says no here and runs `bun run postgres:migrate` instead. |
 | `SHUTTLE_METRICS_TOKEN` | A random value | The metrics are only served with it. |
 | `SHUTTLE_UPSTREAM_TLS_CA` | The authority of the deployment | The certificate of the upstream is verified with it. |
 | `SHUTTLE_UPSTREAM_TLS_CERT` / `_KEY` | The certificate of the gateway and its private key | They are presented to the upstreams that ask for a client certificate. They belong together. |
@@ -60,13 +65,17 @@ The full list, with the default of every value, is in
 
 ## The shape of the shared state
 
-The url of the shared state names the shape of the server:
+The url of the shared state names the shape of the server **and its
+backend**: the scheme picks the one of the two, and the two hold the same
+three things with the same contract.
 
 | The url | The server |
 | --- | --- |
-| `redis://host:6379/0` | A server. |
-| `redis://host-a:6379,host-b:6379/0` | A **cluster**: the hosts are its masters. |
-| `redis://host-a:26379,host-b:26379/0` with `SHUTTLE_REDIS_SENTINEL_MASTER` | The **sentinels** of a server: the master and the replicas are discovered from them, and a failover is transparent for the gateway. |
+| `redis://host:6379/0` | A **Redis** server. |
+| `redis://host-a:6379,host-b:6379/0` | A **Redis cluster**: the hosts are its masters. |
+| `redis://host-a:26379,host-b:26379/0` with `SHUTTLE_REDIS_SENTINEL_MASTER` | The **sentinels** of a Redis server: the master and the replicas are discovered from them, and a failover is transparent for the gateway. |
+| `postgres://user:<password>@host:5432/shuttle` | A **Postgres** server. |
+| `postgresql://user:<password>@host:5432/shuttle` | The same Postgres server. |
 
 A cluster holds one database, so the path of the url is dropped in that
 shape. The certificate of the server is verified with the authority of the
@@ -76,6 +85,63 @@ The client connects in the background and keeps trying, so a gateway that
 starts while the shared state is down stays up: it answers `503` to the
 readiness probe, it denies the callers that need a session, and it becomes
 ready when the server answers. The failure is reported once per outage.
+
+### The Postgres server
+
+The Postgres backend holds three tables and two functions in the schema
+`shuttle`:
+
+| The object | What it holds |
+| --- | --- |
+| `shuttle.sessions` | The sessions of the callers. The record is a `jsonb`, the expiry is a column. |
+| `shuttle.access_decisions` | The cached decisions of the access service. |
+| `shuttle.rate_limit_buckets` | The buckets of the windows of the limiters. |
+| `shuttle.session_touch(...)` | Reads a session and refreshes its expiry. One transaction, the equivalent of the `TOUCH_SCRIPT` of Redis. |
+| `shuttle.rate_limit_check(...)` | Counts a request in the window of a caller. One transaction, the equivalent of the `WINDOW_SCRIPT` of Redis. |
+
+The schema is built by the gateway when `SHUTTLE_POSTGRES_AUTO_MIGRATE=true`,
+which is the default outside a production deployment. The statements are
+idempotent and an advisory lock makes one replica build the schema while
+the others wait for it.
+
+A production deployment that applies its own migrations says no and runs
+the script instead:
+
+```bash
+bun run postgres:migrate -- postgres://user:<password>@host:5432/shuttle
+```
+
+**The connections are a pool** (`SHUTTLE_POSTGRES_POOL_MAX`, ten per
+replica by default). A Postgres server has a low limit of connections, so
+a deployment with many replicas needs a pooler in front of it. The limit of
+the server is the number of the replicas times the size of the pool.
+
+**The server does not wait for the disk** (`SHUTTLE_POSTGRES_SYNCHRONOUS_COMMIT=off`,
+the default). The state of the shared state is a protection and not a
+ledger: a counter that is lost when the server crashes costs a caller a
+few requests of its budget. It is the same guarantee a Redis server gives
+without its append only file, and it is the difference between a
+millisecond and a tenth of a millisecond on every transaction of the
+limiter.
+
+**The rows that are over are removed by a sweep.** The expiry of a row is
+a column and not the disappearance of a key, so the adapters remove the
+rows that are over. The server never serves a row that is over, whatever
+the sweep did.
+
+### The comparison of the two backends
+
+The two backends are interchangeable and the gateway measures them side by
+side:
+
+```bash
+bun run benchmark -- --redis redis://127.0.0.1:6379/0 \
+                     --postgres postgres://127.0.0.1:5432/shuttle
+```
+
+The script runs the same traffic against the same gateway with the two
+backends and prints the table of the comparison. The measurements of the
+last run are in [capacity.md](capacity.md).
 
 ## The policies of the routes
 
@@ -481,19 +547,24 @@ the knobs an operator turns when a revocation has to be immediate.
 | Unit and contract tests | `bun test src test/contract` | yes |
 | Network tests | `bun test test/network` | yes |
 | The shared state against a real Redis | `bun test test/integration` | yes |
+| The shared state against a real Postgres | `bun test test/integration` | yes |
 | The browser | `bun test test/browser` | yes |
 | The soak | `bun test test/load` | yes |
 | The load | `bun run load` | yes |
+| The comparison of the backends | `bun run benchmark` | no |
 | The image | `docker build` and the smoke tests | yes |
 
-The last full run of the suite: **388 tests passed, 0 failed** over 38 files
-with Bun 1.4.3, including the 14 tests against a real Redis 7.0.15
-(`SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0`), the 3 tests in Chromium
-and the 2 soak tests. The coverage of the lines of the source is
-**91.3 %** and the coverage of the functions is **92.1 %**.
+The last full run of the suite: **519 tests passed, 0 failed** over 50 files
+with Bun 1.4.3, including the tests against a real Redis 7.0.15
+(`SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0`) and against a real
+Postgres 15.18 (`SHUTTLE_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5432/shuttle`),
+the 3 tests in Chromium and the 2 soak tests. The coverage of the lines of
+the source is **94.0 %** and the coverage of the functions is **93.6 %**.
 
-Without a Redis server, the fourteen tests of the shared state are skipped and
-the rest pass.
+Without a Redis server and without a Postgres server, the tests of the
+shared state are skipped and the rest pass. The tests of the shared state
+of a Postgres server run without a server when none is named: they run
+against the in-process engine of Postgres itself.
 
 ## The workflow of the release
 

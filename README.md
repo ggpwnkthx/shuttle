@@ -33,6 +33,11 @@ The documentation is in [docs/](docs/):
 | **WebSockets** | The upstream handshake first, bounded buffers, keepalive, and a revalidation that closes a connection whose access was revoked. |
 | **Operations** | Health and readiness probes, Prometheus metrics, structured logs with redaction, a hot reload of the configuration and a graceful drain. |
 
+The shared state — the sessions, the rate limits and the cached decisions —
+lives in a **Redis server** or in a **Postgres server**. The two hold the
+same state with the same contract, and the gateway measures them side by
+side: see [docs/capacity.md](docs/capacity.md).
+
 ## Quick start
 
 ```bash
@@ -47,6 +52,33 @@ on `http://localhost:8080`.
 ```bash
 curl -s http://localhost:8080/healthz
 curl -s http://localhost:8080/readyz | jq
+```
+
+### The shared state
+
+The scheme of the url picks the backend of the shared state:
+
+```bash
+# a Redis server
+SHUTTLE_SESSION_URL=rediss://:<password>@redis:6379/0
+
+# a Postgres server
+SHUTTLE_SESSION_URL=postgres://user:<password>@postgres:5432/shuttle
+```
+
+The two are interchangeable: the same suite of tests runs against both, and
+the script of the comparison measures them on the same traffic:
+
+```bash
+bun run benchmark -- --redis redis://127.0.0.1:6379/0 \
+                     --postgres postgres://127.0.0.1:5432/shuttle
+```
+
+A developer without a server of either kind runs the tests of the shared
+state against the in-process engine of Postgres:
+
+```bash
+bun test test/integration
 ```
 
 ## The configuration
@@ -116,14 +148,18 @@ bun test src           # the unit tests of the domains
 bun test test/contract # the contract tests of the pipeline
 bun test test/network  # the tests against a real socket
 bun test test/browser  # the tests in a real browser
-bun test test/integration # the tests against a real Redis
+bun test test/integration # the tests against a real Redis and a real Postgres
 ```
 
-The tests that need a Redis server are skipped without one. To run them
-locally:
+The tests that need a Redis server or a Postgres server are skipped
+without one. To run them locally:
 
 ```bash
 scripts/redis-dev.sh start 6399
 SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0 bun test test/integration
 scripts/redis-dev.sh stop 6399
+
+scripts/postgres-dev.sh start 5432
+SHUTTLE_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5432/shuttle bun test test/integration
+scripts/postgres-dev.sh stop 5432
 ```

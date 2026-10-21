@@ -7,3 +7,6 @@
 
 export { RedisRateLimiter, WINDOW_SCRIPT } from './redis-limiter'
 export type { RedisCommandPort, RedisRateLimiterOptions } from './redis-limiter'
+
+export { PostgresRateLimiter } from './postgres-limiter'
+export type { PostgresCommandPort, PostgresRateLimiterOptions } from './postgres-limiter'

@@ -195,12 +195,49 @@ describe('the environment of a production deployment', () => {
     // The in-process store is not shared: the callers are logged out at
     // random when the deployment has more than one replica.
     expect(() => readEnv({ ...production, SHUTTLE_SESSION_URL: 'memory://local' })).toThrow(
-      /SHUTTLE_SESSION_URL must name a Redis server/
+      /SHUTTLE_SESSION_URL must name a Redis or a Postgres server/
     )
     // The limits and the decisions have to be shared as well.
     expect(() => readEnv({ ...production, SHUTTLE_SHARED_STATE_URL: 'memory://local' })).toThrow(
-      /SHUTTLE_SHARED_STATE_URL must name a Redis server/
+      /SHUTTLE_SHARED_STATE_URL must name a Redis or a Postgres server/
     )
+  })
+
+  test('the shared state may live in a Postgres server', () => {
+    const settings = readEnv({
+      ...production,
+      SHUTTLE_SESSION_URL: 'postgres://user:password@db:5432/shuttle',
+    })
+    expect(settings.session.url).toBe('postgres://user:password@db:5432/shuttle')
+    // The state the replicas share follows the sessions when it is not
+    // named on its own.
+    expect(settings.sharedState.url).toBe('postgres://user:password@db:5432/shuttle')
+  })
+
+  test('the pool of a Postgres server is bounded', () => {
+    const settings = readEnv({
+      ...production,
+      SHUTTLE_SESSION_URL: 'postgres://db:5432/shuttle',
+      SHUTTLE_POSTGRES_POOL_MAX: '25',
+    })
+    expect(settings.session.postgres.poolMax).toBe(25)
+    expect(settings.sharedState.postgres.poolMax).toBe(25)
+  })
+
+  test('a production deployment applies its own migrations', () => {
+    // The schema is built by the gateway outside a production deployment:
+    // a gateway that is started with a read-only database account must not
+    // fail because of it.
+    expect(
+      readEnv({ ...production, SHUTTLE_SESSION_URL: 'postgres://db:5432/shuttle' }).session.postgres
+        .autoMigrate
+    ).toBe(false)
+    expect(
+      readEnv({
+        SHUTTLE_SESSION_URL: 'postgres://db:5432/shuttle',
+        SHUTTLE_POSTGRES_AUTO_MIGRATE: 'true',
+      }).session.postgres.autoMigrate
+    ).toBe(true)
   })
 
   test('a single node deployment may keep the state in the process', () => {

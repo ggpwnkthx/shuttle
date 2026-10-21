@@ -53,6 +53,87 @@ What the numbers say:
 - the handshake of a WebSocket costs about 2 ms of the gateway; the limit of
   the connections is the configuration, not the runtime.
 
+## The comparison of the backends of the shared state
+
+The gateway holds its shared state in a **Redis server** or in a **Postgres
+server**. The two are interchangeable and the gateway measures them side by
+side, with the script `scripts/benchmark.ts`:
+
+```bash
+bun run benchmark -- --redis redis://127.0.0.1:6399/0 \
+                     --postgres postgres://127.0.0.1:5432/shuttle
+```
+
+The scenarios are the paths of a request. Each of them pays a different
+number of round trips to the shared state:
+
+| Scenario | What it pays |
+| --- | --- |
+| `no-state` | nothing: the state is in the process. The baseline. |
+| `limits` | three limiter checks: the deployment, the caller and the route. |
+| `session` | the limits and the read of the session of the caller. |
+| `full` | the limits, the session and the cached decision of the access service. |
+
+The last run: 20 000 requests at 50 in flight, two rounds, on the
+reference environment, with the gateway, the upstream, the Redis server
+and the Postgres server in the same machine and the traffic over the
+loopback interface.
+
+| Scenario | Backend | req/s | p50 | p99 |
+| --- | --- | --- | --- | --- |
+| `no-state` | in the process | 7244 | 6.9 ms | 11.7 ms |
+| `limits` | in the process | 6834 | 7.2 ms | 11.7 ms |
+| `limits` | Redis | 5884 | 8.4 ms | 12.9 ms |
+| `limits` | Postgres | 3811 | 13.0 ms | 18.4 ms |
+| `session` | in the process | 6226 | 7.8 ms | 13.5 ms |
+| `session` | Redis | 4144 | 11.7 ms | 26.4 ms |
+| `session` | Postgres | 2747 | 18.0 ms | 25.3 ms |
+| `full` | in the process | 5610 | 8.4 ms | 14.2 ms |
+| `full` | Redis | 3680 | 13.4 ms | 20.1 ms |
+| `full` | Postgres | 2414 | 20.6 ms | 27.9 ms |
+
+What the numbers say:
+
+- **Redis costs about a tenth of the throughput** of the baseline on the
+  path of the limiter, and about a third on the path of the whole request;
+- **Postgres costs about half of the throughput** on the same paths, and
+  its p50 is about twice the p50 of Redis;
+- the difference grows with the number of round trips: every round trip is
+  a round trip, and a transaction of a database is a round trip that
+  waits for the server;
+- the cost is **not** the disk: with
+  `SHUTTLE_POSTGRES_SYNCHRONOUS_COMMIT=off`, which is the default, a
+  transaction of the limiter costs about 0.2 ms instead of about 1.8 ms.
+  With `on`, the `limits` scenario of Postgres falls to about 420 req/s
+  and its p50 reaches 120 ms, because the scope of the deployment
+  serializes the requests of the whole deployment and every one of them
+  waits for the disk;
+- **the size of the pool is not the lever**: a pool of forty connections
+  per replica measures *slower* than a pool of ten (about 3 600 req/s
+  against about 4 100 req/s on the `limits` scenario). The bottleneck is
+  the serialization of the scope of the deployment and not the number of
+  the connections that wait for it, so a bigger pool only adds contention
+  on the server. The default of ten connections per replica is the right
+  one, and a deployment with many replicas needs a pooler in front of the
+  server rather than a bigger pool.
+
+What they do not say:
+
+- the numbers are the numbers of **one machine that runs everything**: a
+  deployment that puts the database on its own host, or that reaches it
+  over the network, pays the latency of the network on every round trip;
+- a **managed** Redis and a **managed** Postgres do not have the same
+  latency: the measurement has to be made against the servers of the
+  deployment;
+- the pool of the connections is a deployment decision: ten connections
+  per replica is the default, and a server with a low limit of
+  connections needs a pooler in front of it.
+
+The choice is not made by the gateway. The script exists so that the
+choice is an informed one.
+
+---
+
 ## The soak
 
 `bun test test/load` runs the traffic, the WebSockets and the reloads of

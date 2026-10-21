@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { readEnv } from '../src/runtime/env'
 import { createRuntime } from '../src/runtime/composition'
 import { startUpstream } from '../services/upstream'
+import { measure, measureWebsockets, report, summarize } from './measure'
 
 interface Options {
   url?: string
@@ -77,97 +78,6 @@ function parseArgs(argv: string[]): Options {
   // script.
   if (options.websockets > 0 && !pathGiven) options.path = '/socket/'
   return options
-}
-
-interface Measurement {
-  latencies: number[]
-  errors: number
-  durationMs: number
-}
-
-/** Runs the requests with a fixed number of them in flight. */
-async function measure(options: Options, target: string): Promise<Measurement> {
-  const latencies: number[] = []
-  let errors = 0
-  let index = 0
-
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      const current = index++
-      if (current >= options.requests) return
-      const started = performance.now()
-      try {
-        const response = await fetch(`${target}${options.path}`, {
-          headers: { host: options.host },
-        })
-        await response.arrayBuffer()
-        if (!response.ok) errors += 1
-      } catch {
-        errors += 1
-      }
-      latencies.push(performance.now() - started)
-    }
-  }
-
-  const started = performance.now()
-  await Promise.all(
-    Array.from({ length: Math.min(options.concurrency, options.requests) }, () => worker())
-  )
-  return { latencies, errors, durationMs: performance.now() - started }
-}
-
-/** Opens the websockets and keeps them open for a moment. */
-async function measureWebsockets(options: Options, target: string): Promise<Measurement> {
-  const latencies: number[] = []
-  let errors = 0
-  const started = performance.now()
-  const sockets: WebSocket[] = []
-
-  await Promise.all(
-    Array.from({ length: options.websockets }, async () => {
-      const opened = performance.now()
-      try {
-        const socket = new WebSocket(`${target.replace('http://', 'ws://')}${options.path}`)
-        await new Promise<void>((resolve, reject) => {
-          socket.onopen = () => resolve()
-          socket.onerror = () => reject(new Error('the connection failed'))
-        })
-        latencies.push(performance.now() - opened)
-        sockets.push(socket)
-      } catch {
-        errors += 1
-      }
-    })
-  )
-
-  // The connections stay open: the capacity of the deployment is the number
-  // of connections that can be open at the same time.
-  await Bun.sleep(1000)
-  for (const socket of sockets) socket.close()
-  return { latencies, errors, durationMs: performance.now() - started }
-}
-
-function percentile(sorted: number[], share: number): number {
-  if (sorted.length === 0) return 0
-  const index = Math.min(sorted.length - 1, Math.floor(sorted.length * share))
-  return sorted[index]!
-}
-
-function report(name: string, measurement: Measurement, requests: number): void {
-  const sorted = [...measurement.latencies].sort((a, b) => a - b)
-  const perSecond = (requests / measurement.durationMs) * 1000
-  const line = [
-    name.padEnd(12),
-    `${requests} requests`,
-    `${measurement.durationMs.toFixed(0)} ms`,
-    `${perSecond.toFixed(0)} req/s`,
-    `p50 ${percentile(sorted, 0.5).toFixed(1)} ms`,
-    `p90 ${percentile(sorted, 0.9).toFixed(1)} ms`,
-    `p99 ${percentile(sorted, 0.99).toFixed(1)} ms`,
-    `max ${(sorted.at(-1) ?? 0).toFixed(1)} ms`,
-    `${measurement.errors} errors`,
-  ].join('  ')
-  console.log(line)
 }
 
 async function main(): Promise<void> {
@@ -247,12 +157,12 @@ async function main(): Promise<void> {
 
   if (options.websockets > 0) {
     const measurement = await measureWebsockets(options, target)
-    report('websockets', measurement, options.websockets)
+    report(summarize('websockets', 'in-process', measurement, options.websockets))
   } else {
     // A short run first, so the connections are warm before the measurement.
     await measure({ ...options, requests: Math.min(200, options.requests) }, target)
     const measurement = await measure(options, target)
-    report('requests', measurement, options.requests)
+    report(summarize('requests', 'in-process', measurement, options.requests))
   }
 
   await stop?.()
