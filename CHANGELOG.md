@@ -88,6 +88,11 @@ of the package, it checks that every binary is of the format of its
 platform, and it starts the binary of the runner and waits for its health
 probe before it publishes anything. The checksums are published with them.
 
+The image of the same release is published by the workflow of the release:
+the two are published together, and the attestations of the image — the
+provenance and the bill of materials — are added when it is pushed to the
+registry.
+
 ### The schema of the shared state
 
 The gateway builds the schema of a Postgres server when it connects

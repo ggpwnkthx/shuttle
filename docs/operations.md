@@ -584,6 +584,12 @@ tag, starts it with the configuration of a deployment and exports it as an
 artifact of the run. The image carries the version and the revision as
 labels, and holds the dependencies of the gateway alone.
 
+The image is built twice: once for the local store, so that the checks of
+the deployment can run it, and once for the registry. The attestations —
+the provenance and the bill of materials — are added by the second build:
+the docker exporter of a local build cannot carry the manifest list of an
+attestation.
+
 The workflow of the binaries (`.github/workflows/release-binaries.yml`)
 compiles the gateway for the seven platforms of the release and publishes
 them on the release of the tag:

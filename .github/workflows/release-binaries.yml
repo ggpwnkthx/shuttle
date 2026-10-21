@@ -242,15 +242,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.version.outputs.tag }}
+          # The job does not check the repository out: the name of the
+          # repository is given to the command, or it cannot tell which
+          # repository it publishes to.
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           # The release is created once: a run that is repeated uploads the
           # binaries again and replaces them.
-          if ! gh release view "${TAG}" > /dev/null 2>&1; then
+          if ! gh release view "${TAG}" --repo "${REPOSITORY}" > /dev/null 2>&1; then
             gh release create "${TAG}" \
+              --repo "${REPOSITORY}" \
               --title "Shuttle ${TAG}" \
               --notes-file notes.md \
               --verify-tag
           fi
-          gh release upload "${TAG}" dist/* --clobber
-          gh release view "${TAG}"
+          gh release upload "${TAG}" dist/* --repo "${REPOSITORY}" --clobber
+          gh release view "${TAG}" --repo "${REPOSITORY}"

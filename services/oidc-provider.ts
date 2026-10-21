@@ -15,6 +15,7 @@
  */
 import { timingSafeEqual } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
+import { freePort } from './port'
 import Provider from 'oidc-provider'
 import { exportJWK, generateKeyPair, type JWK } from 'jose'
 import { assertFixtureAllowed, FixtureInProductionError } from './fixture-guard'
@@ -134,22 +135,6 @@ function sameSecret(left: string, right: string): boolean {
   const b = Buffer.from(right)
   if (a.length !== b.length) return false
   return timingSafeEqual(a, b)
-}
-
-/** Finds a free port, so the issuer can be known before the provider starts. */
-async function freePort(): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const probe = createServer()
-    probe.listen(0, '127.0.0.1', () => {
-      const address = probe.address()
-      const port = typeof address === 'object' && address ? address.port : 0
-      probe.close(() => {
-        if (port === 0) reject(new Error('unable to find a free port'))
-        else resolve(port)
-      })
-    })
-    probe.on('error', reject)
-  })
 }
 
 /**

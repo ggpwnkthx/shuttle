@@ -10,6 +10,7 @@ import {
   type StartedAccessService,
 } from '../../services/access-fixture'
 import { startOidcProvider, type StartedOidcProvider } from '../../services/oidc-provider'
+import { freePort as findFreePort } from '../../services/port'
 import { startUpstream, type StartedUpstream } from '../../services/upstream'
 
 /**
@@ -108,12 +109,15 @@ class CookieJar {
   }
 }
 
-/** Finds a free port. */
+/** Finds a free port for the gateway.
+ *
+ * The port comes from the range of the tests, not from the range of the
+ * ephemeral ports of the kernel: the fixtures of the tests bind the port
+ * zero, and the kernel may hand out a port that the harness has reserved
+ * and released in the meantime.
+ */
 async function freePort(): Promise<number> {
-  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('ok') })
-  const port = server.port ?? 0
-  await server.stop(true)
-  return port
+  return await findFreePort()
 }
 
 /** The routes of the tests. */

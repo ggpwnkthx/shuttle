@@ -98,9 +98,11 @@ jobs:
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             REVISION=${{ github.sha }}
-          # The provenance of the image: what was built and from what.
-          provenance: true
-          sbom: true
+          # The attestations are added when the image is published: the
+          # docker exporter of a local build cannot carry a manifest list,
+          # and an attestation is one.
+          provenance: false
+          sbom: false
 
       - name: the image starts with the configuration of a deployment
         run: |
@@ -173,9 +175,23 @@ jobs:
           fi
 
       - name: publish the image
-        run: |
-          docker push "ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}"
-          docker push "ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.version }}"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.tag }}
+            ghcr.io/ggpwnkthx/shuttle:${{ steps.version.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            REVISION=${{ github.sha }}
+          # The provenance of the image: what was built and from what.
+          # The registry carries the attestations, the local build cannot:
+          # the docker exporter does not support the manifest list of an
+          # attestation.
+          provenance: true
+          sbom: true
 
       - name: export the image
         run: |
