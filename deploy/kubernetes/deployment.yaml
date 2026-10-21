@@ -81,6 +81,13 @@ spec:
                 secretKeyRef:
                   name: shuttle-secrets
                   key: SHUTTLE_SESSION_SECRET
+            # The private key that signs the identity of the requests. The
+            # upstreams are given the public key of it.
+            - name: SHUTTLE_IDENTITY_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: shuttle-secrets
+                  key: SHUTTLE_IDENTITY_SIGNING_KEY
             - name: SHUTTLE_SESSION_URL
               valueFrom:
                 secretKeyRef:

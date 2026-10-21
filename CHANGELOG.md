@@ -58,6 +58,7 @@ access tokens carry a nonce anyway.
 
 ### The three budgets of a request cost one round trip
 
+
 The path of a request through the state the replicas share was six round
 trips: the budget of the deployment, the budget of the caller over all the
 routes, the budget of the caller on the route, the session of the caller,
@@ -78,6 +79,42 @@ specification.
 The order of the pipeline did not change: the budgets are counted before
 the authentication, so a flood is stopped before it reaches the session
 store.
+
+### The signature of the identity is asymmetric
+
+The gateway signed the identity of every request it forwarded with a key
+that was **derived from the secret of the sessions**, and it gave that key
+to every upstream. An upstream that could verify an identity could then
+mint one: the trust boundary was the network and not the key, and an
+upstream that could reach the gateway could forge an identity for any
+subject.
+
+The signature is asymmetric now. The gateway holds the **private key** of
+the deployment and the upstreams are given the **public** key: they
+verify the identity of a request and they cannot mint one. The key is an
+elliptic curve key on the curve P-256 and the signature is an `ES256` one
+— a JWS, so an upstream verifies it with a standard library and not with an
+implementation of Shuttle.
+
+The version of the format is `v5`: a signature of the symmetric format
+never verifies with the public key, and the other way round.
+
+**The migration.** A production deployment has to set the key, and the
+upstreams have to verify `v5` before the gateway signs it:
+
+```bash
+bun run identity:key              # a new pair
+bun run identity:key --public     # the public key of the key in the environment
+```
+
+The private key goes to the secret store of the deployment and to
+`SHUTTLE_IDENTITY_SIGNING_KEY`; the public key goes to the upstreams. The
+gateway refuses to start in production without the key: a setting that
+looks active but is not is a security hole.
+
+A deployment that does not set the key keeps the symmetric format, and the
+upstreams keep the derived key. It is not the format a production
+deployment should use.
 
 ## 0.4.0
 

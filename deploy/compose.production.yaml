@@ -27,9 +27,13 @@ services:
       SHUTTLE_OIDC_REDIRECT_URI: ${SHUTTLE_OIDC_REDIRECT_URI:?the url of the callback is required}
       SHUTTLE_ACCESS_URL: ${SHUTTLE_ACCESS_URL:?the access service is required}
       SHUTTLE_ACCESS_TOKEN: ${SHUTTLE_ACCESS_TOKEN:?the token of the access service is required}
-      # The secret of the sessions: it signs the state of the login and it
-      # derives the key of the signature of the identity.
+      # The secret of the sessions: it signs the state of the login.
       SHUTTLE_SESSION_SECRET: ${SHUTTLE_SESSION_SECRET:?the secret of the sessions is required}
+      # The private key that signs the identity of the requests. The
+      # upstreams are given the public key of it, so an upstream that
+      # verifies an identity cannot mint one. `bun run identity:key`
+      # generates a pair.
+      SHUTTLE_IDENTITY_SIGNING_KEY: ${SHUTTLE_IDENTITY_SIGNING_KEY:?the key of the identity signature is required}
       # The shared state lives in a Redis server. A deployment that runs on
       # a database it already has points these two urls at a Postgres
       # server instead:

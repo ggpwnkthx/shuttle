@@ -24,7 +24,7 @@
  */
 
 import { CompactSign, base64url, compactVerify } from 'jose'
-import { createHmac } from 'node:crypto'
+import { createHmac, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
 
 /** The identity of a caller, as the authentication domain knows it. */
 export interface CallerIdentity {
@@ -65,6 +65,16 @@ export const MAX_IDENTITY_VALUE_LENGTH = 512
  */
 export const IDENTITY_SIGNATURE_VERSION = 'v4'
 
+/**
+ * The version of the signature format of an **asymmetric** key.
+ *
+ * `v5` is the same format — a JWS with a detached payload — signed with
+ * `ES256` and a private key the gateway holds. The upstream verifies it
+ * with the **public** key, so an upstream that can verify an identity
+ * cannot mint one: the trust boundary is the key, and not the network.
+ */
+export const IDENTITY_SIGNATURE_VERSION_ASYMMETRIC = 'v5'
+
 /** The header the signature is written to. */
 export const IDENTITY_SIGNATURE_HEADER = 'x-shuttle-signature'
 
@@ -75,9 +85,6 @@ export const IDENTITY_SIGNATURE_HEADER = 'x-shuttle-signature'
  * signature of another kind does not try to verify it.
  */
 const IDENTITY_SIGNATURE_TYPE = 'shuttle-identity'
-
-/** The algorithm of the signature. */
-const IDENTITY_SIGNATURE_ALGORITHM = 'HS256'
 
 /** The request the signature belongs to. */
 export interface SignedRequest {
@@ -106,6 +113,42 @@ export interface SignedRequest {
   host: string
 }
 
+/** The algorithm of the signature of the identity. */
+export type IdentityAlgorithm = 'HS256' | 'ES256'
+
+/**
+ * A key that signs the identity of a request.
+ *
+ * The symmetric key (`HS256`) is shared with the upstreams: an upstream
+ * that can verify an identity can then mint one, so the trust boundary is
+ * the network. The asymmetric key (`ES256`) is not: the gateway holds the
+ * private key and the upstream holds the public one, so an upstream that
+ * can verify an identity cannot mint one.
+ */
+export interface IdentitySigningKey {
+  /** The version of the format of the signature. */
+  version: string
+  /** The algorithm of the signature. */
+  algorithm: IdentityAlgorithm
+  /** The key: a secret for `HS256`, a private key for `ES256`. */
+  key: Buffer | KeyObject
+}
+
+/**
+ * A key that verifies the identity of a request.
+ *
+ * It is the counterpart of the signing key: the secret of the symmetric
+ * one, the public key of the asymmetric one.
+ */
+export interface IdentityVerificationKey {
+  /** The version of the format of the signature. */
+  version: string
+  /** The algorithm of the signature. */
+  algorithm: IdentityAlgorithm
+  /** The key: a secret for `HS256`, a public key for `ES256`. */
+  key: Buffer | KeyObject
+}
+
 /**
  * Derives the key of the identity signature from the secret of the gateway.
  *
@@ -115,6 +158,88 @@ export interface SignedRequest {
  */
 export function deriveIdentityKey(secret: string): Buffer {
   return createHmac('sha256', secret).update('shuttle-identity-signature-v1').digest()
+}
+
+/**
+ * The signing key of the symmetric format.
+ *
+ * The key is derived from the secret of the gateway, and the upstream is
+ * given it: an upstream that verifies an identity with it can mint one as
+ * well. A deployment that can hold a private key uses
+ * `asymmetricIdentityKey` instead.
+ */
+export function symmetricIdentityKey(secret: string): IdentitySigningKey {
+  return {
+    version: IDENTITY_SIGNATURE_VERSION,
+    algorithm: 'HS256',
+    key: deriveIdentityKey(secret),
+  }
+}
+
+/**
+ * The signing key of the asymmetric format.
+ *
+ * The private key is a PEM of an elliptic curve key on the curve P-256,
+ * and the signature is an `ES256` one. The upstream is given the **public**
+ * key: it verifies the identity and it cannot mint one.
+ *
+ * The key belongs to the deployment: it is the same on every replica, or
+ * the upstreams refuse the signatures of the others.
+ */
+export function asymmetricIdentityKey(privateKeyPem: string): IdentitySigningKey {
+  let key: KeyObject
+  try {
+    key = createPrivateKey(privateKeyPem)
+  } catch (error) {
+    throw new Error(
+      `the key of the identity signature is not a private key: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  if (key.asymmetricKeyType !== 'ec') {
+    throw new Error(
+      `the key of the identity signature is a ${key.asymmetricKeyType} key and not an elliptic curve one: the signature is an ES256 one`
+    )
+  }
+  return {
+    version: IDENTITY_SIGNATURE_VERSION_ASYMMETRIC,
+    algorithm: 'ES256',
+    key,
+  }
+}
+
+/**
+ * The key that verifies what a signing key signs.
+ *
+ * The public key of an asymmetric key, and the secret itself for a
+ * symmetric one.
+ */
+export function verificationKeyOf(signingKey: IdentitySigningKey): IdentityVerificationKey {
+  if (signingKey.algorithm === 'HS256') {
+    return {
+      version: signingKey.version,
+      algorithm: signingKey.algorithm,
+      key: signingKey.key,
+    }
+  }
+  return {
+    version: signingKey.version,
+    algorithm: signingKey.algorithm,
+    key: createPublicKey(signingKey.key as KeyObject),
+  }
+}
+
+/**
+ * The public key of a signing key, as a PEM.
+ *
+ * It is what the upstreams are given: an upstream that holds the public
+ * key verifies the identity of a request and it cannot mint one. The
+ * symmetric format has no public key: the secret is the key.
+ */
+export function publicKeyPem(signingKey: IdentitySigningKey): string | undefined {
+  if (signingKey.algorithm === 'HS256') return undefined
+  return createPublicKey(signingKey.key as KeyObject)
+    .export({ type: 'spki', format: 'pem' })
+    .toString()
 }
 
 /**
@@ -208,13 +333,18 @@ export function writtenIdentity(identity: CallerIdentity): WrittenIdentity {
  * explicit, so an upstream that rebuilds the payload cannot confuse two
  * fields of it. The roles are sorted, their order is not part of the
  * meaning.
+ *
+ * The version is part of the payload: it binds the format of the
+ * signature, and an upstream that rebuilds the payload of a version it
+ * does not know refuses the signature.
  */
 export function canonicalIdentityPayload(
   identity: WrittenIdentity,
-  request: SignedRequest
+  request: SignedRequest,
+  version: string = IDENTITY_SIGNATURE_VERSION
 ): string {
   return JSON.stringify({
-    v: IDENTITY_SIGNATURE_VERSION,
+    v: version,
     method: request.method.toUpperCase(),
     path: request.path,
     query: request.query,
@@ -229,8 +359,8 @@ export function canonicalIdentityPayload(
 /**
  * Signs the identity of a request.
  *
- * The result is `v4=<the detached JWS>`: the version is part of the value,
- * so the format can change later without breaking the verification.
+ * The result is `<version>=<the detached JWS>`: the version is part of the
+ * value, so the format can change later without breaking the verification.
  *
  * The payload is detached: it is not part of the value. An upstream
  * rebuilds it from the request and from the identity headers, rebuilds the
@@ -239,14 +369,16 @@ export function canonicalIdentityPayload(
 export async function signIdentity(
   identity: WrittenIdentity,
   request: SignedRequest,
-  key: Buffer
+  signingKey: IdentitySigningKey
 ): Promise<string> {
-  const payload = new TextEncoder().encode(canonicalIdentityPayload(identity, request))
+  const payload = new TextEncoder().encode(
+    canonicalIdentityPayload(identity, request, signingKey.version)
+  )
   const jws = await new CompactSign(payload)
-    .setProtectedHeader({ alg: IDENTITY_SIGNATURE_ALGORITHM, typ: IDENTITY_SIGNATURE_TYPE })
-    .sign(key)
+    .setProtectedHeader({ alg: signingKey.algorithm, typ: IDENTITY_SIGNATURE_TYPE })
+    .sign(signingKey.key as Parameters<CompactSign['sign']>[0])
   const [protectedHeader, , signature] = jws.split('.')
-  return `${IDENTITY_SIGNATURE_VERSION}=${protectedHeader}..${signature}`
+  return `${signingKey.version}=${protectedHeader}..${signature}`
 }
 
 /**
@@ -258,24 +390,29 @@ export async function signIdentity(
  * The payload of the upstream is the one it rebuilt from the request and
  * from the identity headers: a signature that does not belong to them is
  * refused by the verification of the signature itself.
+ *
+ * A signature of another version is refused: the version is part of the
+ * payload, so the signature of another format does not verify.
  */
 export async function verifyIdentity(
   identity: WrittenIdentity,
   request: SignedRequest,
-  key: Buffer,
+  verificationKey: IdentityVerificationKey,
   signature: string | null | undefined
 ): Promise<boolean> {
   if (!signature) return false
-  const prefix = `${IDENTITY_SIGNATURE_VERSION}=`
+  const prefix = `${verificationKey.version}=`
   if (!signature.startsWith(prefix)) return false
   const parts = signature.slice(prefix.length).split('.')
   if (parts.length !== 3) return false
   const [protectedHeader, , detachedSignature] = parts
   if (!protectedHeader || !detachedSignature) return false
-  const payload = new TextEncoder().encode(canonicalIdentityPayload(identity, request))
+  const payload = new TextEncoder().encode(
+    canonicalIdentityPayload(identity, request, verificationKey.version)
+  )
   const compact = `${protectedHeader}.${base64url.encode(payload)}.${detachedSignature}`
   try {
-    await compactVerify(compact, key)
+    await compactVerify(compact, verificationKey.key as Parameters<typeof compactVerify>[1])
     return true
   } catch {
     return false

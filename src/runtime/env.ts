@@ -52,6 +52,24 @@ export interface AccessSettings {
   allowAnonymous: boolean
 }
 
+/** The settings of the signature of the identity. */
+export interface IdentitySettings {
+  /**
+   * The private key that signs the identity of a request, as a PEM.
+   *
+   * The key is an elliptic curve key on the curve P-256, and the signature
+   * is an `ES256` one. The upstreams are given the **public** key: they
+   * verify the identity of a request and they cannot mint one.
+   *
+   * A deployment that does not set it signs with the symmetric key that is
+   * derived from the secret of the sessions. The upstreams are then given
+   * that secret, so an upstream that verifies an identity can mint one as
+   * well. A production deployment has to set it: the key belongs to the
+   * deployment and it is the same on every replica.
+   */
+  signingKey?: string
+}
+
 /** The settings of the sessions. */
 export interface SessionSettings {
   url: string
@@ -229,6 +247,8 @@ export interface RuntimeSettings {
   session: SessionSettings
   sharedState: SharedStateSettings
   browser: BrowserSettings
+  /** The settings of the signature of the identity. */
+  identity: IdentitySettings
   /** The TLS of the connections to the upstreams. */
   upstreamTls: UpstreamTlsSettings
   limits: LimitSettings
@@ -384,6 +404,21 @@ const EnvSchema = z.object({
   SHUTTLE_ALLOW_MEMORY_STATE: boolEnv(),
   SHUTTLE_SESSION_TLS_CA: tlsCaEnv(),
   SHUTTLE_SESSION_TLS_CA_BASE64: tlsCaEnv(),
+
+  /**
+   * The private key that signs the identity of a request, as a PEM.
+   *
+   * The key is an elliptic curve key on the curve P-256. The gateway holds
+   * the private key and the upstreams are given the public one, so an
+   * upstream that verifies an identity cannot mint one. The script
+   * `scripts/identity-key.ts` generates a pair.
+   *
+   * A production deployment has to set it: without it the signature is
+   * symmetric, the upstreams hold the secret that signs it, and a setting
+   * that looks active but is not is a security hole.
+   */
+  SHUTTLE_IDENTITY_SIGNING_KEY: z.string().optional(),
+  SHUTTLE_IDENTITY_SIGNING_KEY_BASE64: z.string().optional(),
 
   /**
    * The TLS of the connections to the upstreams.
@@ -561,6 +596,21 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       'SHUTTLE_ACCESS_TOKEN must be set in a production environment, or SHUTTLE_ACCESS_ALLOW_ANONYMOUS=true when the access service authenticates the gateway by other means'
     )
   }
+  // The signature of the identity is asymmetric in a production
+  // deployment: the gateway holds the private key and the upstreams hold
+  // the public one, so an upstream that verifies an identity cannot mint
+  // one. Without the key the signature is symmetric, the upstreams hold
+  // the secret that signs it, and the trust boundary is the network
+  // instead of the key.
+  if (
+    production &&
+    !parsed.SHUTTLE_IDENTITY_SIGNING_KEY &&
+    !parsed.SHUTTLE_IDENTITY_SIGNING_KEY_BASE64
+  ) {
+    throw new Error(
+      'SHUTTLE_IDENTITY_SIGNING_KEY must be set in a production environment: it is the private key that signs the identity of a request, and the upstreams are given the public one, so an upstream that verifies an identity cannot mint one. The script `bun run identity:key` generates a pair'
+    )
+  }
   if (
     production &&
     !parsed.SHUTTLE_ALLOW_NO_RATE_LIMITS &&
@@ -701,6 +751,14 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       cookieSecure: parsed.SHUTTLE_COOKIE_SECURE ?? production,
       allowedOrigins: parsed.SHUTTLE_ALLOWED_ORIGINS,
       csrfStrict: parsed.SHUTTLE_CSRF_STRICT ?? false,
+    },
+    identity: {
+      // The key is a PEM, given directly or as base64: the secret stores
+      // hand out the keys of a deployment in base64.
+      signingKey: pemOf(
+        parsed.SHUTTLE_IDENTITY_SIGNING_KEY,
+        parsed.SHUTTLE_IDENTITY_SIGNING_KEY_BASE64
+      ),
     },
     upstreamTls: {
       ca: pemOf(parsed.SHUTTLE_UPSTREAM_TLS_CA, parsed.SHUTTLE_UPSTREAM_TLS_CA_BASE64),

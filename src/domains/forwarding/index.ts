@@ -18,18 +18,30 @@ export type { ForwardingContext, ForwardingContextOptions } from './context'
 export {
   IDENTITY_SIGNATURE_HEADER,
   IDENTITY_SIGNATURE_VERSION,
+  IDENTITY_SIGNATURE_VERSION_ASYMMETRIC,
   IdentityNotWritableError,
   MAX_IDENTITY_VALUE_LENGTH,
+  asymmetricIdentityKey,
   canonicalIdentityPayload,
   deriveIdentityKey,
   filterRoles,
   isAmbiguousRole,
+  publicKeyPem,
   sanitizeIdentityValue,
   signIdentity,
+  symmetricIdentityKey,
+  verificationKeyOf,
   verifyIdentity,
   writtenIdentity,
 } from './identity'
-export type { CallerIdentity, SignedRequest, WrittenIdentity } from './identity'
+export type {
+  CallerIdentity,
+  IdentityAlgorithm,
+  IdentitySigningKey,
+  IdentityVerificationKey,
+  SignedRequest,
+  WrittenIdentity,
+} from './identity'
 
 export {
   HOP_BY_HOP_HEADERS,

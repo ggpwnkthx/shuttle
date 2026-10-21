@@ -499,26 +499,43 @@ header therefore needs the ingress to report the public host in
 
 ### 7.4 The identity signature
 
-**The secret.** The signature is keyed with `SHUTTLE_SESSION_SECRET`. The
-signing key is derived from it, so the two purposes can not be confused:
+**The key.** The signature is keyed with the private key of the deployment,
+`SHUTTLE_IDENTITY_SIGNING_KEY`. It is an elliptic curve key on the curve
+P-256, and the signature is an `ES256` one. The upstreams are given the
+**public** key: they verify the identity of a request and they cannot mint
+one, so the trust boundary is the key and not the network.
+
+The key belongs to the deployment: it is the same on every replica, or the
+upstreams refuse the signatures of the others. The script `bun run
+identity:key` generates a pair, and `bun run identity:key --public` prints
+the public key of the key that is in the environment.
+
+**The symmetric format.** A deployment that does not set the key signs with
+the symmetric key that is derived from `SHUTTLE_SESSION_SECRET`:
 
 ```
 key = HMAC-SHA256(secret, "shuttle-identity-signature-v1")
 ```
 
+The upstream is then given the derived key, so an upstream that verifies an
+identity can mint one as well. The gateway refuses to start in production
+without the private key: a setting that looks active but is not is a
+security hole.
+
 If `SHUTTLE_SESSION_SECRET` is unset, a random secret is generated **per
 process**: the signatures are then not verifiable by an upstream across
 replicas or restarts. The gateway refuses to start in production without
-it. The secret is never sent to an upstream; an upstream verifies the
-signature with the derived key.
+it. The secret is never sent to an upstream.
 
-**The format.** The signature is a **JWS** (RFC 7515) signed with `HS256`
-and the derived key. The protected header names the algorithm and the type
-of the signature:
+**The format.** The signature is a **JWS** (RFC 7515) with a detached
+payload. The protected header names the algorithm and the type of the
+signature:
 
 ```json
-{ "alg": "HS256", "typ": "shuttle-identity" }
+{ "alg": "ES256", "typ": "shuttle-identity" }
 ```
+
+The symmetric format signs the same way with `HS256`.
 
 **The payload.** The payload is **detached**: it is not transmitted. An
 upstream rebuilds it from the request and from the identity headers it
@@ -535,7 +552,7 @@ field into another and no field can be confused with another one:
 
 | Field | Value |
 | --- | --- |
-| `v` | The version of the format, `v4`. |
+| `v` | The version of the format: `v5` for the asymmetric one, `v4` for the symmetric one. |
 | `method` | The method, upper-cased. |
 | `path` | The path **as the upstream received it**: the base path of the upstream in front of the request path. |
 | `query` | The query string as the upstream received it, with its leading `?`. The empty string when there is none. |
@@ -555,18 +572,21 @@ the **sanitized** subject, e-mail and workspace, and the **filtered** roles
 would make the comma separated list of `x-shuttle-roles` ambiguous). The
 roles that are handed to the access service are not filtered.
 
-**The value.** `v4=<the detached compact JWS>`. The version is part of the
-value so the format can change without breaking the verification.
+**The value.** `v5=<the detached compact JWS>` for the asymmetric format
+and `v4=<the detached compact JWS>` for the symmetric one. The version is
+part of the value so the format can change without breaking the
+verification, and a signature of one format never verifies with the key of
+the other one.
 
 **The verification of an upstream.** The upstream:
 
-1. reads `x-shuttle-signature` and removes the `v4=` prefix;
+1. reads `x-shuttle-signature` and removes the `v5=` prefix;
 2. splits the value into its three parts: the protected header, the
    **empty** payload and the signature;
 3. rebuilds the payload from the request and from the identity headers;
 4. rebuilds the compact serialization around its own payload:
    `<protected>.<base64url(payload)>.<signature>`;
-5. verifies it with the derived key.
+5. verifies it with the public key of the deployment.
 
 The last step is one call of a standard library: `jose.compactVerify(token,
 key)`. An upstream does not implement a signature of Shuttle, it verifies a
@@ -588,6 +608,14 @@ payload = {"v":"v4","method":"GET","path":"/base/ws/123","query":"?x=1",
            "email":"user@example.com","roles":["admin","dev"]}
 signature = v4=eyJhbGciOiJIUzI1NiIsInR5cCI6InNodXR0bGUtaWRlbnRpdHkifQ..tIL7qgT7uQOhaHjjFpgmOHYSAcjNBrddkreDMFejQm8
 ```
+
+**The migration from `v4`.** The value of `v4` is signed with a key that
+every upstream holds, so an upstream that verifies an identity can mint one
+as well. The value of `v5` is signed with the private key of the
+deployment: the upstreams are given the public key, and an upstream that
+can verify an identity cannot mint one. An upstream that verifies `v4` has
+to be changed before the gateway signs `v5`: it reads the version of the
+value and verifies with the public key of the deployment.
 
 **The migration from `v3`.** The value of `v3` was a hex digest of a
 canonical JSON **array**. An upstream that verifies `v3` has to be changed:

@@ -110,6 +110,7 @@ describe('the environment of a production deployment', () => {
   const production = {
     NODE_ENV: 'production',
     SHUTTLE_SESSION_SECRET: 'secret',
+    SHUTTLE_IDENTITY_SIGNING_KEY: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n',
     SHUTTLE_OIDC_ISSUER: 'https://dex.example.com/dex',
     SHUTTLE_OIDC_CLIENT_ID: 'shuttle',
     SHUTTLE_OIDC_CLIENT_SECRET: 'client-secret',
@@ -138,6 +139,28 @@ describe('the environment of a production deployment', () => {
   test('the claims a bearer token has to carry are read from the environment', () => {
     const settings = readEnv({ SHUTTLE_OIDC_REQUIRED_TOKEN_CLAIMS: 'scp, token_use' })
     expect(settings.oidc.requiredTokenClaims).toEqual(['scp', 'token_use'])
+  })
+
+  test('the key of the identity signature is read from the environment', () => {
+    const pem = '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n'
+    const settings = readEnv({ SHUTTLE_IDENTITY_SIGNING_KEY: pem })
+    expect(settings.identity.signingKey).toBe(pem)
+    // The secret stores hand out the keys in base64.
+    const encoded = readEnv({
+      SHUTTLE_IDENTITY_SIGNING_KEY_BASE64: Buffer.from(pem, 'utf8').toString('base64'),
+    })
+    expect(encoded.identity.signingKey).toBe(pem)
+  })
+
+  test('a production deployment needs the key of the identity signature', () => {
+    expect(() => readEnv({ ...production, SHUTTLE_IDENTITY_SIGNING_KEY: undefined })).toThrow(
+      /SHUTTLE_IDENTITY_SIGNING_KEY/
+    )
+    const settings = readEnv({
+      ...production,
+      SHUTTLE_IDENTITY_SIGNING_KEY: '-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n',
+    })
+    expect(settings.identity.signingKey).toContain('BEGIN PRIVATE KEY')
   })
 
   test('at least one rate limit is required', () => {

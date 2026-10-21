@@ -18,7 +18,7 @@ import {
 } from '../domains/authentication/adapters'
 import { OidcClient } from '../domains/authentication'
 import { ConfigurationStore } from '../domains/configuration'
-import { deriveIdentityKey } from '../domains/forwarding'
+import { asymmetricIdentityKey, symmetricIdentityKey } from '../domains/forwarding'
 import { HttpExchangeService } from '../domains/proxying'
 import { MemoryRateLimiter, type RequestLimiter } from '../domains/rate-limiting'
 import { PostgresRateLimiter, RedisRateLimiter } from '../domains/rate-limiting/adapters'
@@ -402,7 +402,12 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     principalRateLimiter,
     totalRateLimiter,
     loginRateLimiter,
-    identityKey: deriveIdentityKey(settings.session.secret),
+    // The key of the signature of the identity: the private key of the
+    // deployment when it has one, and the key that is derived from the
+    // secret of the sessions otherwise.
+    identityKey: settings.identity.signingKey
+      ? asymmetricIdentityKey(settings.identity.signingKey)
+      : symmetricIdentityKey(settings.session.secret),
     gatewayCookies: auth.gatewayCookieNames,
     browser: {
       cookieSecure: settings.browser.cookieSecure,

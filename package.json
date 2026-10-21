@@ -20,6 +20,7 @@
     "format:check": "biome format .",
     "architecture": "bun run scripts/architecture.ts",
     "versions": "bun run scripts/version.ts",
+    "identity:key": "bun run scripts/identity-key.ts",
     "load": "bun run scripts/load.ts",
     "benchmark": "bun run scripts/benchmark.ts",
     "postgres:migrate": "bun run scripts/postgres-migrate.ts"

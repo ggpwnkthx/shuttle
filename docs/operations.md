@@ -42,7 +42,8 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_OIDC_REQUIRED_TOKEN_CLAIMS` | — | The claims a bearer token has to carry. A provider that publishes a claim that names the type of the token names it here. |
 | `SHUTTLE_OIDC_REJECT_NONCE_TOKEN` | `true` | Refuses a bearer token that carries a nonce. The id token of the gateway always carries one and an access token never does. A provider whose access tokens carry a nonce turns it off. |
 | `SHUTTLE_ACCESS_URL` / `_ACCESS_TOKEN` | `https://access.example.com` | The access service. The token is in the secret store. |
-| `SHUTTLE_SESSION_SECRET` | A random value of at least 32 bytes | It signs the state of the login and the signature of the identity. It has to be the **same on every replica**. |
+| `SHUTTLE_SESSION_SECRET` | A random value of at least 32 bytes | It signs the state of the login. It has to be the **same on every replica**. |
+| `SHUTTLE_IDENTITY_SIGNING_KEY` | The private key of the deployment | It signs the identity of the requests. The upstreams are given the public key. It has to be the **same on every replica**. |
 | `SHUTTLE_SESSION_URL` | `rediss://:<password>@<redis>:6379/0` | The sessions of the callers. It has to name a server whose state is shared in production: a Redis server or a Postgres server. |
 | `SHUTTLE_SHARED_STATE_URL` | `rediss://:<password>@<redis>:6379/1` | The limits and the decisions. It defaults to the url of the sessions. It has to name a server whose state is shared in production. |
 | `SHUTTLE_REDIS_SENTINEL_MASTER` | — | The name of the master, when the server is behind sentinel. The hosts of the urls are then the sentinels. Empty by default. |
@@ -174,19 +175,21 @@ are in the route table, and they replace the value of the defaults.
 
 | Secret | Where it comes from | What it protects | How it is rotated |
 | --- | --- | --- | --- |
-| `SHUTTLE_SESSION_SECRET` | The secret store | The state of the login and the signature of the identity | The signature changes with it: the upstreams are given the new derived key at the same time. The logins in flight fail and the callers sign in again. |
+| `SHUTTLE_SESSION_SECRET` | The secret store | The state of the login | The logins in flight fail and the callers sign in again. |
+| `SHUTTLE_IDENTITY_SIGNING_KEY` | The secret store | The signature of the identity that the upstreams verify | The upstreams are given the new **public key** at the same time. The signatures of the old key are refused in the meantime. |
 | `SHUTTLE_OIDC_CLIENT_SECRET` | The secret store | The exchange of the code | The provider accepts two secrets during the rotation of the client; the deployment changes the value afterwards. |
 | `SHUTTLE_ACCESS_TOKEN` | The secret store | The calls to the access service | The service accepts two tokens during the rotation. |
 | The password of Redis | The secret store | The sessions and the limits | The deployment changes the password of the client and of the server in the same window. |
 | `SHUTTLE_METRICS_TOKEN` | The secret store | The metrics | The scraper and the deployment change it together. |
-| The derived identity key | `HMAC-SHA256(SHUTTLE_SESSION_SECRET, "shuttle-identity-signature-v1")` | The signature of the identity that the upstreams verify | The upstreams are given the **derived key**, never the secret. |
+| The public key of the identity signature | `bun run identity:key --public` | The verification of the signature of the identity by the upstreams | The upstreams are given the public key, never the private one. |
 
 The rules:
 
 - a secret is never written in the image, in the configuration file or in
   the repository;
-- the upstreams verify the signature of the identity with the derived key
-  and never with the secret of the sessions;
+- the upstreams verify the signature of the identity with the **public key**
+  and never with the private one, so an upstream that verifies an identity
+  cannot mint one;
 - the secret of the sessions is the same on every replica: a replica with
   another secret cannot read the session of a caller and cannot verify the
   state of a login.
@@ -474,6 +477,7 @@ request id.
 | Secret | In the secret store | The same on every replica | Rotated |
 | --- | --- | --- | --- |
 | `SHUTTLE_SESSION_SECRET` | | | |
+| `SHUTTLE_IDENTITY_SIGNING_KEY` | | | |
 | `SHUTTLE_OIDC_CLIENT_SECRET` | | | |
 | `SHUTTLE_ACCESS_TOKEN` | | | |
 | The password of the shared state | | | |

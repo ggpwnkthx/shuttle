@@ -8,6 +8,7 @@
 
 import type { AuthenticationService } from '../domains/authentication'
 import type { ConfigurationStore } from '../domains/configuration'
+import type { IdentitySigningKey } from '../domains/forwarding'
 import type { HttpExchangeService } from '../domains/proxying'
 import type { RequestLimiter } from '../domains/rate-limiting'
 import type { AccessClient } from '../domains/workspace-access'
@@ -46,8 +47,8 @@ export interface GatewayDependencies {
   totalRateLimiter: RequestLimiter
   /** The limiter of the login attempts. */
   loginRateLimiter: RequestLimiter
-  /** The key of the signature of the identity. */
-  identityKey: Buffer
+  /** The key that signs the identity of a request. */
+  identityKey: IdentitySigningKey
   /** The names of the cookies of the gateway. */
   gatewayCookies: readonly string[]
   /** The settings of the browser. */
