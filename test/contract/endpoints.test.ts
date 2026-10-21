@@ -264,7 +264,7 @@ describe('the workspace of a request', () => {
     // The id token of the gateway always carries a nonce: the browser flow
     // always asks for one. It travels through the browser, so it must not
     // authenticate an api client.
-    const idToken = await harness.idp.mintAccessToken({
+    const idToken = await harness.idp!.mintAccessToken({
       subject: 'user-alice',
       nonce: 'the-nonce-of-a-login',
     })

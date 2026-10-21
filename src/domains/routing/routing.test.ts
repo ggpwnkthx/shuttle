@@ -196,3 +196,55 @@ describe('the conflicts of a route table', () => {
     expect(claimsReservedPath(routes[0]!, ['/metrics'])).toBe(true)
   })
 })
+
+describe('the methods of a route', () => {
+  test('a route that names no method accepts every method', () => {
+    const routes = table([{ id: 'a', host: '*', path: '/' }])
+    expect(matchRoute(routes, 'api.example.com', '/', 'GET')?.route.id).toBe('a')
+    expect(matchRoute(routes, 'api.example.com', '/', 'POST')?.route.id).toBe('a')
+  })
+
+  test('a route that names a method does not handle the other ones', () => {
+    const routes = table([{ id: 'a', host: '*', path: '/', methods: ['GET'] }])
+    expect(matchRoute(routes, 'api.example.com', '/', 'GET')?.route.id).toBe('a')
+    expect(matchRoute(routes, 'api.example.com', '/', 'POST')).toBeNull()
+  })
+
+  test('the method of a request is compared without its case', () => {
+    const routes = table([{ id: 'a', host: '*', path: '/', methods: ['get'] }])
+    expect(matchRoute(routes, 'api.example.com', '/', 'GET')?.route.id).toBe('a')
+  })
+
+  test('a route that names the method of the request wins over one that names none', () => {
+    const routes = table([
+      { id: 'a', host: '*', path: '/' },
+      { id: 'b', host: '*', path: '/', methods: ['GET'] },
+    ])
+    expect(matchRoute(routes, 'api.example.com', '/', 'GET')?.route.id).toBe('b')
+    expect(matchRoute(routes, 'api.example.com', '/', 'POST')?.route.id).toBe('a')
+  })
+
+  test('two routes that name different methods do not conflict', () => {
+    const routes = table([
+      { id: 'a', host: '*', path: '/', methods: ['GET'] },
+      { id: 'b', host: '*', path: '/', methods: ['POST'] },
+    ])
+    expect(detectConflicts(routes)).toEqual([])
+  })
+
+  test('two routes that name the same method conflict', () => {
+    const routes = table([
+      { id: 'a', host: '*', path: '/', methods: ['GET', 'POST'] },
+      { id: 'b', host: '*', path: '/', methods: ['POST'] },
+    ])
+    expect(detectConflicts(routes)).toHaveLength(1)
+  })
+
+  test('a route that names a method is not ambiguous with one that names none', () => {
+    const routes = table([
+      { id: 'a', host: '*', path: '/' },
+      { id: 'b', host: '*', path: '/', methods: ['GET'] },
+    ])
+    expect(detectConflicts(routes)).toEqual([])
+  })
+})

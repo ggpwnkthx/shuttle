@@ -15,6 +15,7 @@ import { z } from 'zod'
 import { AuthPolicySchema, type AuthPolicy } from '../authentication'
 import {
   HostPatternSchema,
+  MethodsSchema,
   PathTemplateSchema,
   REST_PLACEHOLDER,
   RewriteTemplateSchema,
@@ -36,6 +37,14 @@ export const TimeoutsSchema = z.strictObject({
   responseMs: z.number().int().min(100).max(600_000).default(5_000),
   firstByteMs: z.number().int().min(100).max(900_000).default(30_000),
   bodyMs: z.number().int().min(100).max(3_600_000).default(300_000),
+  /**
+   * The budget of one attempt to an upstream, when the route names several.
+   *
+   * It is not set by default: the value of the environment
+   * (`SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS`) is used when the file says
+   * nothing.
+   */
+  upstreamAttemptMs: z.number().int().min(0).max(600_000).optional(),
 })
 export type Timeouts = z.infer<typeof TimeoutsSchema>
 
@@ -49,6 +58,7 @@ export const RouteTimeoutsSchema = z.strictObject({
   responseMs: z.number().int().min(100).max(600_000).optional(),
   firstByteMs: z.number().int().min(100).max(900_000).optional(),
   bodyMs: z.number().int().min(100).max(3_600_000).optional(),
+  upstreamAttemptMs: z.number().int().min(0).max(600_000).optional(),
 })
 export type RouteTimeouts = z.infer<typeof RouteTimeoutsSchema>
 
@@ -104,6 +114,13 @@ export const RouteSchema = z.strictObject({
     host: HostPatternSchema,
     /** Path template, may contain `{param}` placeholders. */
     path: PathTemplateSchema,
+    /**
+     * The methods the route accepts.
+     *
+     * A route that names no method accepts every method. A route that
+     * names the methods it accepts handles the other ones nowhere.
+     */
+    methods: MethodsSchema,
   }),
   upstream: UpstreamsSchema,
   /**
@@ -130,6 +147,18 @@ export const RouteSchema = z.strictObject({
   websocket: z.boolean().default(false),
   /** Maximum accepted request body size in bytes (0 disables the limit). */
   maxBodyBytes: z.number().int().min(0).max(MAX_BODY_BYTES_LIMIT).optional(),
+  /**
+   * The size of a body that may be sent again to a second upstream.
+   *
+   * A body that fits is held in memory, so that the request may be sent to
+   * the next upstream when the first one fails. A body that does not fit
+   * is streamed and the request is sent once.
+   *
+   * It replaces the value of the defaults, and the value of the
+   * environment (`SHUTTLE_REPLAY_MAX_BYTES`) is used when the file says
+   * nothing.
+   */
+  replayMaxBytes: z.number().int().min(0).max(MAX_BODY_BYTES_LIMIT).optional(),
   /**
    * The policy of the cross site requests of the route.
    *
@@ -164,6 +193,14 @@ export const DefaultsSchema = z.strictObject({
    * environment (`SHUTTLE_MAX_BODY_BYTES`) is used.
    */
   maxBodyBytes: z.number().int().min(0).max(MAX_BODY_BYTES_LIMIT).optional(),
+  /**
+   * The default size of a body that may be sent again to a second
+   * upstream.
+   *
+   * When it is not set, the value of the environment
+   * (`SHUTTLE_REPLAY_MAX_BYTES`) is used.
+   */
+  replayMaxBytes: z.number().int().min(0).max(MAX_BODY_BYTES_LIMIT).optional(),
   /** The default policy of the cross site requests of the routes. */
   crossSite: CrossSiteSchema.default('navigation'),
   /**
@@ -289,11 +326,19 @@ export function parseConfig(raw: unknown): ShuttleConfigFile {
 export function effectivePolicy(
   route: RouteFile,
   defaults: Defaults,
-  environmentMaxBodyBytes: number
+  environment: {
+    /** The limit of the body when neither the route nor the defaults set one. */
+    maxBodyBytes: number
+    /** The budget of one attempt when neither the route nor the defaults set one. */
+    upstreamAttemptMs: number
+    /** The size of a replayable body when neither the route nor the defaults set one. */
+    replayMaxBytes: number
+  }
 ): {
   auth: AuthPolicy
   timeouts: Timeouts
   maxBodyBytes: number
+  replayMaxBytes: number
   crossSite: CrossSitePolicy
   forwardAuthorization: boolean
   accessCacheTtlMs?: number
@@ -308,8 +353,13 @@ export function effectivePolicy(
       responseMs: route.timeouts?.responseMs ?? defaults.timeouts.responseMs,
       firstByteMs: route.timeouts?.firstByteMs ?? defaults.timeouts.firstByteMs,
       bodyMs: route.timeouts?.bodyMs ?? defaults.timeouts.bodyMs,
+      upstreamAttemptMs:
+        route.timeouts?.upstreamAttemptMs ??
+        defaults.timeouts.upstreamAttemptMs ??
+        environment.upstreamAttemptMs,
     },
-    maxBodyBytes: route.maxBodyBytes ?? defaults.maxBodyBytes ?? environmentMaxBodyBytes,
+    maxBodyBytes: route.maxBodyBytes ?? defaults.maxBodyBytes ?? environment.maxBodyBytes,
+    replayMaxBytes: route.replayMaxBytes ?? defaults.replayMaxBytes ?? environment.replayMaxBytes,
     crossSite: route.crossSite ?? defaults.crossSite,
     forwardAuthorization: route.forwardAuthorization ?? defaults.forwardAuthorization,
     accessCacheTtlMs: route.accessCacheTtlMs ?? defaults.accessCacheTtlMs,

@@ -70,6 +70,14 @@ export function redactUrl(rawUrl: string): string {
     return rawUrl
   }
   let changed = false
+  // The credentials of an url are a credential: they are removed before
+  // the url is written. An upstream that is named with a password in its
+  // url would otherwise put that password in every log line.
+  if (url.username || url.password) {
+    url.username = ''
+    url.password = ''
+    changed = true
+  }
   for (const key of [...url.searchParams.keys()]) {
     if (SENSITIVE_QUERY_KEYS.has(key.toLowerCase())) {
       url.searchParams.set(key, REDACTED)

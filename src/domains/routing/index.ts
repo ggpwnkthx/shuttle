@@ -13,6 +13,8 @@
 export {
   HOST_PATTERN_MAX,
   HostPatternSchema,
+  METHOD_PATTERN,
+  MethodsSchema,
   PARAM_NAME_PATTERN,
   PATH_TEMPLATE_MAX,
   PathTemplateSchema,

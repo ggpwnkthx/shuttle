@@ -73,6 +73,9 @@ export function watchConfiguration(options: WatchOptions): ConfigurationWatcher 
         revision: result.revision,
         routes: result.routes,
       })
+      // The policy of the new generation is written in the log by the
+      // store, when it publishes it: a reload may change what a route
+      // accepts.
       options.observer.recordConfigReload(true)
     })
   }

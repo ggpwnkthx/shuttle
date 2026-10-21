@@ -41,6 +41,23 @@ EXPOSE 5556
 ENTRYPOINT ["bun", "run"]
 CMD ["services/oidc-provider.ts"]
 
+# ------------------------------------------------------------------- access
+#
+# The reference implementation of the access service. It is not part of
+# the gateway: it is the service the gateway asks about the workspaces, and
+# a deployment that has its own does not need this one. The implementation
+# uses nothing but the runtime, so the image carries no dependency.
+FROM oven/bun:${BUN_VERSION}-alpine AS access-service
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY services/access-service.ts ./services/access-service.ts
+
+USER bun
+EXPOSE 8090
+ENTRYPOINT ["bun", "run"]
+CMD ["services/access-service.ts"]
+
 # ------------------------------------------------------------------- runtime
 #
 # The production image contains the gateway and nothing else. The fixtures

@@ -37,6 +37,8 @@ async function main(): Promise<void> {
       routes: loaded.routes,
       source: runtime.config.source,
     })
+    // The policy that is running is written in the log by the store, when
+    // it publishes the generation.
     runtime.observer.recordConfigReload(true)
   }
 

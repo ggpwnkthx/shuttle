@@ -27,9 +27,9 @@ CI workflow as well.
 | `src/platform/bun/` | The listener, the peer address, the outbound HTTP transport and the socket primitives. |
 | `src/platform/redis/` | The construction, the TLS settings and the disposal of the shared Redis clients. |
 | `src/platform/postgres/` | The construction, the pool, the TLS settings, the schema and the disposal of the shared Postgres clients. |
-| `src/runtime/` | The environment, the composition root, the file watcher, the signals and the drain. |
+| `src/runtime/` | The environment, the composition root, the file watcher, the signals, the drain and the log of the policy that is running. |
 | `src/observability/` | The logging, the metrics and the observation handles. It knows nothing else. |
-| `services/` | The deterministic fixtures of the identity provider, of the access service and of the upstreams. |
+| `services/` | The deterministic fixtures of the identity provider, of the access service and of the upstreams, and the reference implementation of the access service. The fixtures are not part of a deployment; the reference implementation is. |
 | `test/` | The checks that are not the unit tests of a domain. |
 
 ## The domains
@@ -151,6 +151,7 @@ writes the headers and the cookies of the answers.
 | | `match.ts` | The compilation of a route, the precedence, the matching, the decoding of the parameters, the detection of the ambiguities. |
 | `configuration` | `schema.ts` | The schema of the file, the strict validation, the effective defaults. |
 | | `store.ts` | The generation of the configuration: the immutable snapshot, the atomic publication, the last good state, the status of the reload. |
+| | `describe.ts` | The description of the policy that is running, and the settings that are permissive. |
 | `authentication` | `policy.ts` | The schema of the modes and of the workspace policy. |
 | | `principal.ts` | The selection of the credential, per mode. The rule that an invalid credential is rejected and never replaced. |
 | | `oidc.ts` | The relying party: the discovery, the PKCE, the exchange of the code, the validation of the bearer tokens. |
@@ -215,6 +216,7 @@ decision.
 | `shared-state.ts` | The backends the shared state may live in, and the choice of the backend by the scheme of the url. |
 | `composition.ts` | The construction of everything: the clients, the stores, the domains, the application, the listener. |
 | `lifecycle.ts` | The watcher of the configuration, the signals, the drain, the deadline. |
+| `policy-log.ts` | The log of the policy that is running: the routes and the settings that are permissive. |
 | `version.ts` | The version of the build. |
 
 ### `src/observability/` — the observation
@@ -224,13 +226,20 @@ decision.
 | `logging.ts` | The redaction of the credentials, before anything is written. |
 | `metrics.ts` | The metrics, and the bounded labels. |
 
-### `services/` — the fixtures
+### `services/` — the fixtures and the reference implementation
 
 `services/oidc-provider.ts`, `services/access-fixture.ts`,
 `services/upstream.ts` and `services/raw-http.ts` are the deterministic
 stand-ins for the identity provider, the access service and the upstreams.
 They refuse to run in a production environment, and they are not part of the
 image of the gateway.
+
+`services/access-service.ts` is the **reference implementation** of the
+access service: it applies a policy file and it answers the protocol of
+§6.1 of the specification. It is not a fixture — it runs in a production
+environment and a deployment may use it — and it is the implementation the
+conformance suite of `test/integration/access-conformance.ts` runs against,
+so the protocol and its reference do not drift apart.
 
 ## Where a change lands
 

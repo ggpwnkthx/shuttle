@@ -5,6 +5,140 @@ decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
 ## Unreleased
 
+### The failover of a route reaches an upstream that does not answer
+
+A route may name several upstreams, and the gateway tries them in the order
+of the list. The next one was tried when the **connection** to the first one
+failed: an upstream that accepts the connection and never answers ate the
+whole budget of the route — the budget of the answer is the budget of the
+whole exchange — and the upstreams behind it were never reached.
+
+An attempt that has another upstream behind it is now abandoned after
+`upstreamAttemptMs` (`SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS`, 2 s by default),
+and the next upstream is tried. The budget of an attempt applies only to a
+request that may be sent twice, and never to the last upstream of the list.
+
+```jsonc
+{
+  "id": "workspace-api",
+  "upstream": ["http://upstream-a:3000", "http://upstream-b:3000"],
+  "timeouts": { "upstreamAttemptMs": 2000 }
+}
+```
+
+### A request with a body may be sent again to the next upstream
+
+A request with a body was never sent to a second upstream, whatever the
+method: the bytes of a stream are already on their way to the first one.
+The failover of a route was therefore useless for the traffic that carries a
+body, which is most of an API.
+
+A body is now held in memory when it announced a length that fits in
+`replayMaxBytes` (`SHUTTLE_REPLAY_MAX_BYTES`, 64 KiB by default), so that
+the request may be sent again. The memory of the gateway is bounded by the
+limit and by the number of exchanges that run at the same time, and a body
+that does not fit is streamed and the request is sent once, as before.
+
+The body is only held in memory when the route names several upstreams: a
+route with one upstream has nothing to fail over to, and streaming its body
+preserves the early answer of the upstream.
+
+A request that changes the state of an upstream is never sent twice,
+whatever the body: the method decides, and only the idempotent ones may be
+sent again.
+
+### A route may name the methods it accepts
+
+The matcher is a host and a path, and the method decided between two routes
+that matched the same request: one of them had to be renamed or moved to a
+different path.
+
+A route may now name the methods it accepts:
+
+```jsonc
+{
+  "id": "read",
+  "match": { "host": "api.example.com", "path": "/thing", "methods": ["GET"] },
+  "upstream": "http://upstream-a:3000"
+}
+```
+
+A route that names the methods it accepts handles the other ones nowhere.
+Among the routes that match, the one that names the method of the request
+wins over the one that names none, and the one that names none is the
+fallback of the others. Two routes that name different methods are not
+ambiguous; two routes that name the same ones are refused, as before.
+
+### The protocol of the access service is published
+
+The access service is a dependency of the deployment and not a part of
+Shuttle: the gateway asks it and fails closed when it cannot be reached. The
+protocol was written down only in the code of the client, so a deployment
+that wrote its own service had to read the source to know what the gateway
+expects.
+
+The protocol is now in the specification (§6.1): the request, the answer,
+the statuses and what each of them means. A contract that nobody can check
+is a contract that drifts, so the protocol is checked by a **conformance
+suite** that any implementation may run —
+`test/integration/access-conformance.ts`. A deployment that writes its own
+access service runs the suite against it:
+
+```bash
+SHUTTLE_TEST_ACCESS_URL=http://127.0.0.1:8090 \
+SHUTTLE_TEST_ACCESS_TOKEN=… \
+SHUTTLE_TEST_ACCESS_ALLOWED_SUBJECT=alice@example.com \
+bun test test/integration/access-conformance.test.ts
+```
+
+A **reference implementation** ships with the project:
+`services/access-service.ts` applies a policy file and answers the
+protocol. It is not a fixture — the fixtures carry accounts with known
+passwords and refuse to run in a production environment, and this one
+carries the policy of the operator. The suite runs against it in the test
+suite, so the protocol and its reference do not drift apart either.
+
+### The policy that is running is written in the log
+
+A route table is a JSON file and an environment with dozens of variables:
+the policy a route really runs with is spread over the two, and the
+permissive settings are the ones nobody reads.
+
+The gateway now writes the policy it is running, once per generation: one
+line for the configuration, one line for every route (the host, the path,
+the upstreams, the credential it accepts, the workspace it asks about, the
+policy of the cross site requests, whether the credential of the caller
+reaches the upstream, the budgets) and one warning for every setting that
+is permissive:
+
+- a route that forwards a caller that was not authenticated;
+- a route that authenticates the caller but never asks the access service;
+- a route that hands the credential of the caller to the upstream;
+- a route that accepts a navigation from another site while it accepts a
+  session;
+- a route that accepts a body of any size;
+- a route that names several upstreams, where the failover is limited to the
+  requests that may be sent twice.
+
+The warnings are not errors and a deployment may want them. They are
+settings that look active but that nobody may have read, and a warning that
+says so is worth more than a silent default.
+
+The credentials of an upstream never reach the log: a url that carries a
+password in it is written without the password, in this log and in the
+others.
+
+### The latency of the access service is published
+
+The access service is on the path of every request of a workspace, and it
+had no latency of its own: the gateway published the latency of the
+upstreams and the latency of the whole exchange, and an operator that saw
+the requests slow could not tell a slow service from a slow upstream.
+
+`shuttle_access_duration_seconds` publishes the latency of the calls to the
+service. Only the calls that reached it are counted: a decision that came
+from the cache cost nothing.
+
 ### The gateway refuses to start on a runtime that is too old
 
 The contract states **Bun ≥ 1.4.3** and the measurements of

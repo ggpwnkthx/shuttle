@@ -59,6 +59,30 @@ export const PathTemplateSchema = z
   })
 
 /**
+ * The shape of the name of a method.
+ *
+ * A method is a token of RFC 9110: the characters of a token and nothing
+ * else. A name that carries something else would never match the method of
+ * a request, so it is refused when the configuration is loaded.
+ */
+export const METHOD_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+
+/**
+ * The methods a route accepts.
+ *
+ * The list is upper cased, so a route may be written with the methods in
+ * the case the reader prefers. A route that names no method accepts every
+ * method.
+ */
+export const MethodsSchema = z
+  .array(z.string().min(1).max(32).regex(METHOD_PATTERN, 'a method is a token of HTTP'))
+  .min(1)
+  .optional()
+  .transform((methods) =>
+    methods === undefined ? undefined : [...new Set(methods.map((method) => method.toUpperCase()))]
+  )
+
+/**
  * The path a route forwards to its upstream.
  *
  * It is a list of segments like a path template, and it may carry the

@@ -162,6 +162,7 @@ configuration nobody can reason about.
 | `defaults.crossSite` | The policy of the cross site requests of the routes that declare none (§8). The default is `navigation`. |
 | `defaults.forwardAuthorization` | Whether the routes that declare none forward the `Authorization` header of the caller to their upstream (§7.1). The default is `true`. |
 | `defaults.accessCacheTtlMs` | The lifetime of a cached decision of the access service for the routes that declare none (§6). The default is the one of the environment. |
+| `defaults.replayMaxBytes` | The size of a body that may be sent again to a second upstream, for the routes that declare none (§11.4). The default is the one of the environment. |
 | `trustedProxies` | The ranges whose forwarding headers are honoured (§7.3). The ranges of the environment are added to them. |
 | `reservedPaths` | The paths the gateway keeps for itself, on top of §2.2. |
 | `routes` | At least one route. |
@@ -173,11 +174,13 @@ A route:
 | `id` | Lowercase kebab-case, at most 63 characters, unique. |
 | `match.host` | `example.com`, `*.example.com` (the subdomains, not the domain itself), or `*` for any host. |
 | `match.path` | A list of segments. A segment is a literal or a `{placeholder}`. |
+| `match.methods` | The methods the route accepts, upper cased. A route that names none accepts every method. A route that names the methods it accepts handles the other ones nowhere (§3.3). |
 | `rewrite` | The path the route forwards to its upstream. A list of segments; the placeholders of the path of the route are the values the caller sent, and `{rest}` is the part of the path that follows the prefix the route matched. A route without one forwards the path of the request (§11.1). |
 | `upstream` | An `http` or `https` url, or a list of them. A url may not carry a query string or a fragment. The upstreams are tried in the order of the list (§11.4). |
 | `auth` | The policy of the route. It replaces `defaults.auth`; it is not merged with it. |
 | `timeouts` | The budgets of the route. Merged field by field with `defaults.timeouts`. |
 | `maxBodyBytes` | The body limit of the route. It wins over `defaults.maxBodyBytes`, which wins over `SHUTTLE_MAX_BODY_BYTES`. |
+| `replayMaxBytes` | The size of a body that may be sent again to a second upstream (§11.4). It replaces `defaults.replayMaxBytes`, which wins over `SHUTTLE_REPLAY_MAX_BYTES`. |
 | `crossSite` | The policy of the cross site requests of the route: `navigation` (the default) or `strict` (§8). It replaces `defaults.crossSite`. |
 | `forwardAuthorization` | Whether the `Authorization` header of the caller is forwarded to the upstream of the route (§7.1). It replaces `defaults.forwardAuthorization`. |
 | `accessCacheTtlMs` | The lifetime of a cached decision of the access service for the route, in milliseconds (§6). It replaces `defaults.accessCacheTtlMs`. `0` asks the service for every request. |
@@ -205,6 +208,19 @@ route that matches the host and the path of a request handles it.
 2. The length of the literal prefix of the path template.
 3. The number of segments of the template.
 4. The id of the route, alphabetically.
+
+The **method** of the request decides between the routes that match the host
+and the path:
+
+- a route that names the methods it accepts handles the request only for
+  those methods;
+- among the routes that match, one that names the method of the request
+  wins over one that names none. A route that names no method is the
+  fallback of the others: it handles the methods that no other route names.
+
+Two routes that name the same methods and match the same host and the same
+path are ambiguous and are refused (§3.2). Two routes that name different
+methods are not: they are two halves of one route.
 
 ---
 
@@ -414,6 +430,69 @@ that sets `0` asks the access service for every request, so a revocation on
 that route is immediate. The routes of a deployment usually share one
 lifetime; the route that carries the sensitive workspace is the one that
 needs another.
+
+### 6.1 The protocol of the access service
+
+The access service is a dependency of the deployment and not a part of
+Shuttle: a deployment that has one may write it in any language. The
+protocol is small, and it is published so that the service can be written
+against it and checked against it.
+
+The request:
+
+```
+POST {SHUTTLE_ACCESS_URL}/v1/decisions
+Authorization: Bearer {SHUTTLE_ACCESS_TOKEN}
+Content-Type: application/json
+
+{"subject":"user-1","workspaceId":"…","routeId":"workspace-api","roles":["dev"]}
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `subject` | yes | The identifier of the caller. The service decides what it means. |
+| `workspaceId` | yes | The workspace the request is about. |
+| `routeId` | no | The route the request came in on. It may be part of the policy of the service. |
+| `roles` | no | The roles of the caller. They are part of the key of the cached decision. |
+
+The answer is `200` with a body that carries a boolean `allow`:
+
+```json
+{"allow": true}
+{"allow": false, "reason": "the subject does not have the role of the workspace"}
+```
+
+The `reason` is free text and it is never given to the caller. It is
+counted in the metrics when it mentions a role.
+
+The status of the answer:
+
+| Status | What it means |
+| --- | --- |
+| `200` | A decision. The body carries `allow`. |
+| `400` | The request is malformed: it is not json, or it has no subject or no workspace. |
+| `401` | The token is missing or wrong. |
+| `404` | The path is not the path of the protocol. |
+| anything else | The unavailability of the service: the gateway answers `503 access_unavailable`. |
+
+A body that is not json, or one whose `allow` is not a boolean, is the
+unavailability of the service as well: only an explicit `{"allow": false}`
+denies a caller.
+
+**The conformance suite.** The protocol is a contract, and a contract is
+worth nothing without a way to check it. `test/integration/access-conformance.ts`
+is that way: it runs against any implementation, and the deployment that
+writes its own service runs it against that service. The suite checks the
+allow, the deny, the reason of a denial, the malformed requests, the token
+and the path.
+
+**The reference implementation.** `services/access-service.ts` is an
+implementation of the protocol that a deployment may run: it applies a
+policy file and it answers the protocol. It is not a fixture: the fixtures
+carry accounts with known passwords and refuse to run in a production
+environment, and this one carries the policy of the operator. The suite
+runs against it in the test suite, so the protocol and its reference do not
+drift apart.
 
 ---
 
@@ -927,11 +1006,39 @@ may be sent again:
 | --- | --- |
 | `GET`, `HEAD`, `OPTIONS`, `TRACE`, `PUT` or `DELETE` without a body | Yes. |
 | Any other method | No: it may change the state of an upstream. |
-| A request with a body | No: the bytes are already on their way to the first upstream. |
+| A request with a body that is too large to be held in memory | No: the bytes are already on their way to the first upstream. |
+| A request with a body that fits in `replayMaxBytes` | Yes: the body is held in memory and sent again. |
 
 The budget of the answer is the budget of the **whole** exchange: the
 upstreams that are tried share it, so a list of upstreams does not make
 the timeout of a route longer.
+
+**The budget of an attempt.** An attempt that has another upstream behind
+it is abandoned when it does not answer within `upstreamAttemptMs`
+(`SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS`, 2 s by default), and the next
+upstream is tried. Without it, an upstream that accepts the connection and
+never answers eats the whole budget of the route, and the upstreams behind
+it are never reached.
+
+The budget of an attempt applies only to a request that may be sent again:
+a request that changes the state of an upstream is never sent to two of
+them, whatever the budget says. The last upstream of the list has no
+successor: the budget of the answer governs it.
+
+**The body that may be sent again.** A body is held in memory when it
+announced a length that fits in `replayMaxBytes`
+(`SHUTTLE_REPLAY_MAX_BYTES`, 64 KiB by default), so that it may be sent to
+a second upstream. A body that does not fit is streamed and the request is
+sent once.
+
+The body is only held in memory when the route names **several** upstreams:
+a route with one upstream has nothing to fail over to, and its body is
+streamed, so the upstream is reached while the caller uploads and the early
+answer of the upstream is preserved (§11.2).
+
+The memory of the gateway is bounded by the limit and by the number of
+exchanges that run at the same time: `SHUTTLE_MAX_CONCURRENT_REQUESTS` ×
+`SHUTTLE_REPLAY_MAX_BYTES` in the worst case.
 
 The handshake of a websocket goes to the **first** upstream of the route: a
 handshake is not a request that may be sent twice.
@@ -953,7 +1060,8 @@ the gateway answers `502 bad_gateway` and the reason is in the log.
 client of the runtime cannot speak TLS (the measurements are in
 [runtime.md](runtime.md)), so a handshake with an upstream over `wss` is
 refused with the reason `tls` instead of failing with an error that hides
-the cause.
+the cause. The way out is a proxy in front of the upstream that speaks
+`wss` and forwards `ws`.
 
 ### 11.2 The phases and their budgets
 
@@ -1061,6 +1169,7 @@ The metrics:
 | `shuttle_websocket_refusals_total` | `reason` | The refused handshakes. |
 | `shuttle_request_duration_seconds` | `route` | The latency of the exchanges. |
 | `shuttle_upstream_duration_seconds` | `route` | The latency of the upstreams: the time from the request that left the gateway to the final headers of the answer. |
+| `shuttle_access_duration_seconds` | `route` | The latency of the calls to the access service. Only the calls that reached the service are counted: a decision that came from the cache cost nothing. |
 | `shuttle_bytes_in_total`, `shuttle_bytes_out_total` | — | The bytes that really went through. |
 | `shuttle_active_requests` | — | The requests that are in flight. |
 | `shuttle_config_reloads_total` | `result` | The reloads of the configuration. |
@@ -1089,6 +1198,30 @@ JSON (pino). `Authorization`, `Cookie`, `Set-Cookie`, `x-api-key` and the
 query parameters `access_token`, `code`, `code_verifier`, `id_token`,
 `refresh_token` (and the like) are redacted before anything is written.
 Every request or connection log line carries its request id.
+
+The credentials of a url are removed as well: an upstream that is named
+with a password in its url does not put that password in the log.
+
+**The policy that is running.** The gateway writes the policy it is running
+once per generation of the configuration: one line for the configuration,
+one line for every route (the host, the path, the methods, the upstreams,
+the credential it accepts, the workspace it asks about, the policy of the
+cross site requests, whether the credential of the caller reaches the
+upstream, the budgets) and one **warning** for every setting that is
+permissive:
+
+| The warning | What it means |
+| --- | --- |
+| `unauthenticated_route` | The route forwards a caller that was not authenticated. |
+| `no_workspace_check` | The route authenticates the caller and never asks the access service. |
+| `authorization_forwarded` | The credential of the caller reaches the upstream of the route. |
+| `cross_site_allowed` | The route accepts a navigation from another site while it accepts a session. |
+| `unbounded_body` | The route accepts a body of any size. |
+| `limited_failover` | The route names several upstreams, and the failover is limited to the requests that may be sent twice. |
+
+The warnings are not errors and a deployment may want them. They are
+settings that look active but that nobody may have read, and a warning that
+says so is worth more than a silent default.
 
 ### 12.3 The reload and the readiness
 
@@ -1316,3 +1449,8 @@ lists are numbered independently.
 | 31 | The handshake of a websocket | It follows the header policy of the http path: the cookies of the gateway never reach an upstream (§7.1, §10). |
 | 32 | The TLS of the connections to the upstreams | The gateway verifies the certificate of the upstream with the authority of the deployment and presents the certificate of the deployment when the upstream asks for one (§11.1.2). The upstream of a websocket is served over plain http: the websocket client of the runtime cannot speak TLS. |
 | 33 | The backend of the shared state | The sessions, the limits and the cached decisions live in a Redis server or in a Postgres server: the scheme of the url picks one of them, and the two hold the same three things with the same contract (§4, §12.5, §12.6). |
+| 34 | The protocol of the access service | It is published: the request, the answer and the statuses are in §6.1, and a conformance suite checks an implementation against it. A reference implementation ships with the project (§6.1). |
+| 35 | The policy that is running | The gateway writes the policy it is running in its log, once per generation, and it names the settings that are permissive (§12.2). |
+| 36 | The budget of an attempt to an upstream | An attempt that has another upstream behind it is abandoned after `upstreamAttemptMs`, and the next upstream is tried. The budget of the answer still bounds the whole exchange (§11.4). |
+| 37 | The body that may be sent again | A body that fits in `replayMaxBytes` is held in memory, so that the request may be sent to a second upstream. A request that changes the state of an upstream is never sent twice (§11.4). |
+| 38 | The methods of a route | A route may name the methods it accepts. A route that names the method of the request wins over one that names none, and the one that names none is the fallback of the others (§3.3). |

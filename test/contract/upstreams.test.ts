@@ -37,6 +37,24 @@ beforeAll(async () => {
         upstream: ['http://127.0.0.1:1/'],
         auth: { mode: 'none' },
       },
+      {
+        id: 'hung',
+        match: { host: 'api.shuttle.test', path: '/hung/' },
+        // The first upstream accepts the connection and never answers: the
+        // attempt is abandoned after its budget and the second one answers.
+        upstream: [context.hung, context.upstreamB],
+        auth: { mode: 'none' },
+        timeouts: { upstreamAttemptMs: 300 },
+      },
+      {
+        id: 'replayed',
+        match: { host: 'echo.shuttle.test', path: '/' },
+        // The first upstream is not there: the request is sent again to the
+        // second one, with its body.
+        upstream: ['http://127.0.0.1:1/', context.upstreamB],
+        auth: { mode: 'none' },
+        replayMaxBytes: 1024,
+      },
     ],
   })
 })
@@ -62,5 +80,30 @@ describe('the upstreams of a route', () => {
     expect(response.status).toBe(502)
     const body = (await response.json()) as { error: string }
     expect(body.error).toBe('bad_gateway')
+  })
+
+  test('an upstream that does not answer in time is left for the next one', async () => {
+    const started = Date.now()
+    const response = await fetch(`${harness.gatewayUrl}/hung/asset`, {
+      headers: { host: 'api.shuttle.test' },
+    })
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { service: string }
+    expect(body.service).toBe('upstream-b')
+    // The attempt was abandoned after its budget, not after the whole
+    // budget of the answer.
+    expect(Date.now() - started).toBeLessThan(2_000)
+  })
+
+  test('a request with a small body is sent again to the next upstream', async () => {
+    const response = await fetch(`${harness.gatewayUrl}/echo`, {
+      method: 'PUT',
+      headers: { host: 'echo.shuttle.test', 'content-type': 'application/json' },
+      body: JSON.stringify({ hello: 'world' }),
+    })
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { service: string; body: string }
+    expect(body.service).toBe('upstream-b')
+    expect(body.body).toBe('{"hello":"world"}')
   })
 })

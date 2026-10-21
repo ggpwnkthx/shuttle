@@ -36,6 +36,12 @@ export interface EffectiveRoute {
   timeouts: Timeouts
   /** The limit of the body of a request, 0 disables it. */
   maxBodyBytes: number
+  /**
+   * The size of a body that may be sent again to a second upstream, in
+   * bytes. 0 disables the replay: every body is streamed and every request
+   * is sent once.
+   */
+  replayMaxBytes: number
   websocket: boolean
   /**
    * The policy of the cross site requests of the route.
@@ -108,6 +114,27 @@ export interface ConfigurationStoreOptions {
    */
   defaultMaxBodyBytes: number
   /**
+   * The budget of one attempt to an upstream when neither the route nor
+   * the defaults set one.
+   *
+   * It comes from the environment.
+   */
+  defaultUpstreamAttemptMs?: number
+  /**
+   * The size of a replayable body when neither the route nor the defaults
+   * set one.
+   *
+   * It comes from the environment.
+   */
+  defaultReplayMaxBytes?: number
+  /**
+   * Called when a generation is published.
+   *
+   * The runtime uses it to write the policy that is running in the log: a
+   * generation is published once at the start and once per reload.
+   */
+  onPublished?: (snapshot: ConfigurationSnapshot) => void
+  /**
    * The ranges of the environment.
    *
    * They are added to the ranges of the file: an operator may configure the
@@ -130,12 +157,18 @@ export class ConfigurationStore {
   #revision = 0
   #source: string
   #defaultMaxBodyBytes: number
+  #defaultUpstreamAttemptMs: number
+  #defaultReplayMaxBytes: number
   #trustedProxies: string[]
+  #onPublished?: (snapshot: ConfigurationSnapshot) => void
 
   constructor(options: ConfigurationStoreOptions) {
     this.#source = options.source
     this.#defaultMaxBodyBytes = options.defaultMaxBodyBytes
+    this.#defaultUpstreamAttemptMs = options.defaultUpstreamAttemptMs ?? 0
+    this.#defaultReplayMaxBytes = options.defaultReplayMaxBytes ?? 0
     this.#trustedProxies = options.trustedProxies ?? []
+    this.#onPublished = options.onPublished
   }
 
   /** The running generation, or null when there never was one. */
@@ -194,6 +227,9 @@ export class ConfigurationStore {
         routes: Object.freeze(routes),
       })
       this.#error = null
+      // The policy that is running is published: the runtime writes it in
+      // the log, so an operator sees what the gateway does.
+      this.#onPublished?.(this.#snapshot)
       return { ok: true, revision: this.#revision, routes: routes.length }
     } catch (error) {
       const details = error instanceof ConfigValidationError ? error.details : []
@@ -246,15 +282,26 @@ export class ConfigurationStore {
   /** Prepares the routes of a configuration, with the policy that applies. */
   #compile(routes: RouteFile[], defaults: RouteFileDefaults): CompiledRoute<EffectiveRoute>[] {
     const compiled = routes.map((route) => {
-      const policy = effectivePolicy(route, defaults, this.#defaultMaxBodyBytes)
+      const policy = effectivePolicy(route, defaults, {
+        maxBodyBytes: this.#defaultMaxBodyBytes,
+        upstreamAttemptMs: this.#defaultUpstreamAttemptMs,
+        replayMaxBytes: this.#defaultReplayMaxBytes,
+      })
       return compileRoute(
-        { id: route.id, host: route.match.host, path: route.match.path, rewrite: route.rewrite },
+        {
+          id: route.id,
+          host: route.match.host,
+          path: route.match.path,
+          rewrite: route.rewrite,
+          methods: route.match.methods,
+        },
         {
           id: route.id,
           upstreams: policy.upstreams,
           auth: policy.auth,
           timeouts: policy.timeouts,
           maxBodyBytes: policy.maxBodyBytes,
+          replayMaxBytes: policy.replayMaxBytes,
           websocket: route.websocket,
           crossSite: policy.crossSite,
           forwardAuthorization: policy.forwardAuthorization,

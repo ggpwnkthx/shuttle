@@ -85,7 +85,13 @@ export class BunHttpTransport implements HttpTransport {
       Object.assign(init, { tls: this.#tls })
     }
     if (request.body) {
-      Object.assign(init, { body: request.body, duplex: 'half' } satisfies StreamingRequestInit)
+      if (request.body instanceof Uint8Array) {
+        // A body that is held in memory: it may be sent again to a second
+        // upstream.
+        Object.assign(init, { body: request.body })
+      } else {
+        Object.assign(init, { body: request.body, duplex: 'half' } satisfies StreamingRequestInit)
+      }
     }
 
     const response = await this.#fetch(request.url, init as RequestInit)

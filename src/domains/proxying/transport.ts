@@ -33,8 +33,12 @@ export interface UpstreamRequest {
    *
    * It is a stream and never a buffer: a large upload and a server sent
    * event stream have to work without the gateway holding them in memory.
+   *
+   * It is a buffer when the body is small enough to be sent again: the
+   * exchange holds it in memory so that a second upstream may receive it
+   * when the first one fails.
    */
-  body: ReadableStream<Uint8Array> | null
+  body: ReadableStream<Uint8Array> | Uint8Array | null
   /** Aborted when the caller goes away or when the exchange is cancelled. */
   signal: AbortSignal
 }

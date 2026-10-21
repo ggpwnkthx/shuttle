@@ -115,6 +115,14 @@ describe('the labels of the metrics', () => {
     expect(body).toContain('shuttle_active_requests 0')
   })
 
+  test('the latency of the access service is published', async () => {
+    const metrics = new MetricsStore()
+    metrics.recordAccess('workspace-api', 7)
+    const body = await metrics.render()
+    expect(body).toContain('shuttle_access_duration_seconds_count{route="workspace-api"} 1')
+    expect(body).toContain('shuttle_access_duration_seconds_sum{route="workspace-api"} 0.007')
+  })
+
   test('the labels never carry a workspace, a subject or an url', async () => {
     const metrics = new MetricsStore()
     metrics.recordAuthFailure('workspace-api', 'access_denied')

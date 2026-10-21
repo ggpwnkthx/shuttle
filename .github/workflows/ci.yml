@@ -122,6 +122,49 @@ jobs:
         env:
           SHUTTLE_TEST_POSTGRES_URL: postgres://postgres:shuttle@127.0.0.1:5432/shuttle
 
+  interop:
+    name: the interoperability with a real identity provider
+    runs-on: ubuntu-latest
+    # The job is informative until the flow against dex is proven: a
+    # failure here is a bug in the gateway or in the test, and it is
+    # reported rather than blocking every release. It becomes a blocking
+    # job when it has been green for a few releases.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: install
+        run: bun install --frozen-lockfile
+
+      - name: start the provider
+        run: |
+          docker run -d --name dex -p 5556:5556 \
+            -v "$GITHUB_WORKSPACE/deploy/dex/config.ci.yaml:/etc/dex/config.yaml:ro" \
+            ghcr.io/dexidp/dex:v25.0.0 dex serve /etc/dex/config.yaml
+          for attempt in $(seq 1 30); do
+            if wget -qO- http://127.0.0.1:5556/dex/.well-known/openid-configuration > /dev/null; then
+              echo "the provider is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the provider did not start"
+          docker logs dex
+          exit 1
+
+      - name: the flow against a real provider
+        run: bun test test/interop
+        env:
+          SHUTTLE_TEST_DEX_ISSUER: http://localhost:5556/dex
+          SHUTTLE_TEST_DEX_CLIENT_ID: shuttle-ci
+          SHUTTLE_TEST_DEX_CLIENT_SECRET: shuttle-ci-secret
+          SHUTTLE_TEST_DEX_EMAIL: alice@shuttle.test
+          SHUTTLE_TEST_DEX_PASSWORD: alice-password
+
   load:
     name: the capacity of the gateway
     runs-on: ubuntu-latest

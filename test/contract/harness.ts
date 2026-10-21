@@ -20,17 +20,71 @@ import { startUpstream, type StartedUpstream } from '../../services/upstream'
  * gateway over a socket, exactly like a caller does.
  */
 
+/**
+ * The form of a login of an identity provider.
+ *
+ * A provider that is not the fixture of the tests serves a form of its own:
+ * dex asks for a login and a password. The form is parsed and submitted, so
+ * the tests drive a real provider the way a browser does.
+ */
+export interface LoginForm {
+  /** The url the form is submitted to. */
+  action: string
+  /** The fields of the form that are already filled in. */
+  fields: Record<string, string>
+}
+
+/** Parses the form of a login of an identity provider. */
+export function parseLoginForm(html: string): LoginForm | null {
+  const form = /<form[^>]*action="([^"]+)"[^>]*>/i.exec(html)
+  if (!form) return null
+  const fields: Record<string, string> = {}
+  const input = /<input[^>]*name="([^"]+)"[^>]*value="([^"]*)"[^>]*>/gi
+  for (const match of html.matchAll(input)) {
+    fields[match[1]!] = match[2]!
+  }
+  return { action: form[1]!, fields }
+}
+
 export const METRICS_TOKEN = 'test-metrics-token'
 export const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111'
+
+/**
+ * The context of the routes of the tests.
+ *
+ * The two upstreams answer, and `hung` accepts the connection and never
+ * answers: it is the upstream that a route has to give up on.
+ */
+export interface HarnessContext {
+  upstreamA: string
+  upstreamB: string
+  hung: string
+}
 
 export interface HarnessOptions {
   policy?: AccessPolicy
   /** The routes of the configuration. */
-  routes?: (context: { upstreamA: string; upstreamB: string }) => unknown[]
+  routes?: (context: HarnessContext) => unknown[]
   /** The whole configuration. */
-  config?: (context: { upstreamA: string; upstreamB: string }) => unknown
+  config?: (context: HarnessContext) => unknown
   /** The ranges whose forwarding headers are trusted. */
   trustedProxies?: string[]
+  /**
+   * An identity provider of the deployment.
+   *
+   * When it is named, the fixture is not started and the gateway talks to
+   * that provider instead: the tests then run against a real provider, like
+   * the interop test of `test/interop/` does.
+   */
+  issuer?: { issuer: string; clientId: string; clientSecret: string }
+  /**
+   * The port of the gateway.
+   *
+   * It is a free port by default. A provider of a deployment is configured
+   * with the exact uri of the callback, so the interop test names the port
+   * it uses.
+   */
+  gatewayPort?: number
   /** The requests a caller may make to one route in a window. */
   rateLimitMax?: number
   /** The requests a caller may make over all the routes in a window. */
@@ -53,7 +107,7 @@ export interface HarnessOptions {
 
 export interface Harness {
   runtime: GatewayRuntime
-  idp: StartedOidcProvider
+  idp: StartedOidcProvider | null
   access: StartedAccessService
   upstreamA: StartedUpstream
   upstreamB: StartedUpstream
@@ -161,7 +215,7 @@ function defaultRoutes(context: { upstreamA: string; upstreamB: string }): unkno
 
 /** The configuration of the tests. */
 function defaultConfig(
-  context: { upstreamA: string; upstreamB: string },
+  context: HarnessContext,
   options: { trustedProxies?: string[]; timeouts?: Record<string, unknown> } = {}
 ): unknown {
   return {
@@ -178,20 +232,39 @@ function defaultConfig(
 
 /** Starts the gateway with the fixtures around it. */
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
-  const gatewayPort = await freePort()
+  const gatewayPort = options.gatewayPort ?? (await freePort())
   const gatewayUrl = `http://localhost:${gatewayPort}`
 
-  const idp = await startOidcProvider({
-    redirectUris: [`${gatewayUrl}/auth/callback`],
-  })
+  const idp = options.issuer
+    ? null
+    : await startOidcProvider({
+        redirectUris: [`${gatewayUrl}/auth/callback`],
+      })
+  // The url of the provider: the fixture and the provider of the
+  // deployment are both reachable, and the flow is driven against one of
+  // them.
+  const providerUrl = options.issuer?.issuer ?? idp!.url
   const access = await startAccessService({ policy: options.policy })
   const upstreamA = await startUpstream({ name: 'upstream-a' })
   const upstreamB = await startUpstream({ name: 'upstream-b' })
+  // An upstream that accepts the connection and never answers.
+  const hungServer = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch() {
+      await new Promise(() => {})
+      return new Response('never')
+    },
+  })
 
   const directory = await mkdtemp(join(tmpdir(), 'shuttle-contract-'))
   const configPath = join(directory, 'routes.json')
 
-  const context = { upstreamA: upstreamA.url, upstreamB: upstreamB.url }
+  const context = {
+    upstreamA: upstreamA.url,
+    upstreamB: upstreamB.url,
+    hung: `http://127.0.0.1:${hungServer.port ?? 0}`,
+  }
   const config = options.config
     ? options.config(context)
     : defaultConfig(context, {
@@ -208,9 +281,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     SHUTTLE_CONFIG: configPath,
     SHUTTLE_GATEWAY_HOST: '127.0.0.1',
     SHUTTLE_GATEWAY_PORT: String(gatewayPort),
-    SHUTTLE_OIDC_ISSUER: idp.issuer,
-    SHUTTLE_OIDC_CLIENT_ID: idp.clientId,
-    SHUTTLE_OIDC_CLIENT_SECRET: idp.clientSecret,
+    SHUTTLE_OIDC_ISSUER: options.issuer?.issuer ?? idp!.issuer,
+    SHUTTLE_OIDC_CLIENT_ID: options.issuer?.clientId ?? idp!.clientId,
+    SHUTTLE_OIDC_CLIENT_SECRET: options.issuer?.clientSecret ?? idp!.clientSecret,
     SHUTTLE_OIDC_REDIRECT_URI: `${gatewayUrl}/auth/callback`,
     SHUTTLE_OIDC_ALLOW_INSECURE: 'true',
     SHUTTLE_ACCESS_URL: access.url,
@@ -255,7 +328,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     const password = loginOptions.password ?? 'alice-password'
     const jar = new CookieJar()
     const resolve = (value: string): string =>
-      value.startsWith('/') ? new URL(value, idp.url).toString() : value
+      value.startsWith('/') ? new URL(value, providerUrl).toString() : value
     let location = resolve(authorizeUrl)
 
     for (let hop = 0; hop < 10; hop++) {
@@ -284,6 +357,26 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
       jar.capture(response)
       const next = response.headers.get('location')
       if (!next) {
+        // A provider that answers with a form of its own, like dex, is
+        // driven by submitting the form it serves.
+        const form = parseLoginForm(await response.text())
+        if (form) {
+          const submitted = await fetch(resolve(form.action), {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/x-www-form-urlencoded',
+              ...(jar.header() ? { cookie: jar.header() } : {}),
+            },
+            body: new URLSearchParams({ ...form.fields, login: email, password }),
+            redirect: 'manual',
+          })
+          const afterForm = submitted.headers.get('location')
+          if (!afterForm) {
+            throw new Error(`the identity provider rejected the credentials (${submitted.status})`)
+          }
+          location = resolve(afterForm)
+          continue
+        }
         throw new Error(
           `the identity provider stopped the flow at ${location} (${response.status})`
         )
@@ -328,6 +421,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   ): Promise<string> => {
     const email = tokenOptions.email ?? 'alice@shuttle.test'
     const subject = tokenOptions.subject ?? 'user-alice'
+    if (!idp) throw new Error('the harness has no identity provider of its own')
     const account =
       idp.users.find((user) => user.sub === subject) ??
       idp.users.find((user) => user.email === email)
@@ -342,7 +436,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
   const stop = async (): Promise<void> => {
     await runtime.listener.stop(true)
     await runtime.close()
-    await Promise.all([idp.stop(), access.stop(), upstreamA.stop(), upstreamB.stop()])
+    await Promise.all([
+      idp?.stop(),
+      access.stop(),
+      upstreamA.stop(),
+      upstreamB.stop(),
+      hungServer.stop(true),
+    ])
     await rm(directory, { recursive: true, force: true })
   }
 

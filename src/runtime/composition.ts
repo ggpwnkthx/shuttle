@@ -31,6 +31,7 @@ import {
   RedisDecisionCache,
 } from '../domains/workspace-access/adapters'
 import { createLogger, type Logger } from '../observability'
+import { logActiveConfiguration } from './policy-log'
 import { MetricsStore, type Observer } from '../observability'
 import { FetchAccessTransport } from '../platform/bun/access-transport'
 import { createWebSocketHandlers } from '../platform/bun/client-upgrade'
@@ -199,7 +200,13 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
   const config = new ConfigurationStore({
     source: settings.configPath,
     defaultMaxBodyBytes: settings.limits.maxBodyBytes,
+    defaultUpstreamAttemptMs: settings.limits.upstreamAttemptMs,
+    defaultReplayMaxBytes: settings.limits.replayMaxBytes,
     trustedProxies: settings.network.trustedProxies,
+    // The policy that is running is written in the log: the route table
+    // and the environment are large, and an operator has to be able to see
+    // what the gateway does without reading the two.
+    onPublished: (snapshot) => logActiveConfiguration(logger, snapshot),
   })
 
   // The failure of the shared state is reported once per outage.
@@ -312,6 +319,9 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     transport: new FetchAccessTransport(),
     cache: decisionCache,
     onError: (error) => logger.warn('the access service request failed', { error }),
+    // The latency of the service is published: it is a dependency of its
+    // own on the path of every request of a workspace.
+    onDecision: (routeId, durationMs) => observer.recordAccess(routeId, durationMs),
   })
 
   // The limiters. A deployment with more than one replica shares its

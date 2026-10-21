@@ -172,6 +172,10 @@ export interface BrowserSettings {
 /** The settings of the limiters. */
 export interface LimitSettings {
   maxBodyBytes: number
+  /** The budget of one attempt to an upstream, when the route names several. */
+  upstreamAttemptMs: number
+  /** The size of a body that may be sent again to a second upstream. */
+  replayMaxBytes: number
   route: { max: number; windowMs: number }
   global: { max: number; windowMs: number }
   /**
@@ -485,6 +489,29 @@ const EnvSchema = z.object({
   SHUTTLE_METRICS_TOKEN: z.string().optional(),
   SHUTTLE_MAX_BODY_BYTES: intEnv(10_485_760, { min: 0 }),
   SHUTTLE_MAX_CONCURRENT_REQUESTS: intEnv(1_000, { min: 0 }),
+  /**
+   * The budget of one attempt to an upstream, when the route names several.
+   *
+   * An attempt that has another upstream behind it is abandoned when it
+   * does not answer in time, and the next upstream is tried. It applies
+   * only to a request that may be sent twice.
+   *
+   * Zero disables it: the budget of the answer governs the exchange.
+   */
+  SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS: intEnv(2_000, { min: 0 }),
+  /**
+   * The size of a body that may be sent again to a second upstream.
+   *
+   * A body that fits is held in memory, so that the request may be sent to
+   * the next upstream when the first one fails. A body that does not fit
+   * is streamed and the request is sent once.
+   *
+   * The memory of the gateway is bounded by this value and by the number of
+   * exchanges that run at the same time.
+   *
+   * Zero disables it: every body is streamed.
+   */
+  SHUTTLE_REPLAY_MAX_BYTES: intEnv(65_536, { min: 0 }),
 
   SHUTTLE_TRUSTED_PROXIES: listEnv(),
   SHUTTLE_EXTERNAL_PROTO: z.enum(['http', 'https']).default('http'),
@@ -767,6 +794,8 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
     },
     limits: {
       maxBodyBytes: parsed.SHUTTLE_MAX_BODY_BYTES,
+      upstreamAttemptMs: parsed.SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS,
+      replayMaxBytes: parsed.SHUTTLE_REPLAY_MAX_BYTES,
       route: { max: parsed.SHUTTLE_RATE_LIMIT_MAX, windowMs: parsed.SHUTTLE_RATE_LIMIT_WINDOW_MS },
       global: {
         max: parsed.SHUTTLE_RATE_LIMIT_GLOBAL_MAX,

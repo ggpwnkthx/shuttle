@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { ConfigurationStore, isReservedPath, parseConfig } from './index'
+import { ConfigurationStore, describeConfiguration, isReservedPath, parseConfig } from './index'
 
 /** A configuration that is valid, as the base of the tests. */
 function baseConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -522,5 +522,118 @@ describe('the publication of a configuration', () => {
     expect(isReservedPath(snapshot, '/healthz')).toBe(true)
     expect(isReservedPath(snapshot, '/metrics/')).toBe(true)
     expect(isReservedPath(snapshot, '/')).toBe(false)
+  })
+})
+
+describe('the description of the configuration that is running', () => {
+  test('the description carries the policy of every route', () => {
+    const configuration = store()
+    configuration.apply(
+      baseConfig({
+        routes: [
+          {
+            id: 'workspace-api',
+            match: { host: 'api.example.com', path: '/ws/{workspaceId}/' },
+            upstream: 'http://upstream-a:3000',
+            auth: { mode: 'session', workspace: { param: 'workspaceId' } },
+            rewrite: '/api/{rest}',
+            websocket: true,
+          },
+        ],
+      })
+    )
+    const description = describeConfiguration(configuration.snapshot!)
+    expect(description.routeCount).toBe(1)
+    const route = description.routes[0]!
+    expect(route.id).toBe('workspace-api')
+    expect(route.host).toBe('api.example.com')
+    expect(route.path).toBe('/ws/{workspaceId}/')
+    expect(route.rewrite).toBe('/api/{rest}')
+    expect(route.auth).toBe('session')
+    expect(route.workspace).toBe('workspaceId')
+    expect(route.websocket).toBe(true)
+    expect(route.upstreams).toEqual(['http://upstream-a:3000'])
+  })
+
+  test('a route that accepts an unauthenticated caller is named', () => {
+    const configuration = store()
+    configuration.apply(baseConfig())
+    const description = describeConfiguration(configuration.snapshot!)
+    expect(description.warnings.map((warning) => warning.code)).toContain('unauthenticated_route')
+  })
+
+  test('a route that authenticates without asking the access service is named', () => {
+    const configuration = store()
+    configuration.apply(
+      baseConfig({
+        routes: [
+          {
+            id: 'api',
+            match: { host: '*', path: '/api' },
+            upstream: 'http://upstream-a:3000',
+            auth: { mode: 'jwt' },
+          },
+        ],
+      })
+    )
+    const description = describeConfiguration(configuration.snapshot!)
+    const codes = description.warnings.map((warning) => warning.code)
+    expect(codes).toContain('no_workspace_check')
+    expect(codes).not.toContain('unauthenticated_route')
+  })
+
+  test('the credential of the caller that reaches the upstream is named', () => {
+    const configuration = store()
+    configuration.apply(
+      baseConfig({
+        routes: [
+          {
+            id: 'api',
+            match: { host: '*', path: '/api' },
+            upstream: 'http://upstream-a:3000',
+            auth: { mode: 'jwt' },
+            forwardAuthorization: true,
+          },
+        ],
+      })
+    )
+    const description = describeConfiguration(configuration.snapshot!)
+    expect(description.warnings.map((warning) => warning.code)).toContain('authorization_forwarded')
+  })
+
+  test('a route that accepts a navigation from another site is named', () => {
+    const configuration = store()
+    configuration.apply(
+      baseConfig({
+        routes: [
+          {
+            id: 'app',
+            match: { host: '*', path: '/' },
+            upstream: 'http://upstream-a:3000',
+            auth: { mode: 'session' },
+          },
+        ],
+      })
+    )
+    const description = describeConfiguration(configuration.snapshot!)
+    expect(description.warnings.map((warning) => warning.code)).toContain('cross_site_allowed')
+  })
+
+  test('a route with several upstreams is named', () => {
+    const configuration = store()
+    configuration.apply(
+      baseConfig({
+        routes: [
+          {
+            id: 'api',
+            match: { host: '*', path: '/api' },
+            upstream: ['http://upstream-a:3000', 'http://upstream-b:3000'],
+          },
+        ],
+      })
+    )
+    const description = describeConfiguration(configuration.snapshot!)
+    expect(description.warnings.map((warning) => warning.code)).toContain('limited_failover')
+    expect(description.routes[0]!.upstreams).toHaveLength(2)
   })
 })

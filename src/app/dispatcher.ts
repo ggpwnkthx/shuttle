@@ -139,7 +139,7 @@ export async function dispatch(
 
   // 4. The route is matched before the limiters, so the budget of a route
   // is spent by the requests that the route would handle.
-  const match = matchRoute(snapshot.routes, host, path)
+  const match = matchRoute(snapshot.routes, host, path, method)
   const route = match?.route.payload
   if (route) context.set('routeId', route.id)
 
@@ -486,6 +486,8 @@ export async function dispatch(
     signal: context.req.raw.signal,
     timeouts: route.timeouts,
     maxBodyBytes: route.maxBodyBytes,
+    replayMaxBytes: route.replayMaxBytes,
+    upstreamAttemptMs: route.timeouts.upstreamAttemptMs,
     onFinalize: (finalized) => {
       // The metrics of a request are written when the exchange is over: the
       // duration of a request is the time the caller waited and the bytes

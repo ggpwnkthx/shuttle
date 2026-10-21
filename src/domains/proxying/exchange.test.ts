@@ -89,7 +89,7 @@ describe('the answer of an upstream', () => {
     const service = new HttpExchangeService({
       transport: transport({
         respond: async (request) => {
-          const reader = request.body?.getReader()
+          const reader = request.body instanceof Uint8Array ? null : request.body?.getReader()
           while (reader) {
             const { done, value } = await reader.read()
             if (done) break
@@ -141,7 +141,7 @@ describe('the limit of the body', () => {
     const service = new HttpExchangeService({
       transport: transport({
         respond: async (request) => {
-          const reader = request.body?.getReader()
+          const reader = request.body instanceof Uint8Array ? null : request.body?.getReader()
           while (reader) {
             const { done } = await reader.read()
             if (done) break
@@ -166,7 +166,7 @@ describe('the limit of the body', () => {
     const service = new HttpExchangeService({
       transport: transport({
         respond: async (request) => {
-          const reader = request.body?.getReader()
+          const reader = request.body instanceof Uint8Array ? null : request.body?.getReader()
           while (reader) {
             const { done } = await reader.read()
             if (done) break
@@ -216,7 +216,7 @@ describe('the budgets of the phases', () => {
     const service = new HttpExchangeService({
       transport: transport({
         respond: async (request) => {
-          const reader = request.body?.getReader()
+          const reader = request.body instanceof Uint8Array ? null : request.body?.getReader()
           while (reader) {
             const { done } = await reader.read()
             if (done) break
@@ -248,7 +248,7 @@ describe('the budgets of the phases', () => {
     const service = new HttpExchangeService({
       transport: transport({
         respond: async (request) => {
-          const reader = request.body?.getReader()
+          const reader = request.body instanceof Uint8Array ? null : request.body?.getReader()
           while (reader) {
             const { done } = await reader.read()
             if (done) break
@@ -506,5 +506,199 @@ describe('the upstreams of a route', () => {
     expect(upstream.urls).toEqual(['http://first.test/', 'http://second.test/'])
     expect(result.failure?.kind).toBe('network')
     expect(result.response).toBeNull()
+  })
+})
+
+describe('the failover of a route', () => {
+  /** A transport that records the bodies it received. */
+  function bodies(): {
+    seen: { url: string; body: string }[]
+    transport: HttpTransport
+    failOn: (url: string) => boolean
+  } {
+    const seen: { url: string; body: string }[] = []
+    const state = { failOn: (url: string) => url.includes('first') }
+    const transport: HttpTransport = {
+      async send(request) {
+        const body =
+          request.body instanceof Uint8Array
+            ? new TextDecoder().decode(request.body)
+            : await new Response(request.body as ReadableStream).text()
+        seen.push({ url: request.url, body })
+        if (state.failOn(request.url)) throw new Error('the connection is refused')
+        return { status: 200, statusText: 'OK', headers: new Headers(), body: null }
+      },
+    }
+    return { seen, transport, failOn: (url) => state.failOn(url) }
+  }
+
+  test('a route with one upstream streams the body, so the upstream is reached while the caller uploads', async () => {
+    let streamed = false
+    const transport: HttpTransport = {
+      async send(request) {
+        streamed = !(request.body instanceof Uint8Array)
+        return { status: 200, statusText: 'OK', headers: new Headers(), body: null }
+      },
+    }
+    const service = new HttpExchangeService({ transport })
+    await service.execute({
+      method: 'PUT',
+      urls: ['http://only.test/'],
+      headers: new Headers({ 'content-length': '5' }),
+      body: bodyOf(['hello']),
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      replayMaxBytes: 1024,
+    })
+    expect(streamed).toBe(true)
+  })
+
+  test('a body that fits is sent again to the next upstream', async () => {
+    const upstream = bodies()
+    const service = new HttpExchangeService({ transport: upstream.transport })
+    const result = await service.execute({
+      method: 'PUT',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers({ 'content-length': '5' }),
+      body: bodyOf(['hello']),
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      replayMaxBytes: 1024,
+    })
+    expect(upstream.seen.map((entry) => entry.url)).toEqual([
+      'http://first.test/',
+      'http://second.test/',
+    ])
+    // The body reached both upstreams: it was held in memory.
+    expect(upstream.seen.map((entry) => entry.body)).toEqual(['hello', 'hello'])
+    expect(result.response?.status).toBe(200)
+  })
+
+  test('a body that does not fit is not sent again', async () => {
+    const upstream = bodies()
+    const service = new HttpExchangeService({ transport: upstream.transport })
+    const result = await service.execute({
+      method: 'PUT',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers({ 'content-length': '5' }),
+      body: bodyOf(['hello']),
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      replayMaxBytes: 2,
+    })
+    expect(upstream.seen.map((entry) => entry.url)).toEqual(['http://first.test/'])
+    expect(result.failure?.kind).toBe('network')
+  })
+
+  test('a replay of zero disables the sending of a body again', async () => {
+    const upstream = bodies()
+    const service = new HttpExchangeService({ transport: upstream.transport })
+    await service.execute({
+      method: 'PUT',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers({ 'content-length': '5' }),
+      body: bodyOf(['hello']),
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      replayMaxBytes: 0,
+    })
+    expect(upstream.seen.map((entry) => entry.url)).toEqual(['http://first.test/'])
+  })
+
+  test('a request that changes the state of an upstream is not sent again, whatever the body', async () => {
+    const upstream = bodies()
+    const service = new HttpExchangeService({ transport: upstream.transport })
+    await service.execute({
+      method: 'POST',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers({ 'content-length': '5' }),
+      body: bodyOf(['hello']),
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      replayMaxBytes: 1024,
+    })
+    expect(upstream.seen.map((entry) => entry.url)).toEqual(['http://first.test/'])
+  })
+
+  test('an upstream that does not answer in time is left for the next one', async () => {
+    const urls: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        urls.push(request.url)
+        if (request.url.includes('first')) {
+          // The upstream accepted the connection and never answers.
+          await new Promise((resolve) => setTimeout(resolve, 5_000))
+          return { status: 200, statusText: 'OK', headers: new Headers(), body: null }
+        }
+        return { status: 200, statusText: 'OK', headers: new Headers(), body: null }
+      },
+    }
+    const service = new HttpExchangeService({ transport })
+    const started = Date.now()
+    const result = await service.execute({
+      method: 'GET',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers(),
+      body: null,
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      upstreamAttemptMs: 150,
+    })
+    expect(urls).toEqual(['http://first.test/', 'http://second.test/'])
+    expect(result.response?.status).toBe(200)
+    // The attempt was abandoned after its budget, not after the whole
+    // budget of the answer.
+    expect(Date.now() - started).toBeLessThan(1_000)
+  })
+
+  test('the budget of an attempt does not apply to the last upstream', async () => {
+    const transport: HttpTransport = {
+      async send() {
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        return { status: 200, statusText: 'OK', headers: new Headers(), body: null }
+      },
+    }
+    const service = new HttpExchangeService({ transport })
+    const result = await service.execute({
+      method: 'GET',
+      urls: ['http://only.test/'],
+      headers: new Headers(),
+      body: null,
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      upstreamAttemptMs: 50,
+    })
+    expect(result.response?.status).toBe(200)
+  })
+
+  test('the budget of an attempt does not apply to a request that may not be sent twice', async () => {
+    const urls: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        urls.push(request.url)
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        return { status: 200, statusText: 'OK', headers: new Headers(), body: null }
+      },
+    }
+    const service = new HttpExchangeService({ transport })
+    const result = await service.execute({
+      method: 'POST',
+      urls: ['http://first.test/', 'http://second.test/'],
+      headers: new Headers(),
+      body: null,
+      signal: new AbortController().signal,
+      timeouts,
+      maxBodyBytes: 0,
+      upstreamAttemptMs: 50,
+    })
+    expect(urls).toEqual(['http://first.test/'])
+    expect(result.response?.status).toBe(200)
   })
 })

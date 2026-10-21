@@ -38,3 +38,11 @@ export type {
   EffectiveRoute,
   ReloadResult,
 } from './store'
+
+export { describeConfiguration } from './describe'
+export type {
+  ConfigurationDescription,
+  ConfigurationWarning,
+  ConfigurationWarningCode,
+  RouteDescription,
+} from './describe'

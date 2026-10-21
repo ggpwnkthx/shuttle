@@ -66,6 +66,14 @@ export interface AccessClientOptions {
   cache: DecisionCache
   /** Called when the service cannot be reached. */
   onError?: (error: unknown) => void
+  /**
+   * Called after every call that reached the service.
+   *
+   * The duration is the latency of the service, and it is reported only for
+   * the calls that were actually made: a decision that came from the cache
+   * did not cost a call.
+   */
+  onDecision?: (routeId: string, durationMs: number) => void
 }
 
 /**
@@ -90,6 +98,7 @@ export class AccessClient {
   #transport: AccessTransport
   #cache: DecisionCache
   #onError?: (error: unknown) => void
+  #onDecision?: (routeId: string, durationMs: number) => void
   /**
    * The decisions that are being asked for, by the key of the cache.
    *
@@ -113,6 +122,7 @@ export class AccessClient {
     this.#transport = options.transport
     this.#cache = options.cache
     this.#onError = options.onError
+    this.#onDecision = options.onDecision
   }
 
   /**
@@ -254,17 +264,26 @@ export class AccessClient {
       accept: 'application/json',
     }
     if (this.#token) headers.authorization = `Bearer ${this.#token}`
-    const response = await this.#transport.post({
-      url: `${this.#baseUrl}/v1/decisions`,
-      headers,
-      body: JSON.stringify({
-        subject: request.subject,
-        workspaceId: request.workspaceId,
-        routeId: request.routeId,
-        roles: request.roles ?? [],
-      }),
-      signal: AbortSignal.timeout(this.#timeoutMs),
-    })
+    const startedAt = Date.now()
+    let response: { status: number; body: string }
+    try {
+      response = await this.#transport.post({
+        url: `${this.#baseUrl}/v1/decisions`,
+        headers,
+        body: JSON.stringify({
+          subject: request.subject,
+          workspaceId: request.workspaceId,
+          routeId: request.routeId,
+          roles: request.roles ?? [],
+        }),
+        signal: AbortSignal.timeout(this.#timeoutMs),
+      })
+    } finally {
+      // The latency of the service is reported whether it answered or not:
+      // a service that times out is slow, and an operator looks at this
+      // number to see it.
+      this.#onDecision?.(request.routeId, Date.now() - startedAt)
+    }
     // Every failure of the service is the unavailability of the service and
     // not a decision: only an answer that says `allow: false` denies a
     // caller.

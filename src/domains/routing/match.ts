@@ -41,6 +41,12 @@ export interface RouteMatchDefinition {
   path: string
   /** The path the route forwards to its upstream, when it is not the path of the request. */
   rewrite?: string
+  /**
+   * The methods the route accepts.
+   *
+   * An empty list means every method. The methods are upper cased.
+   */
+  methods?: readonly string[]
 }
 
 /** The order of the routes, as a comparable tuple. */
@@ -51,6 +57,12 @@ export interface CompiledRoute<TPayload = unknown> {
   id: string
   definition: RouteMatchDefinition
   host: HostPattern
+  /**
+   * The methods the route accepts, upper cased.
+   *
+   * An empty list means that the route accepts every method.
+   */
+  methods: readonly string[]
   /** The template in the syntax of the matcher. */
   template: string
   /** The segments of the template. */
@@ -278,10 +290,14 @@ export function compileRoute<TPayload>(
   const literal = literalPrefixLength(segments)
   const hostRank = host.kind === 'exact' ? 0 : host.kind === 'wildcard' ? 1 : 2
   const rewrite = definition.rewrite ? rewriteSegmentsOf(definition.rewrite) : undefined
+  const methods = [
+    ...new Set((definition.methods ?? []).map((method) => method.toUpperCase())),
+  ].sort()
   return {
     id: definition.id,
     definition,
     host,
+    methods,
     template,
     segments,
     literalPrefixLength: literal,
@@ -354,44 +370,77 @@ function matcherFor(route: CompiledRoute<unknown>): MatchFunction<ParamData> {
  *
  * The routes are expected to be sorted by `sortRoutes`: the first route
  * that matches wins.
+ *
+ * The method of the request decides between the routes that match the host
+ * and the path:
+ *
+ * - a route that names the methods it accepts handles the request only for
+ *   those methods;
+ * - among the routes that match, one that names the method of the request
+ *   wins over one that names none. A route that names other methods does
+ *   not handle the request at all.
  */
 export function matchRoute<TPayload>(
   routes: readonly CompiledRoute<TPayload>[],
   host: string,
-  path: string
+  path: string,
+  method?: string
 ): RouteMatch<TPayload> | null {
   const normalizedHost = normalizeHost(host)
-  for (const route of routes) {
-    if (!hostMatches(route.host, normalizedHost)) continue
-    const result = matcherFor(route as CompiledRoute<unknown>)(path)
-    if (!result) continue
-    const params: Record<string, string> = {}
-    const rawParams: Record<string, string> = {}
-    for (const [name, value] of Object.entries(result.params)) {
-      if (typeof value !== 'string') continue
-      // The raw value is the one the caller sent: it is what a rewrite
-      // writes into the path of the upstream, so the encoding of the path
-      // is not touched.
-      rawParams[name] = value
-      let decoded: string
-      try {
-        decoded = decodeURIComponent(value)
-      } catch {
-        // A malformed percent encoding is not a path the route can match.
-        // The whole request stays unmatched: a route that matched with an
-        // unusable placeholder would forward a request whose identifier is
-        // missing, which is a different request than the one the route
-        // describes.
-        return null
-      }
-      params[name] = decoded
+  const wanted = method === undefined ? null : method.toUpperCase()
+
+  // The routes that name their methods come first: they are the ones that
+  // were written for this method. The routes that name none come second,
+  // and they are the fallback of a request that no route names.
+  for (const named of [true, false]) {
+    for (const route of routes) {
+      const names = route.methods.length > 0
+      if (names !== named) continue
+      if (names && (wanted === null || !route.methods.includes(wanted))) continue
+      if (!hostMatches(route.host, normalizedHost)) continue
+      const result = matcherFor(route as CompiledRoute<unknown>)(path)
+      if (!result) continue
+      const match = buildMatch(route, path, result)
+      if (match === null) return null
+      return match
     }
-    const forwarded = route.rewrite
-      ? rewrittenPath(route.rewrite, rawParams, restOf(path, result.path))
-      : path
-    return { route, params, prefix: result.path, path: forwarded }
   }
   return null
+}
+
+/**
+ * Builds the match of a route, with the values of its placeholders.
+ *
+ * It returns null when a placeholder cannot be decoded: a route that
+ * matched with an unusable identifier would forward a request whose
+ * identifier is missing, which is a different request than the one the
+ * route describes.
+ */
+function buildMatch<TPayload>(
+  route: CompiledRoute<TPayload>,
+  path: string,
+  result: { path: string; params: Partial<Record<string, string | string[]>> }
+): RouteMatch<TPayload> | null {
+  const params: Record<string, string> = {}
+  const rawParams: Record<string, string> = {}
+  for (const [name, value] of Object.entries(result.params)) {
+    if (typeof value !== 'string') continue
+    // The raw value is the one the caller sent: it is what a rewrite
+    // writes into the path of the upstream, so the encoding of the path
+    // is not touched.
+    rawParams[name] = value
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(value)
+    } catch {
+      return null
+    }
+    params[name] = decoded
+  }
+  const forwarded = route.rewrite
+    ? rewrittenPath(route.rewrite, rawParams, restOf(path, result.path))
+    : path
+  return { route, params, prefix: result.path, path: forwarded }
 }
 
 /**
@@ -418,6 +467,15 @@ export function detectConflicts<TPayload>(routes: CompiledRoute<TPayload>[]): st
       const b = routes[right]!
       if (a.host.kind !== b.host.kind || a.host.value !== b.host.value) continue
       if (a.skeleton !== b.skeleton) continue
+      // Two routes that match the same requests are ambiguous. Two routes
+      // that name different methods do not match the same requests: they
+      // are two halves of one route. A route that names no method is the
+      // fallback of the others: it handles the methods that no other route
+      // names, so it is not ambiguous with them.
+      const aNamed = a.methods.length > 0
+      const bNamed = b.methods.length > 0
+      if (aNamed !== bNamed) continue
+      if (aNamed && !a.methods.some((method) => b.methods.includes(method))) continue
       conflicts.push(
         `the routes "${a.id}" and "${b.id}" are ambiguous: both match the host "${a.definition.host}" with the path template "${a.definition.path}"`
       )

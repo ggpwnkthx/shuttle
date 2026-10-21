@@ -60,6 +60,8 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_COOKIE_SECURE` | `true` | The cookies of the gateway are `Secure`. |
 | `SHUTTLE_MAX_BODY_BYTES` | The limit of the deployment | The limit of the routes wins over it. |
 | `SHUTTLE_MAX_CONCURRENT_REQUESTS` | `1000` | The exchanges that run at the same time. |
+| `SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS` | `2000` | The budget of one attempt to an upstream, when a route names several. An attempt that does not answer in time is abandoned and the next upstream is tried. `0` disables it. |
+| `SHUTTLE_REPLAY_MAX_BYTES` | `65536` | The size of a body that may be sent again to a second upstream. A body that fits is held in memory. `0` disables it. |
 | `SHUTTLE_RATE_LIMIT_TOTAL_MAX` | A value | The budget of the deployment. At least one limit has to be set. |
 | `SHUTTLE_SHUTDOWN_TIMEOUT_MS` | `15000` | The deadline of the drain. |
 
@@ -148,14 +150,16 @@ last run are in [capacity.md](capacity.md).
 
 ## The policies of the routes
 
-Three policies are properties of a route rather than of the deployment. They
-are in the route table, and they replace the value of the defaults.
+Several policies are properties of a route rather than of the deployment.
+They are in the route table, and they replace the value of the defaults.
 
 | Key | Default | What it decides |
 | --- | --- | --- |
 | `crossSite` | `navigation` | `strict` refuses the navigations from another site on that route. Use it for a route whose upstream changes the state of something on a `GET`. |
 | `forwardAuthorization` | `true` | `false` does not forward the `Authorization` header of the caller to that upstream. The identity of the caller still reaches it, in the headers of the gateway and in the signature. |
 | `accessCacheTtlMs` | the value of the environment | The lifetime of the cached decisions of the access service on that route. `0` asks the service for every request, so a revocation on that route is immediate. |
+| `replayMaxBytes` | the value of the environment | The size of a body that may be sent again to a second upstream. A body that fits is held in memory, so that the request may be sent to the next upstream when the first one fails. |
+| `timeouts.upstreamAttemptMs` | the value of the environment | The budget of one attempt to an upstream, when the route names several. `0` disables it. |
 
 ```jsonc
 {
@@ -170,6 +174,56 @@ are in the route table, and they replace the value of the defaults.
   "forwardAuthorization": false
 }
 ```
+
+## The access service of the deployment
+
+The access service is a dependency of the deployment and not a part of
+Shuttle. The gateway asks it and fails closed: without a decision, the
+request is refused.
+
+The protocol of the service is published in
+[spec.md](spec.md) §6.1, and a deployment that writes its own service runs
+the conformance suite against it:
+
+```bash
+SHUTTLE_TEST_ACCESS_URL=https://access.example.com \
+SHUTTLE_TEST_ACCESS_TOKEN=… \
+SHUTTLE_TEST_ACCESS_ALLOWED_SUBJECT=alice@example.com \
+SHUTTLE_TEST_ACCESS_ALLOWED_WORKSPACE=11111111-1111-4111-8111-111111111111 \
+bun test test/integration/access-conformance.test.ts
+```
+
+A deployment that has no service of its own may run the **reference
+implementation** that ships with the project:
+`services/access-service.ts` applies a policy file and answers the protocol.
+
+```bash
+ACCESS_POLICY_FILE=/etc/shuttle/access-policy.json \
+ACCESS_SERVICE_TOKEN=… \
+bun run services/access-service.ts
+```
+
+The image of the reference implementation is built with the stage
+`access-service` of the `Dockerfile`. It is **not** part of the image of the
+gateway: the two are different programs and they are deployed apart.
+
+The policy file:
+
+```json
+{
+  "version": 1,
+  "subjects": {
+    "alice@example.com": {
+      "workspaces": ["11111111-1111-4111-8111-111111111111"],
+      "roles": ["editor"]
+    },
+    "bob@example.com": { "workspaces": ["*"] }
+  }
+}
+```
+
+A subject that the file does not know is denied. The service applies the
+file, and it says no when the file says nothing.
 
 ## The secrets
 

@@ -55,7 +55,7 @@ export interface ExchangeRequest {
   urls: string[]
   /** The headers of the request, already filtered. */
   headers: Headers
-  /** The body of the request, or null when the request has none. */
+  /** The body of the request, or null when it has none. */
   body: ReadableStream<Uint8Array> | null
   /** Aborted when the caller goes away. */
   signal: AbortSignal
@@ -63,6 +63,31 @@ export interface ExchangeRequest {
   timeouts: ExchangeTimeouts
   /** The limit of the body of the request, 0 disables it. */
   maxBodyBytes: number
+  /**
+   * The budget of one attempt to an upstream, in milliseconds.
+   *
+   * It applies to an attempt that has another upstream behind it: the
+   * attempt is abandoned when it does not answer in time, and the next
+   * upstream is tried. It is the budget of the whole exchange that bounds
+   * the list, so a list of upstreams never makes a route slower.
+   *
+   * It applies only to a request that may be sent twice: a request that
+   * changes the state of an upstream is never sent to two of them.
+   *
+   * Zero disables it: the budget of the answer governs the exchange.
+   */
+  upstreamAttemptMs?: number
+  /**
+   * The size of a body that may be sent again, in bytes.
+   *
+   * A body that is small enough is held in memory, so that it can be sent
+   * to a second upstream when the first one fails. A body that is larger
+   * is streamed and the request is not sent twice.
+   *
+   * Zero disables it: every body is streamed and every request is sent
+   * once.
+   */
+  replayMaxBytes?: number
   /**
    * Called exactly once, when the exchange is over.
    *
@@ -165,9 +190,12 @@ const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE', 'PUT', 'D
  * and a request that has a body cannot be replayed: the bytes are already
  * on their way to the first upstream.
  */
-function isRetryable(request: ExchangeRequest): boolean {
-  if (request.body) return false
-  return IDEMPOTENT_METHODS.has(request.method.toUpperCase())
+function isRetryable(method: string, replayable: boolean): boolean {
+  if (!IDEMPOTENT_METHODS.has(method.toUpperCase())) return false
+  // A request that has a body may only be sent again when the body is
+  // held in memory: the bytes of a stream are already on their way to the
+  // first upstream.
+  return replayable
 }
 
 /** The statuses of a final answer that carry no body. */
@@ -361,43 +389,144 @@ export class HttpExchangeService {
     /**
      * The body of the request.
      *
-     * The bytes are counted while they pass, the limit is enforced on the
-     * bytes that really went through and the idle budget of the upload is
-     * rearmed on every chunk.
+     * A body that is small enough is held in memory, so that the request
+     * may be sent to a second upstream when the first one fails. The bytes
+     * are counted while they are read, the limit of the body is enforced
+     * and the idle budget of the upload is rearmed on every chunk.
+     *
+     * A body that is larger is streamed: it passes to the upstream while it
+     * arrives, and the request is not sent twice.
      */
-    const uploadBody = request.body
-      ? request.body.pipeThrough(
-          new TransformStream<Uint8Array, Uint8Array>({
-            transform(chunk, controller) {
-              result.bytesIn += chunk.byteLength
-              if (request.maxBodyBytes > 0 && result.bytesIn > request.maxBodyBytes) {
-                uploadTooLarge = true
-                controller.error(new PayloadTooLargeError(request.maxBodyBytes))
-                return
-              }
-              if (!uploadComplete) {
-                if (uploadTimer) clearTimeout(uploadTimer)
-                uploadTimer = arm(request.timeouts.bodyMs, () => {
-                  fail({
-                    kind: 'timeout',
-                    message: 'the request body did not make progress in time',
-                  })
-                })
-              }
-              controller.enqueue(chunk)
-            },
-            flush() {
-              uploadComplete = true
-              if (uploadTimer) clearTimeout(uploadTimer)
-              uploadTimer = undefined
-              // The upload is over: the budget of the answer starts now.
-              armResponse()
-            },
-          })
-        )
-      : null
+    const replayLimit = request.replayMaxBytes ?? 0
+    const mayBuffer =
+      request.body !== null &&
+      // A route with one upstream has nothing to fail over to: the body is
+      // streamed, so the upstream is reached while the caller uploads and
+      // the early answer of the upstream is preserved (§11.2).
+      request.urls.length > 1 &&
+      replayLimit > 0 &&
+      declared !== null &&
+      Number.isFinite(Number(declared)) &&
+      Number(declared) <= replayLimit
 
-    if (uploadBody) {
+    /** The body of the request when it is held in memory. */
+    let buffered: Uint8Array | null = null
+
+    /**
+     * Reads the body of the request into memory.
+     *
+     * The body is only read when it announced a length that fits in the
+     * limit of the replay, so the memory of the gateway is bounded by the
+     * limit and not by what a client decides to send.
+     */
+    const readBufferedBody = async (): Promise<Uint8Array | null> => {
+      const reader = request.body!.getReader()
+      const chunks: Uint8Array[] = []
+      let total = 0
+      try {
+        for (;;) {
+          const timer = arm(request.timeouts.bodyMs, () => {
+            fail({
+              kind: 'timeout',
+              message: 'the request body did not make progress in time',
+            })
+          })
+          const read = reader.read().then(
+            (value) => ({ kind: 'read' as const, value }),
+            (error: unknown) => ({ kind: 'error' as const, error })
+          )
+          const raced = await Promise.race([
+            read,
+            failureSignal.then((failure) => ({ kind: 'failure' as const, failure })),
+          ])
+          if (timer) clearTimeout(timer)
+          if (raced.kind === 'failure') return null
+          if (raced.kind === 'error') throw raced.error
+          if (raced.value.done) break
+          const chunk = raced.value.value!
+          total += chunk.byteLength
+          if (total > replayLimit) {
+            // The client announced a length that does not match the bytes
+            // it sent. The request is refused: the gateway does not guess
+            // what a body is.
+            throw new PayloadTooLargeError(replayLimit)
+          }
+          chunks.push(chunk)
+          result.bytesIn += chunk.byteLength
+        }
+      } finally {
+        reader.releaseLock()
+      }
+      let size = 0
+      for (const chunk of chunks) size += chunk.byteLength
+      const bytes = new Uint8Array(size)
+      let offset = 0
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset)
+        offset += chunk.byteLength
+      }
+      return bytes
+    }
+
+    const uploadBody =
+      request.body && !mayBuffer
+        ? request.body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, controller) {
+                result.bytesIn += chunk.byteLength
+                if (request.maxBodyBytes > 0 && result.bytesIn > request.maxBodyBytes) {
+                  uploadTooLarge = true
+                  controller.error(new PayloadTooLargeError(request.maxBodyBytes))
+                  return
+                }
+                if (!uploadComplete) {
+                  if (uploadTimer) clearTimeout(uploadTimer)
+                  uploadTimer = arm(request.timeouts.bodyMs, () => {
+                    fail({
+                      kind: 'timeout',
+                      message: 'the request body did not make progress in time',
+                    })
+                  })
+                }
+                controller.enqueue(chunk)
+              },
+              flush() {
+                uploadComplete = true
+                if (uploadTimer) clearTimeout(uploadTimer)
+                uploadTimer = undefined
+                // The upload is over: the budget of the answer starts now.
+                armResponse()
+              },
+            })
+          )
+        : null
+
+    if (mayBuffer) {
+      // The body is read into memory before it is sent, so that it may be
+      // sent again. The idle budget of the upload is armed while it is
+      // read, and the budget of the answer starts when it is over.
+      try {
+        buffered = await readBufferedBody()
+      } catch (error) {
+        request.signal.removeEventListener('abort', onCallerGone)
+        if (error instanceof PayloadTooLargeError) {
+          fail({ kind: 'too_large', message: 'the request body does not match its length' })
+        } else {
+          fail({
+            kind: 'network',
+            message: error instanceof Error ? error.message : String(error),
+          })
+        }
+        return result
+      }
+      if (buffered === null) {
+        // The exchange failed while the body was read.
+        request.signal.removeEventListener('abort', onCallerGone)
+        return result
+      }
+      uploadComplete = true
+      armResponse()
+    } else if (uploadBody) {
       // The idle budget of the upload is armed right away: a client that
       // sends nothing at all is cut off as well.
       uploadTimer = arm(request.timeouts.bodyMs, () => {
@@ -421,7 +550,9 @@ export class HttpExchangeService {
     // request may be sent again: a request that has a body cannot be
     // replayed, and a request that changes the state of an upstream may
     // not be sent twice.
-    const retryable = isRetryable(request)
+    const replayable = request.body === null || buffered !== null
+    const retryable = isRetryable(request.method, replayable)
+    const attemptBudgetMs = request.upstreamAttemptMs ?? 0
     const urls = request.urls.length > 0 ? request.urls : ['']
     let attempt = 0
 
@@ -431,23 +562,68 @@ export class HttpExchangeService {
       for (;;) {
         const url = urls[attempt]!
         attempt += 1
+        // The budget of the attempt applies to an attempt that has another
+        // upstream behind it: the attempt is abandoned when it does not
+        // answer in time, and the next upstream is tried. The budget of the
+        // whole exchange still bounds the list.
+        const budget =
+          attemptBudgetMs > 0 && attempt < urls.length && retryable ? attemptBudgetMs : 0
+        // Every attempt has its own cancellation: the exchange is aborted
+        // when the caller goes away, and an attempt is aborted when its
+        // budget runs out.
+        const attemptAbort = new AbortController()
+        const onExchangeAbort = (): void => attemptAbort.abort()
+        abort.signal.addEventListener('abort', onExchangeAbort, { once: true })
+        let timer: ReturnType<typeof setTimeout> | undefined
         try {
-          const response = await this.#transport.send({
-            url,
-            method: request.method,
-            headers: request.headers,
-            body: uploadBody,
-            signal: abort.signal,
-          })
-          return { kind: 'response', response }
-        } catch (error) {
-          // The failure of the connection is the only one that may be
-          // tried again: a timeout means the upstream answered too late,
-          // and the answer may be on its way.
-          const next = attempt < urls.length
-          if (!next || !retryable || result.failure || headersArrived) {
-            return { kind: 'error', error }
+          const pending = this.#transport
+            .send({
+              url,
+              method: request.method,
+              headers: request.headers,
+              body: buffered ?? uploadBody,
+              signal: attemptAbort.signal,
+            })
+            .then(
+              (response) => ({ kind: 'response' as const, response }),
+              (error: unknown) => ({ kind: 'error' as const, error })
+            )
+          const outcome =
+            budget > 0
+              ? await Promise.race([
+                  pending,
+                  new Promise<{ kind: 'timeout' }>((resolve) => {
+                    timer = arm(budget, () => {
+                      attemptAbort.abort()
+                      resolve({ kind: 'timeout' })
+                    })
+                  }),
+                ])
+              : await pending
+          if (outcome.kind === 'timeout') {
+            // The attempt is abandoned. The transport may still settle, and
+            // its answer is dropped: the body of an answer nobody waits for
+            // is cancelled, so the socket is released.
+            void pending.then((settled) => {
+              if (settled.kind === 'response')
+                void settled.response.body?.cancel().catch(() => undefined)
+            })
+            continue
           }
+          if (outcome.kind === 'error') {
+            // The failure of the connection is the only one that may be
+            // tried again: a timeout means the upstream answered too late,
+            // and the answer may be on its way.
+            const next = attempt < urls.length
+            if (!next || !retryable || result.failure || headersArrived) {
+              return { kind: 'error', error: outcome.error }
+            }
+            continue
+          }
+          return { kind: 'response', response: outcome.response }
+        } finally {
+          if (timer) clearTimeout(timer)
+          abort.signal.removeEventListener('abort', onExchangeAbort)
         }
       }
     }

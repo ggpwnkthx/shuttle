@@ -114,7 +114,8 @@ export class WsUpstreamHandshake implements UpstreamHandshakePort {
       return {
         kind: 'failed',
         reason: 'tls',
-        message: 'the websocket client of the runtime cannot connect to an upstream over TLS',
+        message:
+          'the upstream of a websocket is served over plain http: the websocket client of the runtime cannot speak TLS. Terminate the TLS in front of the upstream (a proxy that speaks wss and forwards ws) or serve it over http',
       }
     }
     return await new Promise<UpstreamHandshakeOutcome>((resolve) => {

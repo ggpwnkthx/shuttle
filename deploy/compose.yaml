@@ -102,6 +102,27 @@ services:
     expose:
       - "8090"
 
+  # The reference implementation of the access service, for a stack that
+  # does not want the fixture. It applies the policy of the file and it
+  # answers the protocol of the specification. Start it with
+  # `docker compose --profile reference up` and point the gateway at it
+  # with SHUTTLE_ACCESS_URL=http://access-service:8090.
+  access-service:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: access-service
+    profiles: ["reference"]
+    command: ["services/access-service.ts"]
+    environment:
+      PORT: "8090"
+      ACCESS_POLICY_FILE: /etc/shuttle/access-policy.json
+      ACCESS_SERVICE_TOKEN: ${SHUTTLE_ACCESS_TOKEN:-development-access-token}
+    volumes:
+      - ../config/access-policy.json:/etc/shuttle/access-policy.json:ro
+    expose:
+      - "8090"
+
   upstream-a:
     build:
       context: ..

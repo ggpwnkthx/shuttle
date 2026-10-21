@@ -153,6 +153,8 @@ export interface Observer {
   recordAuthFailure(routeId: string, reason: AuthFailureReason): void
   /** The upstream answered a request. */
   recordUpstream(routeId: string, durationMs: number): void
+  /** The access service answered a decision request. */
+  recordAccess(routeId: string, durationMs: number): void
   /** The access service could not be asked. */
   recordAccessUnavailable(routeId: string): void
   /** A websocket was accepted. */
@@ -182,6 +184,7 @@ export class MetricsStore implements Observer {
   #websockets: Counter<'route'>
   #duration: Histogram<'route'>
   #upstreamDuration: Histogram<'route'>
+  #accessDuration: Histogram<'route'>
   #bytesIn: Counter
   #bytesOut: Counter
   #active: Gauge
@@ -234,6 +237,13 @@ export class MetricsStore implements Observer {
     this.#upstreamDuration = new Histogram({
       name: 'shuttle_upstream_duration_seconds',
       help: 'Latency of the upstreams.',
+      labelNames: ['route'],
+      buckets: DURATION_BUCKETS_SECONDS,
+      registers: [this.#registry],
+    })
+    this.#accessDuration = new Histogram({
+      name: 'shuttle_access_duration_seconds',
+      help: 'Latency of the calls to the access service.',
       labelNames: ['route'],
       buckets: DURATION_BUCKETS_SECONDS,
       registers: [this.#registry],
@@ -315,6 +325,16 @@ export class MetricsStore implements Observer {
     this.#upstreamDuration.observe({ route: this.#route(routeId) }, durationMs / 1000)
   }
 
+  recordAccess(routeId: string, durationMs: number): void {
+    // The latency of the call to the access service, and not the latency of
+    // the gateway: the service is a dependency of its own, and an operator
+    // looks at this one when the service is slow.
+    //
+    // Only the calls that reached the service are counted: a decision that
+    // came from the cache cost the gateway nothing.
+    this.#accessDuration.observe({ route: this.#route(routeId) }, durationMs / 1000)
+  }
+
   recordAccessUnavailable(routeId: string): void {
     // An outage of the access service is not a denial of a caller: it is
     // counted apart, so an operator can tell the two apart.
@@ -382,6 +402,7 @@ export function createSilentObserver(): Observer {
     recordRequest: () => undefined,
     recordAuthFailure: () => undefined,
     recordAccessUnavailable: () => undefined,
+    recordAccess: () => undefined,
     recordUpstream: () => undefined,
     recordWebsocket: () => undefined,
     recordWebsocketRefusal: () => undefined,
