@@ -151,6 +151,8 @@ export interface Observer {
   recordRequest(observation: RequestObservation): void
   /** A caller was rejected. */
   recordAuthFailure(routeId: string, reason: AuthFailureReason): void
+  /** The upstream answered a request. */
+  recordUpstream(routeId: string, durationMs: number): void
   /** The access service could not be asked. */
   recordAccessUnavailable(routeId: string): void
   /** A websocket was accepted. */
@@ -179,6 +181,7 @@ export class MetricsStore implements Observer {
   #accessUnavailable: Counter<'route'>
   #websockets: Counter<'route'>
   #duration: Histogram<'route'>
+  #upstreamDuration: Histogram<'route'>
   #bytesIn: Counter
   #bytesOut: Counter
   #active: Gauge
@@ -224,6 +227,13 @@ export class MetricsStore implements Observer {
     this.#duration = new Histogram({
       name: 'shuttle_request_duration_seconds',
       help: 'Latency of the proxied requests.',
+      labelNames: ['route'],
+      buckets: DURATION_BUCKETS_SECONDS,
+      registers: [this.#registry],
+    })
+    this.#upstreamDuration = new Histogram({
+      name: 'shuttle_upstream_duration_seconds',
+      help: 'Latency of the upstreams.',
       labelNames: ['route'],
       buckets: DURATION_BUCKETS_SECONDS,
       registers: [this.#registry],
@@ -298,6 +308,13 @@ export class MetricsStore implements Observer {
     this.#authFailures.inc({ route: this.#route(routeId), reason })
   }
 
+  recordUpstream(routeId: string, durationMs: number): void {
+    // The latency of the upstream, and not the latency of the gateway: the
+    // two are different numbers and an operator looks at this one when an
+    // upstream is slow.
+    this.#upstreamDuration.observe({ route: this.#route(routeId) }, durationMs / 1000)
+  }
+
   recordAccessUnavailable(routeId: string): void {
     // An outage of the access service is not a denial of a caller: it is
     // counted apart, so an operator can tell the two apart.
@@ -365,6 +382,7 @@ export function createSilentObserver(): Observer {
     recordRequest: () => undefined,
     recordAuthFailure: () => undefined,
     recordAccessUnavailable: () => undefined,
+    recordUpstream: () => undefined,
     recordWebsocket: () => undefined,
     recordWebsocketRefusal: () => undefined,
     recordConfigReload: () => undefined,

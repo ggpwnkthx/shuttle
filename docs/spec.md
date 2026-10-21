@@ -449,6 +449,7 @@ Written by the gateway:
 
 | Header | Value |
 | --- | --- |
+| `traceparent` | The trace of the request (§7.5). |
 | `x-forwarded-for` | The chain, client first, peer of the gateway last. |
 | `x-forwarded-proto` | `http` or `https` (the effective protocol). |
 | `x-forwarded-host` | The host the caller used. |
@@ -629,6 +630,35 @@ canonical JSON **array**. An upstream that verifies `v3` has to be changed:
 it rebuilds the payload as an object and verifies the JWS. The gateway
 writes `v4` only, so a deployment that changes the format changes the
 contract of its upstreams with it.
+
+### 7.5 The trace of a request
+
+The gateway writes a `traceparent` header to the upstream: the trace
+context of the W3C, that ties the request of the caller to the answer of
+the upstream.
+
+| The caller sent | The upstream receives |
+| --- | --- |
+| `00-<trace>-<span>-01` | `00-<trace>-<the span of the gateway>-01`: the id of the trace is the one of the caller and the span is the one of the gateway. |
+| A header that is not well formed | `00-<a new trace>-<the span of the gateway>-01`. |
+| Nothing | `00-<a new trace>-<the span of the gateway>-01`. |
+
+The rules:
+
+- the header of the caller is **never forwarded as it is**: the gateway
+  writes a context of its own, so the upstream always receives a well
+  formed one and a broken header of a client cannot confuse the collector
+  of the upstream;
+- the span of the gateway is new: the span of the upstream is a child of
+  it, and the trace of the caller continues;
+- the flags of the caller are kept;
+- the id of the trace is written in the log of the request, next to the
+  request id, so the two halves of a request are found with the same
+  search.
+
+The gateway does not export spans: it writes the context and it logs the
+id of the trace. A deployment that collects the traces of the upstreams
+sees the gateway as the parent of the span of the upstream.
 
 ---
 
@@ -1002,6 +1032,7 @@ The metrics:
 | `shuttle_websocket_connections_total` | `route` | The accepted upgrades. |
 | `shuttle_websocket_refusals_total` | `reason` | The refused handshakes. |
 | `shuttle_request_duration_seconds` | `route` | The latency of the exchanges. |
+| `shuttle_upstream_duration_seconds` | `route` | The latency of the upstreams: the time from the request that left the gateway to the final headers of the answer. |
 | `shuttle_bytes_in_total`, `shuttle_bytes_out_total` | — | The bytes that really went through. |
 | `shuttle_active_requests` | — | The requests that are in flight. |
 | `shuttle_config_reloads_total` | `result` | The reloads of the configuration. |

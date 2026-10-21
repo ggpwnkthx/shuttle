@@ -154,6 +154,25 @@ a rewrite without `{rest}` does not forward the rest of the path.
 A route that does not declare a rewrite forwards the path of the request:
 the behaviour of a deployment that declares none does not change.
 
+### The trace of a request and the latency of the upstream
+
+The gateway forwards the `traceparent` of the caller as it is, so a
+malformed one reaches the collector of the upstream, and the trace of the
+request is not visible in the log of the gateway.
+
+The gateway writes a trace context of its own now: the id of the trace is
+the one of the caller when it is well formed and a new one otherwise, the
+span is always the one of the gateway — so the span of the upstream is a
+child of it — and the flags of the caller are kept. The id of the trace is
+written in the log of the request next to the request id, so the two
+halves of a request are found with the same search.
+
+The latency of the upstream is measured on its own and published as
+`shuttle_upstream_duration_seconds`: it is the time from the moment the
+request left the gateway to the final headers of the answer, and it is not
+the latency of the gateway, which also holds the authentication, the
+limits and the access service.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the

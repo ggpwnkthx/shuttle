@@ -35,6 +35,8 @@ import {
   resolveForwardingContext,
   rewriteLocation,
   signIdentity,
+  traceContextOf,
+  traceparentOf,
   upstreamOrigin,
   writtenIdentity,
   type CallerIdentity,
@@ -124,6 +126,11 @@ export async function dispatch(
     externalProto: dependencies.externalProto,
   })
   context.set('forwarding', forwarding)
+
+  // The trace of the request: the context of the caller when it is well
+  // formed, and a new one otherwise. The gateway writes its own span, so
+  // the span of the upstream is a child of it.
+  const trace = traceContextOf(context.req.raw.headers.get('traceparent'))
 
   // The host the caller used: the one the trusted proxy reports, when the
   // peer is a trusted proxy. It is the host the route is matched on, the
@@ -381,6 +388,7 @@ export async function dispatch(
     const upstreamHeaders = buildWebsocketUpstreamHeaders({
       incoming: context.req.raw.headers,
       forwarding,
+      traceparent: traceparentOf(trace),
       identity,
       signature: identity
         ? await signIdentity(
@@ -446,6 +454,7 @@ export async function dispatch(
   const headers = buildUpstreamHeaders({
     incoming: context.req.raw.headers,
     forwarding,
+    traceparent: traceparentOf(trace),
     identity,
     signature: identity
       ? await signIdentity(
@@ -484,9 +493,16 @@ export async function dispatch(
         bytesIn: finalized.bytesIn,
         bytesOut: finalized.bytesOut,
       })
+      // The latency of the upstream is a different number from the latency
+      // of the gateway: the time the gateway spent on the authentication,
+      // on the limits and on the access service is not part of it.
+      if (finalized.upstreamDurationMs !== undefined) {
+        dependencies.observer.recordUpstream(route.id, finalized.upstreamDurationMs)
+      }
       if (finalized.status === undefined) return
       logger.info('request proxied', {
         requestId,
+        traceId: trace.traceId,
         routeId: route.id,
         method,
         path: redactUrl(`${path}${url.search}`),

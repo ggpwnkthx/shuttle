@@ -102,6 +102,16 @@ export interface ExchangeResult {
   outcome: ExchangeOutcome
   /** The status of the answer of the upstream, when there was one. */
   status?: number
+  /**
+   * The time the upstream took to answer, in milliseconds.
+   *
+   * It is the time from the moment the request was sent to the moment the
+   * final headers of the answer arrived. It is the latency of the
+   * upstream and not the latency of the gateway: the time the gateway
+   * spent on the authentication, on the limits and on the access service
+   * is not part of it.
+   */
+  upstreamDurationMs?: number
 }
 
 /** The settings of the exchange service. */
@@ -376,6 +386,10 @@ export class HttpExchangeService {
       armResponse()
     }
 
+    // The moment the request leaves the gateway: the latency of the
+    // upstream is measured from here to the final headers of the answer.
+    const sentAt = Date.now()
+
     const answered = this.#transport
       .send({
         url: request.url,
@@ -427,6 +441,7 @@ export class HttpExchangeService {
     }
 
     headersArrived = true
+    result.upstreamDurationMs = Date.now() - sentAt
     if (responseTimer) clearTimeout(responseTimer)
     responseTimer = undefined
 

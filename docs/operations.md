@@ -274,6 +274,7 @@ token does not match.
 | `shuttle_websocket_connections_total{route}` | The WebSockets that were accepted. | The capacity. |
 | `shuttle_websocket_refusals_total{reason}` | The handshakes that were refused. | The capacity, the origins. |
 | `shuttle_request_duration_seconds{route}` | The latency of the exchanges. | The budgets of the routes. |
+| `shuttle_upstream_duration_seconds{route}` | The latency of the upstreams: from the request that left the gateway to the final headers of the answer. | An upstream that is slow. |
 | `shuttle_bytes_in_total` / `shuttle_bytes_out_total` | The bytes that really went through. | The volume. |
 | `shuttle_active_requests` | The requests that are in flight. | The drain. |
 | `shuttle_config_reloads_total{result}` | The reloads of the configuration. | A broken file on disk. |

@@ -66,6 +66,17 @@ export {
 } from './target'
 
 export {
+  TRACEPARENT_HEADER,
+  TRACEPARENT_VERSION,
+  newSpanId,
+  newTraceId,
+  parseTraceparent,
+  traceContextOf,
+  traceparentOf,
+} from './trace'
+export type { SpanId, TraceContext, TraceId } from './trace'
+
+export {
   checkCrossSite,
   checkCrossSiteNavigation,
   checkWebsocketOrigin,

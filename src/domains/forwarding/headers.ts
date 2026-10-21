@@ -11,6 +11,7 @@
  */
 
 import { IDENTITY_SIGNATURE_HEADER, type WrittenIdentity } from './identity'
+import { TRACEPARENT_HEADER } from './trace'
 import type { ForwardingContext } from './context'
 import { cookieNameOf, parseCookieHeader, renderCookieHeader } from './cookies'
 
@@ -179,6 +180,15 @@ export interface UpstreamHeadersOptions {
    * of the gateway and in the signature.
    */
   forwardAuthorization?: boolean
+  /**
+   * The trace context of the request, written as a `traceparent` header.
+   *
+   * The gateway writes its own span: the header of the caller is never
+   * forwarded as it is, so the upstream always receives a well formed
+   * context and the span of the upstream is a child of the span of the
+   * gateway.
+   */
+  traceparent?: string
 }
 
 /**
@@ -213,6 +223,7 @@ export function buildUpstreamHeaders(options: UpstreamHeadersOptions): Headers {
     signature,
     gatewayCookies,
     forwardAuthorization = true,
+    traceparent,
   } = options
   const headers = new Headers()
   const nominated = connectionNominatedHeaders(incoming)
@@ -222,6 +233,10 @@ export function buildUpstreamHeaders(options: UpstreamHeadersOptions): Headers {
     if (isStrippedRequestHeader(lower)) continue
     if (nominated.includes(lower)) continue
     if (!forwardAuthorization && lower === 'authorization') continue
+    // The trace context of the caller is not forwarded as it is: the
+    // gateway writes its own span, so the upstream always receives a well
+    // formed context.
+    if (traceparent && lower === TRACEPARENT_HEADER) continue
     if (lower === 'cookie') {
       const kept = stripGatewayCookies(value, gatewayCookies)
       if (kept) headers.set('cookie', kept)
@@ -236,6 +251,10 @@ export function buildUpstreamHeaders(options: UpstreamHeadersOptions): Headers {
   headers.set('x-forwarded-proto', forwarding.proto)
   headers.set('x-forwarded-host', forwarding.host)
   headers.set('x-real-ip', forwarding.clientIp)
+
+  // The trace of the request: the span of the gateway is the parent of the
+  // span of the upstream.
+  if (traceparent) headers.set(TRACEPARENT_HEADER, traceparent)
 
   if (identity) {
     headers.set(IDENTITY_HEADER_NAMES.user, identity.subject)

@@ -71,6 +71,7 @@ const ECHOED_HEADERS = [
   'content-type',
   'cookie',
   'authorization',
+  'traceparent',
 ]
 
 export function createUpstream(options: UpstreamOptions = {}): StartedUpstream {

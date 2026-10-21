@@ -166,6 +166,7 @@ writes the headers and the cookies of the answers.
 | | `headers.ts` | The header policy in both directions, and the cookies of the gateway. |
 | | `cookies.ts` | The parsing of a `Cookie` header, the rendering of a `Set-Cookie` header, and the name of a cookie. |
 | | `identity.ts` | The sanitization of the identity, the canonical payload, the signature and its verification. |
+| | `trace.ts` | The trace context of a request: the parsing of the `traceparent` of the caller, the span of the gateway and the header it writes. |
 | | `target.ts` | The url of the upstream, and the rewriting of the `Location` of an answer. |
 | `rate-limiting` | `policy.ts` | The scopes and the keys of the windows. |
 | | `window.ts` | The sliding window: the size of a bucket, the index of a bucket and the evaluation of the window. |
