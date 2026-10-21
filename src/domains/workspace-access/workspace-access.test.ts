@@ -122,6 +122,7 @@ describe('the decisions of the access service', () => {
       routeId: 'route',
     })
     expect(decision.allow).toBe(true)
+    expect(decision.kind).toBe('allowed')
     expect(decision.cached).toBe(false)
   })
 
@@ -135,10 +136,11 @@ describe('the decisions of the access service', () => {
       routeId: 'route',
     })
     expect(decision.allow).toBe(false)
+    expect(decision.kind).toBe('denied')
     expect(decision.reason).toContain('role')
   })
 
-  test('a malformed answer is a denial', async () => {
+  test('a malformed answer is the unavailability of the service', async () => {
     const { client: access } = client({ body: '{"allow":"yes"}' })
     const decision = await access.decide({
       subject: 'user-1',
@@ -146,9 +148,10 @@ describe('the decisions of the access service', () => {
       routeId: 'route',
     })
     expect(decision.allow).toBe(false)
+    expect(decision.kind).toBe('unavailable')
   })
 
-  test('an answer that is not json is a denial', async () => {
+  test('an answer that is not json is the unavailability of the service', async () => {
     const { client: access } = client({ body: 'not json' })
     const decision = await access.decide({
       subject: 'user-1',
@@ -156,9 +159,10 @@ describe('the decisions of the access service', () => {
       routeId: 'route',
     })
     expect(decision.allow).toBe(false)
+    expect(decision.kind).toBe('unavailable')
   })
 
-  test('a status that is not a success is a denial', async () => {
+  test('a status that is not a success is the unavailability of the service', async () => {
     const { client: access } = client({ status: 503, body: '{"allow":true}' })
     const decision = await access.decide({
       subject: 'user-1',
@@ -166,9 +170,10 @@ describe('the decisions of the access service', () => {
       routeId: 'route',
     })
     expect(decision.allow).toBe(false)
+    expect(decision.kind).toBe('unavailable')
   })
 
-  test('a service that cannot be reached is a denial', async () => {
+  test('a service that cannot be reached is the unavailability of the service', async () => {
     const { client: access } = client({ error: new Error('the connection is closed') })
     const decision = await access.decide({
       subject: 'user-1',
@@ -176,6 +181,22 @@ describe('the decisions of the access service', () => {
       routeId: 'route',
     })
     expect(decision.allow).toBe(false)
+    expect(decision.kind).toBe('unavailable')
+  })
+
+  test('the unavailability of the service is never cached', async () => {
+    let calls = 0
+    const { client: access } = client({
+      error: new Error('the connection is closed'),
+      onRequest: () => {
+        calls += 1
+      },
+    })
+    const request = { subject: 'user-1', workspaceId: 'workspace-1', routeId: 'route' }
+    expect((await access.decide(request)).kind).toBe('unavailable')
+    expect((await access.decide(request)).kind).toBe('unavailable')
+    // The service is asked again: the failure is not a decision.
+    expect(calls).toBe(2)
   })
 })
 
@@ -320,7 +341,11 @@ describe('the cache of the decisions', () => {
   test('the cache of the process is bounded', async () => {
     const cache = new MemoryDecisionCache({ maxEntries: 10 })
     for (let index = 0; index < 100; index++) {
-      await cache.set(`key-${index}`, { allow: true, reason: '', decidedAt: Date.now() }, 5_000)
+      await cache.set(
+        `key-${index}`,
+        { allow: true, kind: 'allowed', reason: '', decidedAt: Date.now() },
+        5_000
+      )
     }
     expect(cache.size).toBeLessThanOrEqual(10)
   })

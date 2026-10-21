@@ -56,6 +56,14 @@ export interface StartedAccessService {
    * restarting the service.
    */
   setPolicy: (policy: AccessPolicy) => void
+  /**
+   * Makes the service unavailable, and available again.
+   *
+   * The tests use it to simulate an outage of the access service: the
+   * gateway has to refuse the request, and it has to say that the service
+   * is unavailable and not that the caller may not use the workspace.
+   */
+  setUnavailable: (unavailable: boolean) => void
   stop: () => Promise<void>
 }
 
@@ -70,6 +78,7 @@ export async function startAccessService(
 ): Promise<StartedAccessService> {
   assertFixtureAllowed('access service')
   let policy = options.policy ?? DEFAULT_POLICY
+  let unavailable = options.unavailable ?? false
   const requests: StartedAccessService['requests'] = []
 
   const server = Bun.serve({
@@ -83,7 +92,7 @@ export async function startAccessService(
       if (url.pathname !== '/v1/decisions') {
         return Response.json({ error: 'not_found' }, { status: 404 })
       }
-      if (options.unavailable) {
+      if (unavailable) {
         return Response.json({ error: 'unavailable' }, { status: 503 })
       }
       if (options.token) {
@@ -127,6 +136,9 @@ export async function startAccessService(
     requests,
     setPolicy: (next: AccessPolicy) => {
       policy = next
+    },
+    setUnavailable: (next: boolean) => {
+      unavailable = next
     },
     stop: async () => {
       await server.stop(true)

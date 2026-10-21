@@ -303,6 +303,27 @@ export async function dispatch(
         { cacheTtlMs: route.accessCacheTtlMs }
       )
       if (!decision.allow) {
+        // An outage of the access service is not a denial: the service
+        // could not be asked, or its answer could not be read. The caller
+        // is refused either way — the gateway fails closed — but the answer
+        // is `503` and not `403`, so the client knows it may retry and the
+        // operator sees an outage and not a policy.
+        if (decision.kind === 'unavailable') {
+          observer.recordAccessUnavailable(route.id)
+          logger.error('the access service is not available', {
+            requestId,
+            routeId: route.id,
+            workspaceId,
+          })
+          recordOutcome(dependencies, route.id, method, 503, started)
+          return jsonError(
+            503,
+            'access_unavailable',
+            'the access service could not be reached',
+            undefined,
+            { 'retry-after': '1' }
+          )
+        }
         observer.recordAuthFailure(route.id, failureReasonOf(decision.reason))
         logger.warn('workspace access denied', {
           requestId,

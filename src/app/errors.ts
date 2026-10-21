@@ -18,17 +18,21 @@ interface GatewayErrorBody {
  *
  * The body is `{"error": <code>, "message": <text>}`: the code is the
  * machine readable name of the failure, the text says what happened.
+ *
+ * The headers are added to the answer: a refusal that may be retried
+ * carries a `retry-after`, and the caller knows it may come back.
  */
 export function jsonError(
   status: number,
   code: string,
   message: string,
-  extra?: Record<string, unknown>
+  extra?: Record<string, unknown>,
+  headers?: Record<string, string>
 ): Response {
   const body: GatewayErrorBody = { error: code, message, ...extra }
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
   })
 }
 

@@ -111,8 +111,9 @@ Every other request runs these steps, in this order:
 9. **Cross-site guard.** Applied when the request carries the session
    cookie (§8). Refusal → `403 cross_site_request`.
 10. **Workspace check.** The placeholder is read, validated as a UUID when
-    `requireUuid` is set, and the access service is asked (§6). Denial →
-    `403 workspace_forbidden`.
+    `requireUuid` is set, and the access service is asked (§6). A denial →
+    `403 workspace_forbidden`; an outage of the access service → `503
+    access_unavailable`.
 11. **Dispatch.** A WebSocket upgrade (§10) or HTTP proxying (§11).
 
 The answers the gateway generates itself are JSON
@@ -350,7 +351,23 @@ Content-Type: application/json
 
 The answer is `{"allow": true}` or `{"allow": false, "reason": "…"}`. A
 status that is not a success, a body that is not JSON and a decision that is
-malformed are all a **denial**.
+malformed are all the **unavailability of the service**, and not a denial:
+only an explicit `{"allow": false}` denies a caller.
+
+The two refusals are not the same thing, and the gateway answers them
+differently:
+
+| The decision | The answer of the gateway | The metric |
+| --- | --- | --- |
+| `{"allow": false}` | `403 workspace_forbidden` | `shuttle_auth_failures_total{reason="access_denied"}` |
+| The service could not be asked, or its answer could not be read | `503 access_unavailable`, with a `retry-after` | `shuttle_access_unavailable_total` |
+
+The gateway fails closed in both cases: the request is refused. A denial is
+the policy of the platform and it is the same answer for every caller, while
+an outage is a failure of the infrastructure: the caller may retry it, and
+the operator has to be able to tell the two apart. An outage that answers
+`403` looks like a policy, and a policy that answers `503` looks like an
+outage.
 
 The reason of the service is never given to the caller: it describes the
 policy of the platform and it is not the business of the client.
@@ -875,6 +892,7 @@ The metrics:
 | `shuttle_requests_total` | `route`, `method`, `status` | Every request the gateway answered, the refusals included. |
 | `shuttle_request_errors_total` | `route` | The answers with a status of 5xx. |
 | `shuttle_auth_failures_total` | `route`, `reason` | The callers that were rejected. |
+| `shuttle_access_unavailable_total` | `route` | The requests that were refused because the access service could not be reached. |
 | `shuttle_cross_site_refusals_total` | `route` | The requests that came from another site. |
 | `shuttle_websocket_connections_total` | `route` | The accepted upgrades. |
 | `shuttle_websocket_refusals_total` | `reason` | The refused handshakes. |

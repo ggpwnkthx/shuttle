@@ -53,6 +53,9 @@ export class RedisDecisionCache implements DecisionCache {
       if (typeof parsed.allow !== 'boolean') return null
       return {
         allow: parsed.allow,
+        // A record that was written before the kind was carried is read as
+        // the decision it is: only an explicit decision is ever cached.
+        kind: parsed.kind ?? (parsed.allow ? 'allowed' : 'denied'),
         reason: typeof parsed.reason === 'string' ? parsed.reason : '',
         decidedAt: typeof parsed.decidedAt === 'number' ? parsed.decidedAt : Date.now(),
       }

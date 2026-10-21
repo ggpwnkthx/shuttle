@@ -20,6 +20,32 @@ afterAll(async () => {
   await harness.stop()
 })
 
+/**
+ * The metrics of the gateway, as a map of the name of a series to its
+ * value.
+ *
+ * The series that carry several labels are named by their labels without
+ * the route, so two routes do not add up to the same series: the tests
+ * compare the value of a reason and not the value of a route.
+ */
+async function readMetrics(): Promise<Map<string, number>> {
+  const response = await fetch(`${harness.gatewayUrl}/metrics`, {
+    headers: { authorization: `Bearer ${METRICS_TOKEN}` },
+  })
+  const text = await response.text()
+  const values = new Map<string, number>()
+  for (const line of text.split('\n')) {
+    const match = /^([a-z_]+)(\{[^}]*\})? ([0-9.]+)$/.exec(line)
+    if (!match) continue
+    const name = match[1]!
+    const labels = match[2] ?? ''
+    const reason = /reason="([^"]+)"/.exec(labels)?.[1]
+    const key = reason ? `${name}{reason="${reason}"}` : name
+    values.set(key, (values.get(key) ?? 0) + Number(match[3]))
+  }
+  return values
+}
+
 describe('the endpoints of the gateway', () => {
   test('the health is always available', async () => {
     const response = await fetch(`${harness.gatewayUrl}/healthz`)
@@ -180,6 +206,47 @@ describe('the workspace of a request', () => {
     expect(response.status).toBe(403)
     const body = (await response.json()) as { error: string }
     expect(body.error).toBe('workspace_forbidden')
+  })
+
+  test('an access service that is not available is not a denial', async () => {
+    const token = await harness.token()
+    harness.access.setUnavailable(true)
+    try {
+      const response = await fetch(`${harness.gatewayUrl}/ws/${WORKSPACE_ID}/`, {
+        headers: { host: 'api.shuttle.test', authorization: `Bearer ${token}` },
+      })
+      // The gateway fails closed: the request is refused. It is not the
+      // same refusal as a denial, though: the caller may retry and the
+      // operator sees an outage.
+      expect(response.status).toBe(503)
+      const body = (await response.json()) as { error: string }
+      expect(body.error).toBe('access_unavailable')
+      expect(response.headers.get('retry-after')).toBe('1')
+    } finally {
+      harness.access.setUnavailable(false)
+    }
+  })
+
+  test('an access service that is not available is counted apart', async () => {
+    const token = await harness.token()
+    const before = await readMetrics()
+    harness.access.setUnavailable(true)
+    try {
+      await fetch(`${harness.gatewayUrl}/ws/${WORKSPACE_ID}/`, {
+        headers: { host: 'api.shuttle.test', authorization: `Bearer ${token}` },
+      })
+    } finally {
+      harness.access.setUnavailable(false)
+    }
+    const after = await readMetrics()
+    // The outage is counted on its own counter.
+    expect(after.get('shuttle_access_unavailable_total') ?? 0).toBeGreaterThan(
+      before.get('shuttle_access_unavailable_total') ?? 0
+    )
+    // And it is not counted as a denial of a caller.
+    expect(after.get('shuttle_auth_failures_total{reason="access_denied"}')).toBe(
+      before.get('shuttle_auth_failures_total{reason="access_denied"}')
+    )
   })
 
   test('a caller that may use the workspace reaches the upstream', async () => {

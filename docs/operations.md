@@ -259,6 +259,7 @@ token does not match.
 | `shuttle_requests_total{route,method,status}` | Every answer of the gateway, the refusals included. | The traffic of the routes. |
 | `shuttle_request_errors_total{route}` | The answers with a status of 5xx. | An error of the gateway or of the upstream. |
 | `shuttle_auth_failures_total{route,reason}` | The callers that were rejected (`unauthenticated`, `missing_role`, `access_denied`). | A policy of the platform, not an error of the gateway. |
+| `shuttle_access_unavailable_total{route}` | The requests that were refused because the access service could not be reached. | The access service is restored. The gateway fails closed, so the callers are refused meanwhile. |
 | `shuttle_cross_site_refusals_total{route}` | The requests that came from another site. | An attack or a broken client. |
 | `shuttle_websocket_connections_total{route}` | The WebSockets that were accepted. | The capacity. |
 | `shuttle_websocket_refusals_total{reason}` | The handshakes that were refused. | The capacity, the origins. |
@@ -320,6 +321,7 @@ answered `200` and a body that was cut is a `200` with the outcome
 | Every request answers `404 no_route` | The ingress rewrites the `Host` header and does not report the public host. | The ingress sets `x-forwarded-host`, or the routes match the host the ingress sends. |
 | Every request answers `403 cross_site_request` | The same, with the origin the browser sends. | The ingress sets `x-forwarded-host` and `x-forwarded-proto`. |
 | `shuttle_shared_state_errors_total` grows | The shared state is degraded: the limiter fails open and the decisions are asked for again. | The shared state is restored. |
+| `shuttle_access_unavailable_total` grows | The access service is not reachable, or it answers something the gateway cannot read. | The access service is restored. The gateway fails closed: the callers are refused with `503 access_unavailable` until the service answers again. |
 | `shuttle_request_errors_total` grows for one route | The upstream of the route is broken. | The upstream is repaired. The other routes are unaffected. |
 | `shuttle_rate_limited_total` grows | A flood. | The limits are reviewed. The limiter protects the upstreams. |
 | `shuttle_cross_site_refusals_total` grows | A client of the platform sends requests from another site. | The origin of the client is added to `SHUTTLE_ALLOWED_ORIGINS`, or the client is fixed. |

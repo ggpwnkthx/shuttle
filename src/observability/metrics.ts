@@ -151,6 +151,8 @@ export interface Observer {
   recordRequest(observation: RequestObservation): void
   /** A caller was rejected. */
   recordAuthFailure(routeId: string, reason: AuthFailureReason): void
+  /** The access service could not be asked. */
+  recordAccessUnavailable(routeId: string): void
   /** A websocket was accepted. */
   recordWebsocket(routeId: string): void
   /** A websocket handshake was refused. */
@@ -174,6 +176,7 @@ export class MetricsStore implements Observer {
   #requests: Counter<'route' | 'method' | 'status'>
   #errors: Counter<'route'>
   #authFailures: Counter<'route' | 'reason'>
+  #accessUnavailable: Counter<'route'>
   #websockets: Counter<'route'>
   #duration: Histogram<'route'>
   #bytesIn: Counter
@@ -204,6 +207,12 @@ export class MetricsStore implements Observer {
       name: 'shuttle_auth_failures_total',
       help: 'Callers that were rejected.',
       labelNames: ['route', 'reason'],
+      registers: [this.#registry],
+    })
+    this.#accessUnavailable = new Counter({
+      name: 'shuttle_access_unavailable_total',
+      help: 'Requests that were refused because the access service could not be reached.',
+      labelNames: ['route'],
       registers: [this.#registry],
     })
     this.#websockets = new Counter({
@@ -289,6 +298,12 @@ export class MetricsStore implements Observer {
     this.#authFailures.inc({ route: this.#route(routeId), reason })
   }
 
+  recordAccessUnavailable(routeId: string): void {
+    // An outage of the access service is not a denial of a caller: it is
+    // counted apart, so an operator can tell the two apart.
+    this.#accessUnavailable.inc({ route: this.#route(routeId) })
+  }
+
   recordWebsocket(routeId: string): void {
     this.#websockets.inc({ route: this.#route(routeId) })
   }
@@ -349,6 +364,7 @@ export function createSilentObserver(): Observer {
     requestFinished: () => undefined,
     recordRequest: () => undefined,
     recordAuthFailure: () => undefined,
+    recordAccessUnavailable: () => undefined,
     recordWebsocket: () => undefined,
     recordWebsocketRefusal: () => undefined,
     recordConfigReload: () => undefined,

@@ -11,7 +11,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { AccessDecision, AccessRequest } from './decision'
+import type { AccessDecision, AccessDecisionKind, AccessRequest } from './decision'
 
 /** The transport of the access service. */
 export interface AccessTransport {
@@ -32,6 +32,8 @@ export interface AccessTransport {
 /** A decision of the access service, as it is cached. */
 export interface CachedDecision {
   allow: boolean
+  /** The kind of the decision: only an explicit one is ever cached. */
+  kind: AccessDecisionKind
   reason: string
   decidedAt: number
 }
@@ -134,8 +136,13 @@ export class AccessClient {
       // Fail closed: without a valid decision the request is denied. The
       // failure is not cached: the service may be able to answer the next
       // request.
+      //
+      // The failure is not a denial either: it is the unavailability of the
+      // service, and the caller is told so, so it can retry, and the
+      // operator sees it as an outage and not as a policy.
       return {
         allow: false,
+        kind: 'unavailable',
         reason: `the access service is not available`,
         cached: false,
         decidedAt: Date.now(),
@@ -148,6 +155,7 @@ export class AccessClient {
         key,
         {
           allow: decision.allow,
+          kind: decision.kind,
           reason: decision.reason,
           decidedAt: decision.decidedAt,
         },
@@ -204,6 +212,9 @@ export class AccessClient {
       }),
       signal: AbortSignal.timeout(this.#timeoutMs),
     })
+    // Every failure of the service is the unavailability of the service and
+    // not a decision: only an answer that says `allow: false` denies a
+    // caller.
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`the access service answered with the status ${response.status}`)
     }
@@ -218,6 +229,7 @@ export class AccessClient {
     }
     return {
       allow: body.allow,
+      kind: body.allow ? 'allowed' : 'denied',
       reason: typeof body.reason === 'string' ? body.reason : body.allow ? 'allowed' : 'denied',
       cached: false,
       decidedAt: Date.now(),

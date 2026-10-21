@@ -177,9 +177,14 @@ export function describeDecisionCache(label: string, factory: () => DecisionCach
   describe(`the cache of the decisions in ${label}`, () => {
     test('a decision that was cached is read again', async () => {
       const cache = factory()
-      await cache.set('key-1', { allow: true, reason: '', decidedAt: 1234 }, 60_000)
+      await cache.set(
+        'key-1',
+        { allow: true, kind: 'allowed', reason: '', decidedAt: 1234 },
+        60_000
+      )
       const read = await cache.get('key-1')
       expect(read?.allow).toBe(true)
+      expect(read?.kind).toBe('allowed')
       expect(read?.decidedAt).toBe(1234)
     })
 
@@ -190,22 +195,27 @@ export function describeDecisionCache(label: string, factory: () => DecisionCach
 
     test('a refusal is cached as well', async () => {
       const cache = factory()
-      await cache.set('key-3', { allow: false, reason: 'missing_role', decidedAt: 7 }, 60_000)
+      await cache.set(
+        'key-3',
+        { allow: false, kind: 'denied', reason: 'missing_role', decidedAt: 7 },
+        60_000
+      )
       const read = await cache.get('key-3')
       expect(read?.allow).toBe(false)
+      expect(read?.kind).toBe('denied')
       expect(read?.reason).toBe('missing_role')
     })
 
     test('a decision that is deleted is gone', async () => {
       const cache = factory()
-      await cache.set('key-4', { allow: true, reason: '', decidedAt: 1 }, 60_000)
+      await cache.set('key-4', { allow: true, kind: 'allowed', reason: '', decidedAt: 1 }, 60_000)
       await cache.delete('key-4')
       expect(await cache.get('key-4')).toBeNull()
     })
 
     test('a decision that is over its lifetime is not served', async () => {
       const cache = factory()
-      await cache.set('key-5', { allow: true, reason: '', decidedAt: 1 }, 100)
+      await cache.set('key-5', { allow: true, kind: 'allowed', reason: '', decidedAt: 1 }, 100)
       expect(await cache.get('key-5')).not.toBeNull()
       await Bun.sleep(200)
       expect(await cache.get('key-5')).toBeNull()
@@ -213,7 +223,7 @@ export function describeDecisionCache(label: string, factory: () => DecisionCach
 
     test('a decision without a lifetime is not cached', async () => {
       const cache = factory()
-      await cache.set('key-6', { allow: true, reason: '', decidedAt: 1 }, 0)
+      await cache.set('key-6', { allow: true, kind: 'allowed', reason: '', decidedAt: 1 }, 0)
       expect(await cache.get('key-6')).toBeNull()
     })
   })

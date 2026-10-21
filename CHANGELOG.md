@@ -20,6 +20,21 @@ describe, and the difference is only visible in production. The version is
 now checked before the process reads its environment, and the gateway stops
 with a message that names the version it needs.
 
+### An outage of the access service is not a denial
+
+The gateway asks the access service whether a caller may use a workspace and
+it fails closed: without a decision, the request is refused. The two
+refusals were the same, and that hid the outage — an operator could not
+tell a failing access service from a policy that denies the callers, and
+the metric of the denials counted the outage as a denial.
+
+Only an explicit `{"allow": false}` is a denial, and it is still
+`403 workspace_forbidden`. A service that could not be asked, or an answer
+that could not be read, is the unavailability of the service: the gateway
+answers `503 access_unavailable` with a `retry-after`, so the caller knows
+it may come back, and the outage is counted on
+`shuttle_access_unavailable_total` and not among the denials.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the

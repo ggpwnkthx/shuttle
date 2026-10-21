@@ -4,12 +4,37 @@
  * A decision is explicit: the service says whether the caller may use the
  * workspace or not. A decision that cannot be read is a denial: the gateway
  * never lets a caller in because the service had a hiccup.
+ *
+ * The decision carries its **kind**, and the kind is what the caller and
+ * the operator see:
+ *
+ * | Kind | What it means | What the caller gets |
+ * | --- | --- | --- |
+ * | `allowed` | The service said yes. | The request is forwarded. |
+ * | `denied` | The service said no. | `403 workspace_forbidden` |
+ * | `unavailable` | The service could not be asked, or its answer could not be read. | `503 access_unavailable` |
+ *
+ * The two refusals are not the same thing: a denial is the policy of the
+ * platform and it is the same answer for every caller, while an outage is a
+ * failure of the infrastructure and it is worth retrying. Answering `403`
+ * to an outage tells the caller that the workspace is not available to it,
+ * and an outage that looks like a denial is an outage nobody pages on.
  */
+
+/** The kind of a decision of the access service. */
+export type AccessDecisionKind = 'allowed' | 'denied' | 'unavailable'
 
 /** A decision of the access service. */
 export interface AccessDecision {
   /** True when the caller may use the workspace. */
   allow: boolean
+  /**
+   * The kind of the decision.
+   *
+   * `denied` is an explicit decision of the service and `unavailable` is a
+   * failure to obtain one. Only an explicit decision is cached.
+   */
+  kind: AccessDecisionKind
   /** The reason of the service. It is never given to the caller. */
   reason: string
   /** True when the decision was served from the cache. */
