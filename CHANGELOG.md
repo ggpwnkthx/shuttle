@@ -55,6 +55,18 @@ they replace the value of the defaults:
   service on that route. It is the latency of a revocation there: a route
   that sets `0` asks the service for every request.
 
+### The handshake of a websocket follows the header policy
+
+The handshake with the upstream is a request: it follows the same header
+policy as the requests of the http path.
+
+Before this release the handshake copied the headers of the caller, and the
+cookie of the session of the gateway reached the upstream. The session of a
+caller is a credential, and an upstream that holds it can act as the
+caller. The cookies of the gateway are stripped now, the identity of the
+caller is written by the gateway, and the token of the caller is forwarded
+only when the route says so.
+
 ### The host of a request
 
 The `x-forwarded-host` of a **trusted proxy** is now honoured. It is the

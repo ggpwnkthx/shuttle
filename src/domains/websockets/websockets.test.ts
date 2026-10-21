@@ -66,6 +66,7 @@ function context(overrides: Partial<WebSocketUpgradeContext> = {}): WebSocketUpg
     search: '',
     method: 'GET',
     headers: new Headers(),
+    upstreamHeaders: {},
     requestId: 'req-1',
     cookies: [],
     carriesSessionCookie: false,
@@ -330,7 +331,7 @@ describe('the handshake of a websocket', () => {
     await first
   })
 
-  test('the identity of the caller is written into the handshake of the upstream', async () => {
+  test('the handshake of the upstream carries the headers of the application', async () => {
     let headers: Record<string, string> = {}
     const upstream = {
       connected: 0,
@@ -385,17 +386,23 @@ describe('the handshake of a websocket', () => {
     await websockets.handle(
       new Request('https://api.example.com/ws/123'),
       context({
-        identity: { subject: 'user-1', roles: ['admin'], workspaceId: 'workspace-1' },
-        signature: 'v3=abc',
+        // The header policy of the application: the cookies of the gateway
+        // are already gone and the identity is already written.
+        upstreamHeaders: {
+          'x-shuttle-user': 'user-1',
+          'x-shuttle-roles': 'admin',
+          'x-shuttle-signature': 'v3=abc',
+        },
         headers: new Headers({ 'sec-websocket-key': 'the-key', cookie: 'app=1' }),
       }),
       { upgrade: async () => ({ leg: fakeLeg(), events: {} }) }
     )
     expect(headers['x-shuttle-user']).toBe('user-1')
     expect(headers['x-shuttle-roles']).toBe('admin')
-    expect(headers['x-shuttle-workspace']).toBe('workspace-1')
     expect(headers['x-shuttle-signature']).toBe('v3=abc')
-    // The handshake headers of the caller are not forwarded.
+    // The headers of the caller are not forwarded: the domain never builds
+    // the headers of the handshake itself.
+    expect(headers.cookie).toBeUndefined()
     expect(headers['sec-websocket-key']).toBeUndefined()
   })
 })

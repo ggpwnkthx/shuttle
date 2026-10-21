@@ -30,6 +30,7 @@ import {
   buildClientHeaders,
   buildUpstreamHeaders,
   buildUpstreamTarget,
+  buildWebsocketUpstreamHeaders,
   checkCrossSite,
   resolveForwardingContext,
   rewriteLocation,
@@ -345,6 +346,28 @@ export async function dispatch(
       recordOutcome(dependencies, route.id, method, 503, started)
       return jsonError(503, 'websocket_unavailable', 'the websockets are not available')
     }
+    // The handshake with the upstream follows the same header policy as the
+    // requests of the http path: the cookies of the gateway never reach an
+    // upstream and the identity is written by the gateway.
+    const upstreamHeaders = buildWebsocketUpstreamHeaders({
+      incoming: context.req.raw.headers,
+      forwarding,
+      identity,
+      signature: identity
+        ? signIdentity(
+            identity,
+            {
+              method,
+              path: targetUrl.pathname,
+              query: targetUrl.search,
+              host: forwarding.host,
+            },
+            dependencies.identityKey
+          )
+        : undefined,
+      gatewayCookies: dependencies.gatewayCookies,
+      forwardAuthorization: route.forwardAuthorization,
+    })
     const outcome = await dependencies.websockets.handle(
       context.req.raw,
       {
@@ -354,19 +377,7 @@ export async function dispatch(
         search: url.search,
         method,
         headers: context.req.raw.headers,
-        identity,
-        signature: identity
-          ? signIdentity(
-              identity,
-              {
-                method,
-                path: targetUrl.pathname,
-                query: targetUrl.search,
-                host: forwarding.host,
-              },
-              dependencies.identityKey
-            )
-          : undefined,
+        upstreamHeaders,
         requestId,
         cookies: context.get('cookies').map((cookie) => serializeCookie(cookie)),
         carriesSessionCookie: sessionCookie !== undefined,

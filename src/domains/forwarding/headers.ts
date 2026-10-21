@@ -192,6 +192,20 @@ export interface UpstreamHeadersOptions {
 }
 
 /**
+ * The headers of the handshake of a websocket.
+ *
+ * They belong to the handshake of the caller: the upstream has to make its
+ * own handshake, with its own key and its own version.
+ */
+const WEBSOCKET_HANDSHAKE_HEADERS: readonly string[] = [
+  'sec-websocket-key',
+  'sec-websocket-version',
+  'sec-websocket-extensions',
+  'sec-websocket-accept',
+  'sec-websocket-protocol',
+]
+
+/**
  * Rebuilds the header set that is forwarded upstream.
  *
  * - the hop-by-hop headers and the headers they nominate are removed
@@ -246,6 +260,27 @@ export function buildUpstreamHeaders(options: UpstreamHeadersOptions): Headers {
   }
 
   return headers
+}
+
+/**
+ * Rebuilds the header set of the handshake with an upstream websocket.
+ *
+ * The handshake is a request: it follows the same header policy as the
+ * requests of the http path. The cookies of the gateway never reach an
+ * upstream, the identity is written by the gateway, and the headers of the
+ * handshake of the caller are not forwarded: the upstream makes its own
+ * handshake.
+ */
+export function buildWebsocketUpstreamHeaders(
+  options: UpstreamHeadersOptions
+): Record<string, string> {
+  const headers = buildUpstreamHeaders(options)
+  const result: Record<string, string> = {}
+  for (const [key, value] of headers) {
+    if (WEBSOCKET_HANDSHAKE_HEADERS.includes(key.toLowerCase())) continue
+    result[key.toLowerCase()] = value
+  }
+  return result
 }
 
 /**

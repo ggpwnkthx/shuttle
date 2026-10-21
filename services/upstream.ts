@@ -81,7 +81,7 @@ export function createUpstream(options: UpstreamOptions = {}): StartedUpstream {
     }
   }
 
-  const server = Bun.serve<{ service: string }>({
+  const server = Bun.serve<{ service: string; headers: Record<string, string> }>({
     port: options.port ?? 0,
     hostname: options.hostname ?? '127.0.0.1',
     idleTimeout: 60,
@@ -112,8 +112,11 @@ export function createUpstream(options: UpstreamOptions = {}): StartedUpstream {
           .split(',')
           .map((value) => value.trim())
           .filter(Boolean)
+        const described = describe(request)
         const upgraded = server.upgrade(request, {
-          data: { service: name },
+          // The headers of the handshake are kept, so a test can assert on
+          // the header policy of the gateway.
+          data: { service: name, headers: described.headers as Record<string, string> },
           headers: offered.length > 0 ? { 'sec-websocket-protocol': offered[0]! } : undefined,
         })
         if (upgraded) return new Response(null)
@@ -265,7 +268,8 @@ export function createUpstream(options: UpstreamOptions = {}): StartedUpstream {
     },
     websocket: {
       open(ws) {
-        ws.send(JSON.stringify({ service: name, event: 'open' }))
+        const data = ws.data as { service: string; headers?: Record<string, string> }
+        ws.send(JSON.stringify({ service: name, event: 'open', headers: data.headers ?? {} }))
       },
       message(ws, message: string | Uint8Array) {
         ws.send(message)

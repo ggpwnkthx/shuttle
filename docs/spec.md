@@ -586,6 +586,11 @@ headers and the signature) **before** it answers the client, so the client
 learns the outcome and the subprotocol the upstream selected. The handshake
 headers of the client are not forwarded.
 
+**The handshake follows the header policy of §7.1.** It is a request to the
+upstream: the cookies of the gateway never reach it, the identity of the
+caller is written by the gateway, and the `Authorization` header of the
+caller is forwarded only when the route says so (`forwardAuthorization`).
+
 **The origin of the handshake.** A handshake is a `GET`, so the guard of §8
 lets it through. A WebSocket is not a `GET` though: it opens a
 bidirectional connection that stays open, and the page of another site could
@@ -935,3 +940,4 @@ lists are numbered independently.
 | 28 | The policy of the cross site requests | It is a property of the route: `crossSite` refuses the navigations from another site on the routes that declare it, and the policy of the deployment applies to the others (§8). |
 | 29 | The `Authorization` header of the caller | It is forwarded to the upstream by default, and a route that does not need it says so with `forwardAuthorization: false` (§7.1). |
 | 30 | The latency of a revocation | It is a property of the route: `accessCacheTtlMs` is the lifetime of the cached decisions of that route, and `0` makes the revocation on it immediate (§6). |
+| 31 | The handshake of a websocket | It follows the header policy of the http path: the cookies of the gateway never reach an upstream (§7.1, §10). |

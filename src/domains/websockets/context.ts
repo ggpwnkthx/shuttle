@@ -19,10 +19,15 @@ export interface WebSocketUpgradeContext {
   method: string
   /** The headers of the request. */
   headers: Headers
-  /** The identity of the caller, when it was authenticated. */
-  identity?: { subject: string; email?: string; roles: string[]; workspaceId?: string }
-  /** The signature of the identity. */
-  signature?: string
+  /**
+   * The headers of the handshake with the upstream.
+   *
+   * The application builds them with the header policy of the forwarding
+   * domain: the cookies of the gateway never reach an upstream, the
+   * identity is written by the gateway and the headers of the handshake of
+   * the caller are not forwarded.
+   */
+  upstreamHeaders: Record<string, string>
   /** The identifier of the request. */
   requestId: string
   /** The cookies that have to be written into the answer of the handshake. */

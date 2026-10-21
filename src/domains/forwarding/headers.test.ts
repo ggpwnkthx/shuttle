@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   buildClientHeaders,
   buildUpstreamHeaders,
+  buildWebsocketUpstreamHeaders,
   connectionNominatedHeaders,
   resolveForwardingContext,
   stripGatewayCookies,
@@ -285,5 +286,60 @@ describe('the authorization of the caller', () => {
     })
     expect(withIdentity.get('authorization')).toBeNull()
     expect(withIdentity.get('x-shuttle-user')).toBe('user-1')
+  })
+})
+
+describe('the headers of the handshake of a websocket', () => {
+  test('the cookies of the gateway never reach an upstream', () => {
+    const headers = buildWebsocketUpstreamHeaders({
+      incoming: new Headers({
+        cookie: 'shuttle_session=the-session; app=1',
+        authorization: 'Bearer the-token',
+      }),
+      forwarding: context(),
+      gatewayCookies: GATEWAY_COOKIES,
+    })
+    expect(headers.cookie).toBe('app=1')
+    expect(headers.authorization).toBe('Bearer the-token')
+  })
+
+  test('the identity of the caller is written by the gateway', () => {
+    const headers = buildWebsocketUpstreamHeaders({
+      incoming: new Headers({ 'x-shuttle-user': 'attacker' }),
+      forwarding: context(),
+      identity: writtenIdentity({ subject: 'user-1', roles: ['admin'] }),
+      signature: 'v3=abc',
+      gatewayCookies: GATEWAY_COOKIES,
+    })
+    expect(headers['x-shuttle-user']).toBe('user-1')
+    expect(headers['x-shuttle-roles']).toBe('admin')
+    expect(headers['x-shuttle-signature']).toBe('v3=abc')
+  })
+
+  test('the handshake headers of the caller are not forwarded', () => {
+    const headers = buildWebsocketUpstreamHeaders({
+      incoming: new Headers({
+        'sec-websocket-key': 'the-key',
+        'sec-websocket-version': '13',
+        'sec-websocket-protocol': 'chat',
+        'sec-websocket-extensions': 'permessage-deflate',
+      }),
+      forwarding: context(),
+      gatewayCookies: GATEWAY_COOKIES,
+    })
+    expect(headers['sec-websocket-key']).toBeUndefined()
+    expect(headers['sec-websocket-version']).toBeUndefined()
+    expect(headers['sec-websocket-protocol']).toBeUndefined()
+    expect(headers['sec-websocket-extensions']).toBeUndefined()
+  })
+
+  test('a route that does not need the token does not receive it', () => {
+    const headers = buildWebsocketUpstreamHeaders({
+      incoming: new Headers({ authorization: 'Bearer the-token' }),
+      forwarding: context(),
+      gatewayCookies: GATEWAY_COOKIES,
+      forwardAuthorization: false,
+    })
+    expect(headers.authorization).toBeUndefined()
   })
 })

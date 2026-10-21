@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { WebSocket as NodeWebSocket } from 'ws'
 import { createHarness, WORKSPACE_ID, type Harness } from './harness'
 
 /**
@@ -59,6 +60,11 @@ function routes(context: { upstreamA: string; upstreamB: string }): unknown[] {
       websocket: true,
     },
   ]
+}
+
+/** The port of the gateway, as a number. */
+function portOf(url: string): number {
+  return Number(new URL(url).port)
 }
 
 describe('the policies of a route', () => {
@@ -147,5 +153,36 @@ describe('the policies of a route', () => {
     // The revocation of that route is immediate: the service answered for
     // every request.
     expect(harness.access.requests.length - before).toBe(3)
+  })
+
+  test('the cookie of the gateway does not reach the upstream of a websocket', async () => {
+    const login = await harness.login()
+    const socket = new NodeWebSocket(`ws://localhost:${portOf(harness.gatewayUrl)}/socket/`, {
+      headers: {
+        host: 'socket.shuttle.test',
+        cookie: login.cookie,
+        origin: 'http://socket.shuttle.test',
+      },
+    })
+
+    const message = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the connection did not answer')), 5_000)
+      socket.on('message', (data: Buffer) => {
+        clearTimeout(timer)
+        resolve(data.toString('utf8'))
+      })
+      socket.on('error', (error: Error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+    })
+    socket.close()
+
+    const greeting = JSON.parse(message) as { headers: Record<string, string> }
+    // The session of the caller is a credential of the gateway: it never
+    // reaches an upstream.
+    expect(greeting.headers.cookie).toBeUndefined()
+    // The identity of the caller does, written by the gateway.
+    expect(greeting.headers['x-shuttle-user']).toBe('user-alice')
   })
 })

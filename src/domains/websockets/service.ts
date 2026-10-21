@@ -95,15 +95,6 @@ export interface WebSocketServicePort {
   ): Promise<WebSocketOutcome>
 }
 
-/** The headers of the client handshake that belong to the handshake itself. */
-const HANDSHAKE_HEADERS = [
-  'sec-websocket-key',
-  'sec-websocket-version',
-  'sec-websocket-extensions',
-  'sec-websocket-accept',
-  'sec-websocket-protocol',
-]
-
 /** The subprotocols the caller offered. */
 export function offeredProtocols(header: string | undefined): string[] {
   if (!header) return []
@@ -195,10 +186,9 @@ export class WebSocketService implements WebSocketServicePort {
     // 3. The upstream is connected first: the caller learns the outcome of
     // the handshake and the subprotocol the upstream selected.
     const url = buildWebsocketTarget(context.upstream, context.path, context.search)
-    const headers = this.#headersOf(context)
     const request_: UpstreamHandshakeRequest = {
       url,
-      headers,
+      headers: context.upstreamHeaders,
       protocols: offeredProtocols(context.headers.get('sec-websocket-protocol') ?? undefined),
       timeoutMs: this.#settings.handshakeTimeoutMs,
     }
@@ -211,6 +201,7 @@ export class WebSocketService implements WebSocketServicePort {
         routeId: context.routeId,
         kind: outcome.kind,
         reason: outcome.kind === 'refused' ? outcome.status : outcome.reason,
+        ...(outcome.kind === 'failed' ? { message: outcome.message } : {}),
       })
       this.#observer.recordWebsocketRefusal(
         outcome.kind === 'refused' ? 'upstream_refused' : 'upstream_unavailable'
@@ -288,32 +279,7 @@ export class WebSocketService implements WebSocketServicePort {
     // The answer of the upgrade was already sent by the runtime.
     return { kind: 'upgraded' }
   }
-
-  /** The headers of the handshake with the upstream. */
-  #headersOf(context: WebSocketUpgradeContext): Record<string, string> {
-    const headers: Record<string, string> = {}
-    for (const [name, value] of context.headers) {
-      const lower = name.toLowerCase()
-      // The handshake headers of the caller belong to the handshake of the
-      // caller: the keys, the version and the compression of the client do
-      // not apply to the handshake of the gateway.
-      if (HANDSHAKE_HEADERS.includes(lower)) continue
-      if (lower === 'host' || lower === 'connection' || lower === 'upgrade') continue
-      headers[lower] = value
-    }
-    if (context.identity) {
-      headers['x-shuttle-user'] = context.identity.subject
-      if (context.identity.email) headers['x-shuttle-email'] = context.identity.email
-      headers['x-shuttle-roles'] = context.identity.roles.join(',')
-      if (context.identity.workspaceId) {
-        headers['x-shuttle-workspace'] = context.identity.workspaceId
-      }
-    }
-    if (context.signature) headers['x-shuttle-signature'] = context.signature
-    return headers
-  }
 }
-
 /** Closes the upstream leg of a connection that was not established. */
 function closeUpstream(socket: UpstreamSocket): void {
   try {

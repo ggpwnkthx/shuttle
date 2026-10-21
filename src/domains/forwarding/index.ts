@@ -37,6 +37,7 @@ export {
   IDENTITY_REQUEST_HEADERS,
   buildClientHeaders,
   buildUpstreamHeaders,
+  buildWebsocketUpstreamHeaders,
   connectionNominatedHeaders,
   cookieNameOf,
   isGatewaySetCookie,
