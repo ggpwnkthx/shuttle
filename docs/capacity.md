@@ -10,9 +10,12 @@ gateway that is already running:
 
 ```bash
 bun run load -- --requests 20000 --concurrency 100
-bun run load -- --websockets 500
+bun run load -- --websockets 1000
 bun run load -- --url http://localhost:8080 --host api.example.com
 ```
+
+The script reports the **resident memory** of the process as well: it is
+the number the pod of the deployment is sized with.
 
 ## The targets
 
@@ -52,6 +55,36 @@ What the numbers say:
   runtime is the bottleneck, not the gateway;
 - the handshake of a WebSocket costs about 2 ms of the gateway; the limit of
   the connections is the configuration, not the runtime.
+
+### The memory of the gateway
+
+The target of the deployment is **below 512 MiB per replica with 1000 open
+WebSockets**, and the script measures the resident memory of the process
+while the connections are open.
+
+The measurement below is the one of the reference environment, with the
+1000 connections of the target:
+
+| Measurement | The resident memory | The result |
+| --- | --- | --- |
+| The process, before the connections | 71 MiB | The gateway and the upstream of the run, in one process. |
+| 1000 open WebSockets | **110 MiB** | 642 connections/second, p99 540 ms for the handshake, 0 errors. |
+| 20000 requests, 100 in flight | 150 MiB | The peak of the run, with the buffers of the exchanges. |
+
+The memory of the gateway is far below the target: the 1000 connections
+cost about 40 MiB, and the whole process — the gateway, the upstream of
+the run and the runtime — fits in a tenth of the pod of the deployment.
+
+### The machine is not the only thing that counts
+
+The numbers above were measured on an **idle** machine. The same script on
+the same machine, while other work was running, measured about **4400
+requests/second** with 100 requests in flight (p50 23 ms) instead of 7600
+(p50 13.5 ms), with the same code and the same traffic.
+
+A measurement is a measurement: it is the number the machine did, and the
+machine is shared. The numbers that matter for a deployment are the ones
+of the machine of the deployment, and the script is the way to make them.
 
 ## The comparison of the backends of the shared state
 

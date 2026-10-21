@@ -84,6 +84,14 @@ private key, the gateway now warns in its log when it signs with the
 symmetric key, and the format is removed in the first release that is not
 a `0.x`.
 
+### The memory of the gateway is measured at the target of the deployment
+
+The capacity of the deployment is 512 MiB per replica with 1000 open
+WebSockets, and the measurement of the release used 500 of them and
+reported the heap of the process. The script of the load now reports the
+resident memory of the process, and the numbers of the release are
+measured with the 1000 connections of the target: [capacity.md](docs/capacity.md).
+
 ### The failover of a route reaches an upstream that does not answer
 
 A route may name several upstreams, and the gateway tries them in the order

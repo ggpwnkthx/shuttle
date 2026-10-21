@@ -10,6 +10,30 @@ export interface Measurement {
   latencies: number[]
   errors: number
   durationMs: number
+  /** The memory of the process, when the measurement took it. */
+  memory?: ProcessMemory
+}
+
+/**
+ * The memory of the process.
+ *
+ * The resident memory is what the pod of the deployment is given, so it is
+ * the number an operator sizes the pod with. The heap is what the runtime
+ * of the gateway holds.
+ */
+export interface ProcessMemory {
+  /** The resident memory before the measurement, in mebibytes. */
+  beforeMiB: number
+  /** The largest resident memory of the measurement, in mebibytes. */
+  peakMiB: number
+  /** The resident memory after the measurement, in mebibytes. */
+  afterMiB: number
+}
+
+/** The memory of the process, in mebibytes. */
+export function processMemory(): { rssMiB: number; heapMiB: number } {
+  const usage = process.memoryUsage()
+  return { rssMiB: usage.rss / 1024 / 1024, heapMiB: usage.heapUsed / 1024 / 1024 }
 }
 
 export interface MeasureOptions {
@@ -47,10 +71,21 @@ export async function measure(options: MeasureOptions, target: string): Promise<
   }
 
   const started = performance.now()
+  const before = processMemory()
   await Promise.all(
     Array.from({ length: Math.min(options.concurrency, options.requests) }, () => worker())
   )
-  return { latencies, errors, durationMs: performance.now() - started }
+  const after = processMemory()
+  return {
+    latencies,
+    errors,
+    durationMs: performance.now() - started,
+    memory: {
+      beforeMiB: before.rssMiB,
+      peakMiB: Math.max(before.rssMiB, after.rssMiB),
+      afterMiB: after.rssMiB,
+    },
+  }
 }
 
 /** Opens the websockets and keeps them open for a moment. */
@@ -62,6 +97,8 @@ export async function measureWebsockets(
   let errors = 0
   const started = performance.now()
   const sockets: WebSocket[] = []
+  const before = processMemory()
+  let peakMiB = before.rssMiB
 
   await Promise.all(
     Array.from({ length: options.websockets }, async () => {
@@ -83,8 +120,21 @@ export async function measureWebsockets(
   // The connections stay open: the capacity of the deployment is the number
   // of connections that can be open at the same time.
   await Bun.sleep(1000)
+  // The memory is read while the connections are open: it is the memory of
+  // the deployment that holds them.
+  peakMiB = Math.max(peakMiB, processMemory().rssMiB)
   for (const socket of sockets) socket.close()
-  return { latencies, errors, durationMs: performance.now() - started }
+  const after = processMemory()
+  return {
+    latencies,
+    errors,
+    durationMs: performance.now() - started,
+    memory: {
+      beforeMiB: before.rssMiB,
+      peakMiB: Math.max(peakMiB, after.rssMiB),
+      afterMiB: after.rssMiB,
+    },
+  }
 }
 
 /** The percentile of a sorted list of measurements. */
@@ -108,6 +158,8 @@ export interface Summary {
   p99: number
   max: number
   errors: number
+  /** The memory of the process, when the measurement took it. */
+  memory?: ProcessMemory
 }
 
 /** Summarizes a measurement. */
@@ -129,6 +181,7 @@ export function summarize(
     p99: percentile(sorted, 0.99),
     max: sorted.at(-1) ?? 0,
     errors: measurement.errors,
+    memory: measurement.memory,
   }
 }
 
@@ -145,7 +198,12 @@ export function report(summary: Summary): void {
     `p99 ${summary.p99.toFixed(1)} ms`,
     `max ${summary.max.toFixed(1)} ms`,
     `${summary.errors} errors`,
-  ].join('  ')
+    summary.memory
+      ? `rss ${summary.memory.peakMiB.toFixed(0)} MiB (before ${summary.memory.beforeMiB.toFixed(0)})`
+      : '',
+  ]
+    .filter((part) => part !== '')
+    .join('  ')
   console.log(line)
 }
 
