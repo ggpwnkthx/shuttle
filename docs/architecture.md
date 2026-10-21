@@ -9,6 +9,13 @@ The rules are checked by `scripts/architecture.ts`, which runs in the test
 suite and in the CI workflow, so a violation fails the build instead of
 being noticed in a review.
 
+The names of the environment live in `src/runtime/env.ts` and nowhere else.
+`scripts/environment.ts` checks that the example and the manual of the
+deployment describe them: a variable that is not described is a variable
+nobody sets, and a variable that is described and does not exist is a
+setting that looks active but is not. It runs in the test suite and in the
+CI workflow as well.
+
 ## The layers
 
 | Path | Owns |

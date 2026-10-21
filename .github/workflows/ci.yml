@@ -46,6 +46,9 @@ jobs:
       - name: the versions of the project agree
         run: bun run versions
 
+      - name: the environment and its documentation agree
+        run: bun run environment
+
       - name: unit and contract tests
         run: bun test src test/contract
 

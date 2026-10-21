@@ -173,6 +173,21 @@ request left the gateway to the final headers of the answer, and it is not
 the latency of the gateway, which also holds the authentication, the
 limits and the access service.
 
+### The environment and its documentation cannot drift apart
+
+The names of the environment live in `src/runtime/env.ts` and nowhere else,
+but the example and the manual of the deployment describe them for the
+operator, and the drift between the two was found in a review every time.
+
+The check is in the build now: `bun run environment` verifies that every
+variable of the gateway is in the example and that every variable the
+gateway refuses to start without in production is described in the manual.
+A variable that is described and does not exist is reported as well: a
+setting that looks active but is not is a security hole.
+
+The check found two variables that were missing from the example the day it
+was written.
+
 ## 0.4.0
 
 The release that makes the backend of the shared state a choice of the
