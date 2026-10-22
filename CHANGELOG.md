@@ -3,7 +3,13 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
-## Unreleased
+## 0.5.0
+
+The release that makes the gateway survive what happens around it: an
+upstream that stops answering, an access service that is unreachable, and
+a caller whose account has to be ended at once. The contracts of the
+release are extended and never changed: a deployment that was written
+against 0.4.0 keeps working without a change.
 
 ### The reference verifier of the identity binds the version, the algorithm and the key
 
@@ -23,7 +29,10 @@ refused. There is no fallback from one algorithm to the other.
 
 The wire format of the gateway is untouched: the gateway signs exactly as
 it did, and the upstreams that verify `v5` with the public key keep
-working. The legacy `v4` support of the gateway itself lives where it
+working. The specification says it now (§7.4): the verification of an
+upstream **binds** the version, the algorithm and the key, and it refuses
+a signature of another kind. An upstream that already did that keeps
+working; the legacy `v4` support of the gateway itself lives where it
 lived, in `src/domains/forwarding/identity.ts`.
 
 ### The repository of the project and the projects around it

@@ -9,9 +9,9 @@ a vulnerability.
 
 | Version | Supported |
 | --- | --- |
-| 0.4.x | Yes |
+| 0.5.x | Yes |
 
-The gateway is at 0.4.0 and the contract of the release is in
+The gateway is at 0.5.0 and the contract of the release is in
 [docs/spec.md](docs/spec.md). The behaviour of a release does not change
 under an operator: a fix that changes the contract is a new release.
 

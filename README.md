@@ -199,10 +199,10 @@ binaries on the release of the tag. They carry the runtime inside them:
 nothing else has to be installed.
 
 ```bash
-shuttle-v0.4.0-linux-x64-musl   # Linux, Alpine
-shuttle-v0.4.0-linux-x64        # Linux, glibc
-shuttle-v0.4.0-darwin-arm64     # macOS
-shuttle-v0.4.0-windows-x64.exe  # Windows
+shuttle-v0.5.0-linux-x64-musl   # Linux, Alpine
+shuttle-v0.5.0-linux-x64        # Linux, glibc
+shuttle-v0.5.0-darwin-arm64     # macOS
+shuttle-v0.5.0-windows-x64.exe  # Windows
 ```
 
 The checks
