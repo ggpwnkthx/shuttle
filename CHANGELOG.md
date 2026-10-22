@@ -3,7 +3,7 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
-## Unreleased
+## 1.0.0
 
 The release that fixes the contracts of the `0.x` line. It is a **MAJOR**
 release: the contracts are changed once, here, and they are **frozen**

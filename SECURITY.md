@@ -9,11 +9,19 @@ a vulnerability.
 
 | Version | Supported |
 | --- | --- |
-| 0.5.x | Yes |
+| 1.0.x | Yes |
+| 0.5.x | Yes, for the fixes of a vulnerability |
+| 0.4.x and before | No |
 
-The gateway is at 0.5.0 and the contract of the release is in
+The gateway is at 1.0.0 and the contract of the release is in
 [docs/spec.md](docs/spec.md). The behaviour of a release does not change
 under an operator: a fix that changes the contract is a new release.
+
+A `0.x` release is a release that has not fixed its contracts yet, and a
+deployment that depends on one of them depends on a shape that may still
+change. The `0.5.x` line is the last of them: it receives the fixes of a
+vulnerability and nothing else, and a deployment that is still on it
+migrates to `1.0.x`.
 
 ## How to report a problem
 
