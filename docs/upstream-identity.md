@@ -229,7 +229,8 @@ an upstream that implements it is compatible with every revision of the
 gateway that keeps that section. A project that wants **evidence** pins a
 revision and checks its implementation against it.
 
-The stable links follow `main` and they are the ones to read:
+The stable links follow the tag of the release (`v1.0.0`), and the ones of
+`main` are the ones of the release that follows it:
 
 - The specification: [docs/spec.md §7.4](spec.md#74-the-identity-signature)
 - The guide: [docs/upstream-identity.md](upstream-identity.md)
@@ -251,7 +252,7 @@ algorithm fails the build of the gateway. A consumer runs the same check
 against its own implementation, with the fixtures of its own project.
 
 The baseline that was tested with this guide is the revision
-`48b08781054cd6522267415263a89d6bce92a8a0` of the repository: the
+`39ece6a6682e41eee114b2cd7560728d438d564a` of the repository: the
 specification, the guide, the reference verifier and its tests are the ones
 of that commit.
 
