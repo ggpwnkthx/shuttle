@@ -104,7 +104,9 @@ export interface AccessClientOptions {
  * that names one.
  */
 export function decisionKey(request: AccessRequest): string {
-  const roles = [...(request.roles ?? [])].sort().join(',')
+  // Preserve role boundaries: ['admin,user'] and ['admin', 'user'] are
+  // different role lists even though joining them would produce the same text.
+  const roles = [...(request.roles ?? [])].sort()
   const canonical = JSON.stringify([
     request.subject,
     request.workspaceId ?? '',

@@ -5,6 +5,13 @@ decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
 ## Unreleased
 
+### Cached access decisions keep role names distinct
+
+The cache key now encodes the sorted roles as an array. A role named
+`admin,user` no longer shares a cached decision with the separate roles
+`admin` and `user`, and an empty role is distinct from having no roles.
+Changing the order of the same roles still reuses the cached decision.
+
 ### The traffic survives an upstream that is down
 
 The failover of a route only reached the second upstream when the request

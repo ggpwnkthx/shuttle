@@ -236,6 +236,53 @@ describe('the cache of the decisions', () => {
     expect(calls).toBe(2)
   })
 
+  test('a role containing a comma does not reuse the decision for separate roles', async () => {
+    let calls = 0
+    const access = new AccessClient({
+      baseUrl: 'http://access.test',
+      cache: new MemoryDecisionCache(),
+      transport: {
+        async post(request) {
+          calls += 1
+          const { roles } = JSON.parse(request.body) as { roles: string[] }
+          return { status: 200, body: JSON.stringify({ allow: roles.includes('admin') }) }
+        },
+      },
+    })
+    const request = {
+      subject: 'user-1',
+      workspaceId: 'w',
+      routeId: 'route',
+      roles: ['user', 'admin'],
+    }
+    try {
+      expect((await access.decide(request)).allow).toBe(true)
+      const reordered = await access.decide({ ...request, roles: ['admin', 'user'] })
+      expect(reordered.allow).toBe(true)
+      expect(reordered.cached).toBe(true)
+
+      const otherRoles = { ...request, roles: ['admin,user'] }
+      const denied = await access.decide(otherRoles)
+      expect(denied.allow).toBe(false)
+      expect(denied.cached).toBe(false)
+      const cachedDenial = await access.decide(otherRoles)
+      expect(cachedDenial.allow).toBe(false)
+      expect(cachedDenial.cached).toBe(true)
+      expect(calls).toBe(2)
+      expect(request.roles).toEqual(['user', 'admin'])
+    } finally {
+      await access.close()
+    }
+  })
+
+  test('an empty role is distinct from having no roles', () => {
+    const request = { subject: 'u', workspaceId: 'w', routeId: 'r' }
+    expect(decisionKey({ ...request, roles: [''] })).not.toBe(
+      decisionKey({ ...request, roles: [] })
+    )
+    expect(decisionKey(request)).toBe(decisionKey({ ...request, roles: [] }))
+  })
+
   test('a route that asks for no cache asks the service for every request', async () => {
     let calls = 0
     const { client: access } = client({
