@@ -457,9 +457,57 @@ describe('the cache of the decisions', () => {
 })
 
 describe('the reason of a denial', () => {
-  test('a denial that is about a role is counted as such', () => {
-    expect(authFailureReason('the subject does not have the role admin')).toBe('missing_role')
-    expect(authFailureReason('the subject does not exist')).toBe('access_denied')
+  const request = {
+    subject: 'user-1',
+    workspaceId: 'workspace-1',
+    routeId: 'route',
+    roles: ['a'],
+  }
+
+  test('the code of the reason is what the metric counts', () => {
+    expect(authFailureReason('missing_role')).toBe('missing_role')
+    expect(authFailureReason('workspace_not_found')).toBe('access_denied')
+    expect(authFailureReason('policy_denied')).toBe('access_denied')
+    expect(authFailureReason('access_denied')).toBe('access_denied')
+  })
+
+  test('a code that is not about a role is counted as a denial', () => {
+    expect(authFailureReason('missing_role', 'the subject does not have the role')).toBe(
+      'missing_role'
+    )
+    expect(authFailureReason('policy_denied', 'the subject does not have the role')).toBe(
+      'access_denied'
+    )
+  })
+
+  test('the code of the reason of a denial is read', async () => {
+    const { client: access } = client({
+      body: '{"allow":false,"reason":"the subject does not have the role","reasonCode":"missing_role"}',
+    })
+    const decision = await access.decide(request)
+    expect(decision.kind).toBe('denied')
+    expect(decision.reasonCode).toBe('missing_role')
+  })
+
+  test('a code the gateway does not know is ignored', async () => {
+    const { client: access } = client({
+      body: '{"allow":false,"reason":"denied","reasonCode":"something_else"}',
+    })
+    const decision = await access.decide(request)
+    expect(decision.kind).toBe('denied')
+    expect(decision.reasonCode).toBeUndefined()
+  })
+
+  test('a service that sends no code is counted with the legacy rule', () => {
+    // The behavior of the `1.0` release: a service that sends no code is
+    // counted with the text of its reason. The rule is deprecated, and it
+    // is kept so that a deployment written against the `1.0` keeps
+    // working without a change.
+    expect(authFailureReason(undefined, 'the subject does not have the role admin')).toBe(
+      'missing_role'
+    )
+    expect(authFailureReason(undefined, 'the subject does not exist')).toBe('access_denied')
+    expect(authFailureReason(undefined)).toBe('access_denied')
   })
 })
 

@@ -44,7 +44,7 @@ import {
 import { TOTAL_RATE_LIMIT_KEY, rateLimitKey } from '../domains/rate-limiting'
 import { matchRoute } from '../domains/routing'
 import type { ExchangeFailure } from '../domains/proxying'
-import { validateWorkspace } from '../domains/workspace-access'
+import { authFailureReason, validateWorkspace } from '../domains/workspace-access'
 import { UNMATCHED_ROUTE, redactUrl } from '../observability'
 import type { GatewayDependencies } from './dependencies'
 import { checkLimits } from './limits'
@@ -388,7 +388,7 @@ async function dispatchRequest(
           { 'retry-after': '1' }
         )
       }
-      observer.recordAuthFailure(route.id, failureReasonOf(decision.reason))
+      observer.recordAuthFailure(route.id, authFailureReason(decision.reasonCode, decision.reason))
       logger.warn('workspace access denied', {
         requestId,
         routeId: route.id,
@@ -654,11 +654,6 @@ function identityOf(principal: Principal, workspaceId: string | undefined): Call
     roles: principal.roles,
     workspaceId,
   }
-}
-
-/** The reason of a denial, as the metric counts it. */
-function failureReasonOf(reason: string): 'missing_role' | 'access_denied' {
-  return /role/i.test(reason) ? 'missing_role' : 'access_denied'
 }
 
 export { GATEWAY_COOKIE_NAMES, UNMATCHED_ROUTE }

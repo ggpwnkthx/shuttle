@@ -514,11 +514,24 @@ The answer is `200` with a body that carries a boolean `allow`:
 
 ```json
 {"allow": true}
-{"allow": false, "reason": "the subject does not have the role of the workspace"}
+{"allow": false, "reason": "the subject does not have the role of the workspace", "reasonCode": "missing_role"}
 ```
 
-The `reason` is free text and it is never given to the caller. It is
-counted in the metrics when it mentions a role.
+The `reason` is free text and it is never given to the caller. The
+`reasonCode` is the **machine readable** reason of the denial, and it is
+what the gateway counts:
+
+| Code | Meaning |
+| --- | --- |
+| `missing_role` | The caller does not have the role the policy asks for. |
+| `workspace_not_found` | The workspace does not exist. |
+| `policy_denied` | The policy of the deployment denies the caller. |
+| `access_denied` | The caller is not allowed, for a reason the service does not name. |
+
+The code is **optional**: a service that sends none is counted with the
+legacy rule of §6.5, and the behavior of the `1.0` release is kept. A
+service that sends the code is counted exactly, and a service that rewords
+its reason does not change the metric of the gateway.
 
 The status of the answer:
 
@@ -674,6 +687,23 @@ in the same way.
 `SHUTTLE_ACCESS_BREAKER_FAILURES=0` disables the breaker: the service is
 called on every request, and a request waits for the whole budget of the
 call when the service does not answer.
+
+### 6.5 The reason of a denial in the metrics
+
+The gateway counts a denial in `shuttle_auth_failures_total`, with the
+reason of the denial as a label. The label is bounded: `missing_role` when
+the caller does not have the role the policy asks for, and
+`access_denied` for every other denial.
+
+The reason of the service is **free text**, and free text is not a
+machine readable channel. The gateway therefore counts the **code** of the
+reason when the service sends one (§6.1), and it never parses the text.
+
+A service that sends no code is counted with the **legacy rule**, which
+is the behavior of the `1.0` release: a reason that mentions a role is
+counted as `missing_role`. The rule is deprecated and it is kept so that a
+deployment written against the `1.0` keeps working without a change. A
+service that sends the code of its reason is counted exactly.
 
 ## 7. The header policy
 
@@ -1725,6 +1755,7 @@ lists are numbered independently.
 | 44 | The freeze of the contracts | The contracts of §16.1 are frozen in the `1.0` release: they were reviewed one by one, and the `1.0` release is the one that changes them. A `MINOR` release extends them and never changes one (§16.2). |
 | 45 | The number of requests inside the gateway | They are bounded by `SHUTTLE_MAX_PENDING_REQUESTS`, apart from the exchanges, which are bounded by `SHUTTLE_MAX_CONCURRENT_REQUESTS`. The admission covers the phase that waits for a dependency, which the cap of the exchanges never reaches (§2.4, §11.2). |
 | 46 | The health of the access service | The service is not called while it is failing: after `SHUTTLE_ACCESS_BREAKER_FAILURES` failures the requests are answered at once with the unavailability of the service, instead of waiting for a call that is going to fail. The breaker only refuses (§6.4). |
+| 47 | The reason of a denial in the metrics | The **code** of the reason is counted when the service sends one. A service that sends no code is counted with the legacy rule, so a deployment written against the `1.0` keeps working (§6.5). |
 
 ---
 

@@ -144,7 +144,11 @@ export async function startAccessService(
       })
       const entry = policy[subject] ?? policy['*']
       if (!entry) {
-        return Response.json({ allow: false, reason: 'the subject does not exist' })
+        return Response.json({
+          allow: false,
+          reason: 'the subject does not exist',
+          reasonCode: 'access_denied',
+        })
       }
       const resolved = entryOf(entry)
       // A request that names no workspace is allowed by a subject that may
@@ -156,6 +160,9 @@ export async function startAccessService(
       return Response.json({
         allow: false,
         reason: resolved.reason ?? 'the subject does not have the role of the workspace',
+        // The code is what the gateway counts. The text of the reason is
+        // for the log and for the operator.
+        reasonCode: resolved.reason ? 'missing_role' : 'policy_denied',
       })
     },
   })

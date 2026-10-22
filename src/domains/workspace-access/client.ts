@@ -12,7 +12,13 @@
 
 import { createHash } from 'node:crypto'
 import { AccessBreaker } from './breaker'
-import type { AccessDecision, AccessDecisionKind, AccessRequest } from './decision'
+import {
+  isAccessReasonCode,
+  type AccessDecision,
+  type AccessDecisionKind,
+  type AccessReasonCode,
+  type AccessRequest,
+} from './decision'
 
 /** The transport of the access service. */
 export interface AccessTransport {
@@ -36,6 +42,8 @@ export interface CachedDecision {
   /** The kind of the decision: only an explicit one is ever cached. */
   kind: AccessDecisionKind
   reason: string
+  /** The machine readable reason of the service, when it sent one. */
+  reasonCode?: AccessReasonCode
   decidedAt: number
 }
 
@@ -308,6 +316,7 @@ export class AccessClient {
       allow: true,
       kind: 'allowed',
       reason: stale.reason,
+      reasonCode: stale.reasonCode,
       cached: true,
       stale: true,
       decidedAt: stale.decidedAt,
@@ -361,6 +370,7 @@ export class AccessClient {
           allow: decision.allow,
           kind: decision.kind,
           reason: decision.reason,
+          reasonCode: decision.reasonCode,
           decidedAt: decision.decidedAt,
         },
         lifetime
@@ -446,9 +456,13 @@ export class AccessClient {
       if (response.status !== 400) this.#breaker.reportFailure()
       throw new Error(`the access service answered with the status ${response.status}`)
     }
-    let body: { allow?: unknown; reason?: unknown }
+    let body: { allow?: unknown; reason?: unknown; reasonCode?: unknown }
     try {
-      body = JSON.parse(response.body) as { allow?: unknown; reason?: unknown }
+      body = JSON.parse(response.body) as {
+        allow?: unknown
+        reason?: unknown
+        reasonCode?: unknown
+      }
     } catch {
       this.#breaker.reportFailure()
       throw new Error('the access service answered with a body that is not json')
@@ -464,6 +478,10 @@ export class AccessClient {
       allow: body.allow,
       kind: body.allow ? 'allowed' : 'denied',
       reason: typeof body.reason === 'string' ? body.reason : body.allow ? 'allowed' : 'denied',
+      // The code of the reason is the machine readable one the metric
+      // counts. A code the gateway does not know is ignored, and the
+      // denial is counted as `access_denied`.
+      reasonCode: isAccessReasonCode(body.reasonCode) ? body.reasonCode : undefined,
       cached: false,
       stale: false,
       decidedAt: Date.now(),

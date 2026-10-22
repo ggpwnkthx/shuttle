@@ -11,6 +11,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { isAccessReasonCode } from '../decision'
 import type { CachedDecision, DecisionCache } from '../client'
 
 /**
@@ -72,6 +73,11 @@ export class PostgresDecisionCache implements DecisionCache {
         // the decision it is: only an explicit decision is ever cached.
         kind: parsed.kind ?? (parsed.allow ? 'allowed' : 'denied'),
         reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+        // The code of the reason is carried, so that a decision that comes
+        // from the cache is counted as exactly as the one that was asked
+        // for. A record that carries no code is counted with the legacy
+        // rule.
+        reasonCode: isAccessReasonCode(parsed.reasonCode) ? parsed.reasonCode : undefined,
         decidedAt: typeof parsed.decidedAt === 'number' ? parsed.decidedAt : Date.now(),
       }
     } catch (error) {

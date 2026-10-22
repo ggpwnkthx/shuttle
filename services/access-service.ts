@@ -37,6 +37,8 @@
  * | `workspaces` | The workspaces the subject may use. `"*"` is every workspace. |
  * | `routes` | The routes the subject may use when the request names no workspace. `"*"` is every route. A subject that has none is denied for a request that names no workspace. |
  * | `roles` | The roles the subject needs. The request must carry one of them. |
+ * | `reason` | The reason of a denial, when the policy wants to name one. |
+ * | `reasonCode` | The machine readable reason of a denial. The gateway counts the **code** of the reason and never its text, so a service that rewords its reason does not change the metric of the gateway. The codes are `missing_role`, `workspace_not_found`, `policy_denied` and `access_denied`. |
  *
  * A subject that the file does not know is denied. The service never
  * decides on its own: it applies the file, and it says no when the file
@@ -54,6 +56,19 @@
 
 import { readFileSync } from 'node:fs'
 
+/**
+ * The machine readable reasons of a denial.
+ *
+ * The codes are the ones the protocol of the access service accepts (§6.1
+ * of the specification). The gateway counts them, and the free text of the
+ * reason is for the log and for the operator.
+ */
+export type AccessReasonCode =
+  | 'missing_role'
+  | 'workspace_not_found'
+  | 'policy_denied'
+  | 'access_denied'
+
 /** The policy of a subject. */
 export interface SubjectPolicy {
   /** The workspaces the subject may use. `"*"` is every workspace. */
@@ -69,6 +84,13 @@ export interface SubjectPolicy {
   roles?: string[]
   /** The reason of a denial, when the policy wants to name one. */
   reason?: string
+  /**
+   * The machine readable reason of a denial.
+   *
+   * The gateway counts the **code** of the reason, not its text: a service
+   * that rewords its reason must not change the metric of the gateway.
+   */
+  reasonCode?: AccessReasonCode
 }
 
 /** The policy file of the service. */
@@ -92,6 +114,7 @@ export interface AccessServiceOptions {
     routeId: string
     allow: boolean
     reason: string
+    reasonCode?: string
   }) => void
 }
 
@@ -99,6 +122,8 @@ export interface AccessServiceOptions {
 export interface Decision {
   allow: boolean
   reason?: string
+  /** The machine readable reason of a denial. */
+  reasonCode?: AccessReasonCode
 }
 
 /**
@@ -173,7 +198,11 @@ export function decide(
 ): Decision {
   const subject = policy.subjects[request.subject]
   if (!subject) {
-    return { allow: false, reason: 'the subject is not known to the access service' }
+    return {
+      allow: false,
+      reason: 'the subject is not known to the access service',
+      reasonCode: 'access_denied',
+    }
   }
   const roles = request.roles ?? []
   if (subject.roles && subject.roles.length > 0) {
@@ -182,6 +211,7 @@ export function decide(
       return {
         allow: false,
         reason: subject.reason ?? 'the subject does not have the role of the workspace',
+        reasonCode: subject.reasonCode ?? 'missing_role',
       }
     }
   }
@@ -192,6 +222,7 @@ export function decide(
       return {
         allow: false,
         reason: subject.reason ?? 'the subject may not use the workspace',
+        reasonCode: subject.reasonCode ?? 'policy_denied',
       }
     }
     return { allow: true }
@@ -204,6 +235,7 @@ export function decide(
     return {
       allow: false,
       reason: subject.reason ?? 'the subject may not use the route',
+      reasonCode: subject.reasonCode ?? 'policy_denied',
     }
   }
   return { allow: true }
@@ -273,10 +305,15 @@ export async function startAccessService(
         routeId,
         allow: decision.allow,
         reason: decision.reason ?? (decision.allow ? 'allowed' : 'denied'),
+        reasonCode: decision.reasonCode,
       })
       return decision.allow
         ? Response.json({ allow: true })
-        : Response.json({ allow: false, reason: decision.reason ?? 'denied' })
+        : Response.json({
+            allow: false,
+            reason: decision.reason ?? 'denied',
+            reasonCode: decision.reasonCode ?? 'access_denied',
+          })
     },
   })
 

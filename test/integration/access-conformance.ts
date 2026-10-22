@@ -108,6 +108,24 @@ export function describeAccessService(label: string, profile: AccessConformanceP
       expect((reason as string).length).toBeGreaterThan(0)
     })
 
+    test('a denial carries the code of its reason', async () => {
+      // The gateway counts the **code** of the reason and never its text:
+      // a service that rewords its reason must not change the metric of
+      // the gateway. The code is optional in the protocol, and a service
+      // that sends none is counted as `access_denied`.
+      const { json } = await decide(profile, {
+        subject: profile.denied.subject,
+        workspaceId: profile.denied.workspaceId,
+        routeId: 'workspace-api',
+        roles: profile.denied.roles ?? [],
+      })
+      const code = (json as { reasonCode?: unknown }).reasonCode
+      if (code === undefined) return
+      expect(['missing_role', 'workspace_not_found', 'policy_denied', 'access_denied']).toContain(
+        code as string
+      )
+    })
+
     test('a request without a subject is refused', async () => {
       const { status } = await decide(profile, { workspaceId: 'a-workspace' })
       expect(status).toBe(400)

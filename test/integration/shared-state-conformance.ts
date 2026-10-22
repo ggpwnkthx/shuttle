@@ -220,6 +220,43 @@ export function describeDecisionCache(label: string, factory: () => DecisionCach
       expect(await cache.get('key-2')).toBeNull()
     })
 
+    test('the code of the reason survives the cache', async () => {
+      // The code of the reason is what the metric counts. A decision that
+      // comes from the cache has to be counted as exactly as the one that
+      // was asked for, so the code has to survive the round trip.
+      const cache = factory()
+      await cache.set(
+        'key-code',
+        {
+          allow: false,
+          kind: 'denied',
+          reason: 'the subject does not have the role',
+          reasonCode: 'missing_role',
+          decidedAt: 99,
+        },
+        60_000
+      )
+      const read = await cache.get('key-code')
+      expect(read?.reasonCode).toBe('missing_role')
+    })
+
+    test('a code that is not known is not carried', async () => {
+      const cache = factory()
+      await cache.set(
+        'key-unknown-code',
+        {
+          allow: false,
+          kind: 'denied',
+          reason: 'denied',
+          reasonCode: 'something-else' as never,
+          decidedAt: 99,
+        },
+        60_000
+      )
+      const read = await cache.get('key-unknown-code')
+      expect(read?.reasonCode).toBeUndefined()
+    })
+
     test('a refusal is cached as well', async () => {
       const cache = factory()
       await cache.set(
