@@ -11,6 +11,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { AccessBreaker } from './breaker'
 import type { AccessDecision, AccessDecisionKind, AccessRequest } from './decision'
 
 /** The transport of the access service. */
@@ -72,8 +73,27 @@ export interface AccessClientOptions {
   transport: AccessTransport
   /** The cache of the decisions. */
   cache: DecisionCache
+  /**
+   * The number of failures of the service before it is not called any
+   * more, and how long it is not called.
+   *
+   * Zero disables the breaker: the service is called on every request, and
+   * a request waits for the whole budget of the call when the service does
+   * not answer.
+   */
+  breaker?: { failures?: number; cooldownMs?: number }
   /** Called when the service cannot be reached. */
   onError?: (error: unknown) => void
+  /**
+   * Called when the service is not called any more because it failed.
+   *
+   * The traffic of the routes that need a decision is refused without a
+   * call while the breaker is open, so the operator has to see that the
+   * service is not being called at all.
+   */
+  onBreakerOpen?: () => void
+  /** Called when the service answered again after a failure. */
+  onBreakerRecovery?: () => void
   /**
    * Called after every call that reached the service.
    *
@@ -124,9 +144,12 @@ export class AccessClient {
   #staleGraceMs: number
   #transport: AccessTransport
   #cache: DecisionCache
+  #breaker: AccessBreaker
   #onError?: (error: unknown) => void
   #onDecision?: (routeId: string, durationMs: number) => void
   #onStale?: (routeId: string, ageMs: number) => void
+  #onBreakerOpen?: () => void
+  #onBreakerRecovery?: () => void
   /**
    * The decisions that are being asked for, by the key of the cache.
    *
@@ -153,6 +176,19 @@ export class AccessClient {
     this.#onError = options.onError
     this.#onDecision = options.onDecision
     this.#onStale = options.onStale
+    this.#onBreakerOpen = options.onBreakerOpen
+    this.#onBreakerRecovery = options.onBreakerRecovery
+    this.#breaker = new AccessBreaker({
+      failures: options.breaker?.failures,
+      cooldownMs: options.breaker?.cooldownMs,
+      onOpen: () => this.#onBreakerOpen?.(),
+      onRecovery: () => this.#onBreakerRecovery?.(),
+    })
+  }
+
+  /** The state of the breaker of the service. */
+  get breakerState(): 'closed' | 'open' | 'half-open' {
+    return this.#breaker.state
   }
 
   /**
@@ -190,7 +226,7 @@ export class AccessClient {
       if (cached) {
         const age = Date.now() - cached.decidedAt
         if (age <= cacheTtlMs) {
-          return { ...cached, cached: true, stale: false }
+          return { ...cached, cached: true, stale: false, shortCircuited: false }
         }
         if (staleGraceMs > 0 && age <= cacheTtlMs + staleGraceMs) {
           stale = cached
@@ -206,6 +242,28 @@ export class AccessClient {
       return this.#serveStale(decision, stale, request.routeId)
     }
 
+    // The breaker of the service. When it failed recently it is not
+    // called, and the request is answered **at once** with the
+    // unavailability of the service: waiting for a call that is going to
+    // fail would make the outage slower, and the slower gateway falls
+    // further behind.
+    //
+    // The grace of an outage still applies: a decision that allows the
+    // caller and is still inside the grace is served, so a route that
+    // asked for the grace keeps its traffic while the service is down.
+    if (!this.#breaker.allowCall()) {
+      const decision: AccessDecision = {
+        allow: false,
+        kind: 'unavailable',
+        reason: 'the access service is not available',
+        cached: false,
+        stale: false,
+        decidedAt: Date.now(),
+        shortCircuited: true,
+      }
+      return this.#serveStale(decision, stale, request.routeId)
+    }
+
     const ask = this.#askAndCache(request, key, { cacheTtlMs, staleGraceMs })
       .catch((error: unknown) => {
         // The failure of the service is never a crash of the gateway: the
@@ -218,6 +276,7 @@ export class AccessClient {
           cached: false,
           stale: false,
           decidedAt: Date.now(),
+          shortCircuited: false,
         }
       })
       .finally(() => {
@@ -252,6 +311,7 @@ export class AccessClient {
       cached: true,
       stale: true,
       decidedAt: stale.decidedAt,
+      shortCircuited: false,
     }
   }
 
@@ -285,6 +345,7 @@ export class AccessClient {
         cached: false,
         stale: false,
         decidedAt: Date.now(),
+        shortCircuited: false,
       }
     }
 
@@ -363,6 +424,11 @@ export class AccessClient {
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(this.#timeoutMs),
       })
+    } catch (error) {
+      // The call did not answer: the service is unreachable or it did not
+      // answer in time. The breaker counts the failure.
+      this.#breaker.reportFailure()
+      throw error
     } finally {
       // The latency of the service is reported whether it answered or not:
       // a service that times out is slow, and an operator looks at this
@@ -373,17 +439,27 @@ export class AccessClient {
     // not a decision: only an answer that says `allow: false` denies a
     // caller.
     if (response.status < 200 || response.status >= 300) {
+      // A `400` is the gateway's own fault: the service refused the
+      // request the gateway sent. It is reported, but it does not open the
+      // breaker: a bug in the gateway must not refuse every caller of the
+      // deployment by opening the breaker of the service.
+      if (response.status !== 400) this.#breaker.reportFailure()
       throw new Error(`the access service answered with the status ${response.status}`)
     }
     let body: { allow?: unknown; reason?: unknown }
     try {
       body = JSON.parse(response.body) as { allow?: unknown; reason?: unknown }
     } catch {
+      this.#breaker.reportFailure()
       throw new Error('the access service answered with a body that is not json')
     }
     if (typeof body.allow !== 'boolean') {
+      this.#breaker.reportFailure()
       throw new Error('the access service answered with a malformed decision')
     }
+    // The service answered: it is healthy again. The breaker counts a
+    // denial as a success: the service did its job.
+    this.#breaker.reportSuccess()
     return {
       allow: body.allow,
       kind: body.allow ? 'allowed' : 'denied',
@@ -391,6 +467,7 @@ export class AccessClient {
       cached: false,
       stale: false,
       decidedAt: Date.now(),
+      shortCircuited: false,
     }
   }
 }

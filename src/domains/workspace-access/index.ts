@@ -15,6 +15,9 @@ export type { AccessDecision, AccessRequest, AuthFailureReason } from './decisio
 export { isUuid, validateWorkspace } from './workspace'
 export type { WorkspaceRefusal } from './workspace'
 
+export { AccessBreaker } from './breaker'
+export type { AccessBreakerOptions, AccessBreakerState } from './breaker'
+
 export { AccessClient, decisionKey } from './client'
 export type {
   AccessClientOptions,

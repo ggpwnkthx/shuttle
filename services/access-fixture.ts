@@ -64,6 +64,16 @@ export interface StartedAccessService {
   /** The decision requests the service received, for the tests. */
   requests: { subject: string; workspaceId: string; routeId: string; roles: string[] }[]
   /**
+   * The number of decision requests the service received, whatever it
+   * answered.
+   *
+   * The list of the requests holds the ones that reached the policy. This
+   * counter holds every call, including the ones the service refused
+   * because it was made unavailable: the breaker of the gateway is about
+   * the calls that were made, not about the decisions that were taken.
+   */
+  calls: number
+  /**
    * Changes the policy of the service while it runs.
    *
    * The tests use it to revoke an access and to give it back, without
@@ -94,6 +104,8 @@ export async function startAccessService(
   let policy = options.policy ?? DEFAULT_POLICY
   let unavailable = options.unavailable ?? false
   const requests: StartedAccessService['requests'] = []
+  /** The number of calls the service received, whatever it answered. */
+  const calls = { count: 0 }
 
   const server = Bun.serve({
     port: options.port ?? 0,
@@ -106,6 +118,7 @@ export async function startAccessService(
       if (url.pathname !== '/v1/decisions') {
         return Response.json({ error: 'not_found' }, { status: 404 })
       }
+      calls.count += 1
       if (unavailable) {
         return Response.json({ error: 'unavailable' }, { status: 503 })
       }
@@ -151,6 +164,11 @@ export async function startAccessService(
     url: `http://127.0.0.1:${server.port ?? 0}`,
     port: server.port ?? 0,
     requests,
+    // The counter is read while the service runs: the tests compare it
+    // before and after a request.
+    get calls() {
+      return calls.count
+    },
     setPolicy: (next: AccessPolicy) => {
       policy = next
     },

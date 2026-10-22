@@ -165,6 +165,7 @@ writes the headers and the cookies of the answers.
 | | `adapters/postgres-sessions.ts` | The store of the sessions in Postgres. The refresh of the expiry is one function of the server. |
 | `workspace-access` | `workspace.ts` | The validation of the identifier of a workspace. |
 | | `decision.ts` | The shape of a decision and the mapping of its reason to the metric. |
+| | `breaker.ts` | The health of the access service: the service is not called while it is failing. |
 | | `client.ts` | The client of the access service: the request, the answer, the cache, the fail-closed behavior. |
 | | `adapters/memory-cache.ts` | The cache of the decisions in the memory of the process. |
 | | `adapters/redis-cache.ts` | The cache of the decisions in Redis. |

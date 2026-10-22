@@ -65,7 +65,10 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_REPLAY_MAX_BYTES` | `65536` | The size of a body that may be sent again to a second upstream. A body that fits is held in memory. `0` disables it. |
 | `SHUTTLE_UPSTREAM_BREAKER_FAILURES` | `3` | The number of consecutive failures before an upstream is skipped. The breaker is passive: it learns from the failures the gateway observes and it never probes an upstream. `0` disables it: the order of the list is always the order of the file. |
 | `SHUTTLE_UPSTREAM_BREAKER_COOLDOWN_MS` | `30000` | How long an upstream is skipped, in milliseconds. The upstream is tried again when the cooldown is over, even when it failed in the meantime. |
+| `SHUTTLE_ACCESS_TIMEOUT_MS` | `3000` | How long the gateway waits for a decision of the access service. It is a **total** budget of the call: a service that hangs makes every request wait for it. The breaker of the service and the admission of the requests keep that wait from becoming an outage, and lowering this value lowers the latency of the outage further. |
 | `SHUTTLE_ACCESS_STALE_GRACE_MS` | `0` | How long a decision of the access service may be served after the service became unreachable. `0` disables it: an unreachable service is an outage and the gateway answers `503` to it. |
+| `SHUTTLE_ACCESS_BREAKER_FAILURES` | `5` | The number of consecutive failures of the access service before it is not called any more. The breaker only refuses: it answers the unavailability of the service, so it cannot let a caller in that the service would not have allowed. `0` disables it. |
+| `SHUTTLE_ACCESS_BREAKER_COOLDOWN_MS` | `5000` | How long the access service is not called after it failed, in milliseconds. The service is tried again when the cooldown is over. |
 | `SHUTTLE_RATE_LIMIT_TOTAL_MAX` | A value | The budget of the deployment. At least one limit has to be set. |
 | `SHUTTLE_SHUTDOWN_TIMEOUT_MS` | `15000` | The deadline of the drain. |
 

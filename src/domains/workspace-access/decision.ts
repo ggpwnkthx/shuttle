@@ -37,6 +37,15 @@ export interface AccessDecision {
   kind: AccessDecisionKind
   /** The reason of the service. It is never given to the caller. */
   reason: string
+  /**
+   * True when the decision was not asked for because the breaker of the
+   * service was open.
+   *
+   * The answer is the unavailability of the service either way: the
+   * difference is only visible to the operator, who has to see that the
+   * service is not being called at all.
+   */
+  shortCircuited: boolean
   /** True when the decision was served from the cache. */
   cached: boolean
   /**

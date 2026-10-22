@@ -621,6 +621,60 @@ The rules of a check without a workspace:
 - the identity that is written to the upstream carries no workspace, and
   the signature of the identity is the one of the request.
 
+### 6.4 The breaker of the access service
+
+The access service is a dependency of the deployment and it is on the path
+of every request of a route that names a workspace. A service that is down
+does not only refuse the requests: it makes them **slow**, because every
+request waits for the budget of the call (`SHUTTLE_ACCESS_TIMEOUT_MS`,
+three seconds by default) before it is answered. The outage amplifies
+itself: the requests pile up behind the service, the gateway answers later
+and later, and the slower gateway falls further behind.
+
+The gateway therefore keeps a **breaker** of the service. After
+`SHUTTLE_ACCESS_BREAKER_FAILURES` consecutive failures (5 by default) the
+service is not called any more for `SHUTTLE_ACCESS_BREAKER_COOLDOWN_MS`
+(5 s by default). A request that arrives while the breaker is open is
+answered **at once** with the unavailability of the service: `503
+access_unavailable`, the same answer as the outage itself, but without the
+wait.
+
+Three properties matter, and they are the reason the breaker may sit on
+the path of every request:
+
+1. **It only refuses.** The breaker answers the unavailability of the
+   service, which is a refusal. It never lets a caller in, so it cannot be
+   a hole: a caller that the service would not have allowed is not allowed
+   by the breaker either.
+2. **The grace still applies.** A route that asks for a grace
+   (`accessStaleGraceMs`, §6.2) is served the last decision of the service
+   while the breaker is open, when that decision allows the caller. The
+   grace is what keeps the traffic of the deployment flowing during an
+   outage.
+3. **It is passive.** It learns from the failures the gateway observes and
+   it never probes the service: a probe is a request of its own, and a
+   probe needs an endpoint, a timeout and an interval. The cooldown is the
+   only clock it uses.
+
+When the cooldown is over, the breaker is **half open**: one call is
+allowed and it decides whether the service is healthy again. A failure of
+that call opens the breaker again at once.
+
+A denial is not a failure: the service answered, and the answer was a
+denial. A `400` is not a failure either: the service refused the request
+the gateway sent, and a bug in the gateway must not refuse every caller of
+the deployment by opening the breaker.
+
+The state of the breaker is **per process**, like the breaker of the
+upstreams (§11.4): a counter of failures does not deserve a round trip on
+the path of every request. A replica that did not see the failures calls
+the service while the others do not, and it learns from its own failures
+in the same way.
+
+`SHUTTLE_ACCESS_BREAKER_FAILURES=0` disables the breaker: the service is
+called on every request, and a request waits for the whole budget of the
+call when the service does not answer.
+
 ## 7. The header policy
 
 ### 7.1 Request → upstream
@@ -1670,6 +1724,7 @@ lists are numbered independently.
 | 43 | The removal of the symmetric format of the identity | The format `v4` is removed in the `1.0` release: the key of that format was shared with the upstreams, so an upstream that verified an identity could mint one as well. The gateway signs `v5` only, and a deployment without a key signs with a key that is generated for its process (§7.4). |
 | 44 | The freeze of the contracts | The contracts of §16.1 are frozen in the `1.0` release: they were reviewed one by one, and the `1.0` release is the one that changes them. A `MINOR` release extends them and never changes one (§16.2). |
 | 45 | The number of requests inside the gateway | They are bounded by `SHUTTLE_MAX_PENDING_REQUESTS`, apart from the exchanges, which are bounded by `SHUTTLE_MAX_CONCURRENT_REQUESTS`. The admission covers the phase that waits for a dependency, which the cap of the exchanges never reaches (§2.4, §11.2). |
+| 46 | The health of the access service | The service is not called while it is failing: after `SHUTTLE_ACCESS_BREAKER_FAILURES` failures the requests are answered at once with the unavailability of the service, instead of waiting for a call that is going to fail. The breaker only refuses (§6.4). |
 
 ---
 

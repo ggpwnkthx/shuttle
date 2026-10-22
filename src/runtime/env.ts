@@ -52,6 +52,15 @@ export interface AccessSettings {
   /** The grace of an outage of the service, in milliseconds. */
   staleGraceMs: number
   allowAnonymous: boolean
+  /**
+   * The number of failures of the service before it is not called any
+   * more, and how long it is not called.
+   *
+   * The breaker only refuses: it never lets a caller in, so it cannot be
+   * a hole. Zero disables it.
+   */
+  breakerFailures: number
+  breakerCooldownMs: number
 }
 
 /** The settings of the signature of the identity. */
@@ -418,6 +427,21 @@ const EnvSchema = z.object({
   SHUTTLE_ACCESS_URL: z.string().optional(),
   SHUTTLE_ACCESS_TOKEN: z.string().optional(),
   SHUTTLE_ACCESS_TIMEOUT_MS: intEnv(3_000, { min: 1 }),
+  /**
+   * The number of failures of the access service before it is not called
+   * any more, in milliseconds of the cooldown that follows.
+   *
+   * The breaker only refuses: it never lets a caller in, so it cannot be
+   * a hole. It is what keeps an outage of the service from making the
+   * gateway slow: a request that would wait for a call that is going to
+   * fail is answered at once instead.
+   *
+   * Zero disables the breaker: the service is called on every request and
+   * a request waits for the whole budget of the call when the service does
+   * not answer.
+   */
+  SHUTTLE_ACCESS_BREAKER_FAILURES: intEnv(5, { min: 0 }),
+  SHUTTLE_ACCESS_BREAKER_COOLDOWN_MS: intEnv(5_000, { min: 0, max: 3_600_000 }),
   SHUTTLE_ACCESS_CACHE_TTL_MS: intEnv(5_000, { min: 0 }),
   /**
    * How long a decision of the access service may be served after the
@@ -828,6 +852,8 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       cacheTtlMs: parsed.SHUTTLE_ACCESS_CACHE_TTL_MS,
       staleGraceMs: parsed.SHUTTLE_ACCESS_STALE_GRACE_MS,
       allowAnonymous: parsed.SHUTTLE_ACCESS_ALLOW_ANONYMOUS ?? false,
+      breakerFailures: parsed.SHUTTLE_ACCESS_BREAKER_FAILURES,
+      breakerCooldownMs: parsed.SHUTTLE_ACCESS_BREAKER_COOLDOWN_MS,
     },
     session: {
       url: parsed.SHUTTLE_SESSION_URL,

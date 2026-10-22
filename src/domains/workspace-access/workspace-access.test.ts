@@ -33,6 +33,8 @@ function client(
     body?: string
     error?: Error
     cacheTtlMs?: number
+    staleGraceMs?: number
+    breaker?: { failures?: number; cooldownMs?: number }
     onRequest?: (body: string, headers: Record<string, string>) => void
   } = {}
 ): { client: AccessClient; cache: MemoryDecisionCache } {
@@ -45,6 +47,8 @@ function client(
       transport: transport(options),
       cache,
       cacheTtlMs: options.cacheTtlMs ?? 5_000,
+      staleGraceMs: options.staleGraceMs ?? 0,
+      breaker: options.breaker,
     }),
   }
 }
@@ -606,5 +610,160 @@ describe('the grace of an outage of the access service', () => {
     expect((await access.decide(request, { staleGraceMs: 0 })).kind).toBe('unavailable')
     // The grace of the deployment is used when the route says nothing.
     expect((await access.decide(request)).kind).toBe('allowed')
+  })
+})
+
+describe('the breaker of the access service', () => {
+  const request = {
+    subject: 'user-1',
+    workspaceId: 'workspace-1',
+    routeId: 'route',
+    roles: ['a'],
+  }
+
+  test('the service is called until it failed enough times', async () => {
+    let calls = 0
+    const { client: access } = client({
+      error: new Error('the connection is refused'),
+      breaker: { failures: 3, cooldownMs: 60_000 },
+      onRequest: () => {
+        calls += 1
+      },
+    })
+    await access.decide(request)
+    await access.decide(request)
+    await access.decide(request)
+    expect(calls).toBe(3)
+    // The breaker is open now: the service is not called any more.
+    await access.decide(request)
+    expect(calls).toBe(3)
+  })
+
+  test('a request that is short circuited is answered at once', async () => {
+    let calls = 0
+    const { client: access } = client({
+      error: new Error('the connection is refused'),
+      breaker: { failures: 1, cooldownMs: 60_000 },
+      onRequest: () => {
+        calls += 1
+      },
+    })
+    await access.decide(request)
+    const started = Date.now()
+    const decision = await access.decide(request)
+    // The service is not called, so the request does not wait for the
+    // budget of the call.
+    expect(Date.now() - started).toBeLessThan(100)
+    expect(calls).toBe(1)
+    expect(decision.kind).toBe('unavailable')
+    expect(decision.allow).toBe(false)
+    expect(decision.shortCircuited).toBe(true)
+  })
+
+  test('the breaker only refuses: it never lets a caller in', async () => {
+    const { client: access } = client({
+      error: new Error('the connection is refused'),
+      breaker: { failures: 1, cooldownMs: 60_000 },
+    })
+    await access.decide(request)
+    const decision = await access.decide(request)
+    expect(decision.allow).toBe(false)
+  })
+
+  test('the grace of an outage still applies while the breaker is open', async () => {
+    const cache = new MemoryDecisionCache()
+    const key = decisionKey(request)
+    await cache.set(
+      key,
+      { allow: true, kind: 'allowed', reason: '', decidedAt: Date.now() - 2_000 },
+      600_000
+    )
+    const access = new AccessClient({
+      baseUrl: 'http://access.test',
+      transport: transport({ error: new Error('the connection is refused') }),
+      cache,
+      cacheTtlMs: 1_000,
+      staleGraceMs: 60_000,
+      breaker: { failures: 1, cooldownMs: 60_000 },
+    })
+    await access.decide(request)
+    // The service is not called any more, and the decision that allows the
+    // caller is still inside the grace: it is served.
+    const decision = await access.decide(request)
+    expect(decision.allow).toBe(true)
+    expect(decision.stale).toBe(true)
+  })
+
+  test('a denial does not open the breaker', async () => {
+    let calls = 0
+    const { client: access } = client({
+      body: '{"allow":false,"reason":"denied"}',
+      // The decision is not cached: every request asks the service.
+      cacheTtlMs: 0,
+      breaker: { failures: 1, cooldownMs: 60_000 },
+      onRequest: () => {
+        calls += 1
+      },
+    })
+    await access.decide(request)
+    await access.decide(request)
+    await access.decide(request)
+    // The service answered every time: it is not called less.
+    expect(calls).toBe(3)
+  })
+
+  test('a malformed request does not open the breaker', async () => {
+    let calls = 0
+    const { client: access } = client({
+      // A `400` is the gateway's own fault: a bug in the gateway must not
+      // refuse every caller of the deployment by opening the breaker.
+      status: 400,
+      body: '{"error":"bad_request"}',
+      breaker: { failures: 1, cooldownMs: 60_000 },
+      onRequest: () => {
+        calls += 1
+      },
+    })
+    await access.decide(request)
+    await access.decide(request)
+    expect(calls).toBe(2)
+  })
+
+  test('the breaker is disabled when it is given no threshold', async () => {
+    let calls = 0
+    const { client: access } = client({
+      error: new Error('the connection is refused'),
+      breaker: { failures: 0, cooldownMs: 60_000 },
+      onRequest: () => {
+        calls += 1
+      },
+    })
+    await access.decide(request)
+    await access.decide(request)
+    expect(calls).toBe(2)
+  })
+
+  test('the service is tried again after the cooldown', async () => {
+    let calls = 0
+    let fail = true
+    const access = new AccessClient({
+      baseUrl: 'http://access.test',
+      transport: {
+        async post() {
+          calls += 1
+          if (fail) throw new Error('the connection is refused')
+          return { status: 200, body: '{"allow":true}' }
+        },
+      },
+      cache: new MemoryDecisionCache(),
+      cacheTtlMs: 0,
+      breaker: { failures: 1, cooldownMs: 0 },
+    })
+    await access.decide(request)
+    // The cooldown is over: the service is tried again.
+    fail = false
+    const decision = await access.decide(request)
+    expect(calls).toBe(2)
+    expect(decision.allow).toBe(true)
   })
 })

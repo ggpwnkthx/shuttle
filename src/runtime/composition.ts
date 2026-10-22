@@ -331,9 +331,27 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     timeoutMs: settings.access.timeoutMs,
     cacheTtlMs: settings.access.cacheTtlMs,
     staleGraceMs: settings.access.staleGraceMs,
+    // The breaker of the service: a service that failed recently is not
+    // called, and the requests that need it are answered at once instead
+    // of waiting for a call that is going to fail. The breaker only
+    // refuses, so it cannot let a caller in that the service would not
+    // have let in.
+    breaker: {
+      failures: settings.access.breakerFailures,
+      cooldownMs: settings.access.breakerCooldownMs,
+    },
     transport: new FetchAccessTransport(),
     cache: decisionCache,
     onError: (error) => logger.warn('the access service request failed', { error }),
+    // The service is not called at all while the breaker is open. The
+    // operator has to see it: the metric of the unavailability counts the
+    // refusals, and this one counts the calls that were not made.
+    onBreakerOpen: () =>
+      logger.warn('the access service is not called any more', {
+        reason: 'it failed recently',
+        cooldownMs: settings.access.breakerCooldownMs,
+      }),
+    onBreakerRecovery: () => logger.info('the access service answered again'),
     // The latency of the service is published: it is a dependency of its
     // own on the path of every request of a workspace.
     onDecision: (routeId, durationMs) => observer.recordAccess(routeId, durationMs),
