@@ -18,7 +18,7 @@ import {
 } from '../domains/authentication/adapters'
 import { OidcClient } from '../domains/authentication'
 import { ConfigurationStore } from '../domains/configuration'
-import { asymmetricIdentityKey, symmetricIdentityKey } from '../domains/forwarding'
+import { asymmetricIdentityKey, ephemeralIdentityKey } from '../domains/forwarding'
 import { HttpExchangeService, UpstreamBreaker } from '../domains/proxying'
 import { MemoryRateLimiter, type RequestLimiter } from '../domains/rate-limiting'
 import { PostgresRateLimiter, RedisRateLimiter } from '../domains/rate-limiting/adapters'
@@ -197,14 +197,15 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
   })
   const observer = new MetricsStore()
 
-  // The symmetric format of the signature of the identity is deprecated:
-  // every upstream that holds the key can mint an identity. A production
-  // deployment is refused at the start when it has no private key, so this
-  // warning is about the deployments that are not production ones.
+  // The signature of the identity is asymmetric: the gateway holds the
+  // private key and the upstreams hold the public one, so an upstream that
+  // can verify an identity cannot mint one. A deployment that has no key
+  // signs with a key of its own process: the identity is signed with the
+  // format of the release, but no upstream can verify it. A production
+  // deployment is refused without a key before it reaches this point.
   if (!settings.identity.signingKey) {
-    logger.warn('the identity is signed with the deprecated symmetric format', {
-      format: 'v4',
-      hint: 'run `bun run identity:key` and set SHUTTLE_IDENTITY_SIGNING_KEY: an upstream that verifies an identity must not be able to mint one',
+    logger.warn('the key of the identity signature is generated for this process', {
+      hint: 'run `bun run identity:key` and set SHUTTLE_IDENTITY_SIGNING_KEY: the upstreams verify the identity with the public key of the deployment, and a key of one process is not shared by the replicas',
     })
   }
 
@@ -457,11 +458,10 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     totalRateLimiter,
     loginRateLimiter,
     // The key of the signature of the identity: the private key of the
-    // deployment when it has one, and the key that is derived from the
-    // secret of the sessions otherwise.
+    // deployment when it has one, and a key of this process otherwise.
     identityKey: settings.identity.signingKey
       ? asymmetricIdentityKey(settings.identity.signingKey)
-      : symmetricIdentityKey(settings.session.secret),
+      : ephemeralIdentityKey(),
     gatewayCookies: auth.gatewayCookieNames,
     browser: {
       cookieSecure: settings.browser.cookieSecure,

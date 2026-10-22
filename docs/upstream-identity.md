@@ -37,11 +37,9 @@ with the public key cannot mint one.
 
 The upstream never receives the **private** key of the deployment and
 never receives the **secret of the sessions**: the private key signs, the
-public key verifies, and the secret stays in the gateway. The only key an
-upstream holds besides the public one is the derived key of the legacy
-format, and that one is symmetric: an upstream that holds it can mint an
-identity as well. It is deprecated and it is refused by default (§ *The
-versions*).
+public key verifies, and the secret stays in the gateway. There is no
+other key: the symmetric format of the earlier releases is removed, so an
+upstream holds the public key and nothing else.
 
 ## The verification
 
@@ -62,11 +60,10 @@ of one combination is never verified with the key of another one:
 | The version of the value | The algorithm of the protected header | The key |
 | --- | --- | --- |
 | `v5` | `ES256` | The public key of the deployment, a key of the curve P-256. |
-| `v4` | `HS256` | The derived key of the deployment, and only when the upstream is configured with it. |
 
 An upstream therefore refuses:
 
-- a version it does not know (`v3`, `v6`, an empty version, …);
+- a version it does not know (`v3`, `v4`, `v6`, an empty version, …);
 - a value whose protected header names another algorithm than the one the
   version requires;
 - a protected header whose type is not `shuttle-identity`;
@@ -139,23 +136,9 @@ const identity = result.identity
 
 The reference verifier refuses a signature it does not understand, and it
 says why: the reason is a text, and an upstream that logs it learns what
-it refused. An upstream that also accepts the legacy format configures
-the derived key explicitly:
-
-```ts
-const result = await verifyIdentity({
-  request,
-  headers,
-  publicKey: key,
-  // The deprecated symmetric format: the key is derived from the secret
-  // of the sessions, HMAC-SHA256(secret, "shuttle-identity-signature-v1").
-  legacyKey: derivedKey,
-})
-```
-
-Without `legacyKey`, a `v4` signature is refused: the public key of the
-deployment cannot verify it, and the verifier never falls back from
-`ES256` to `HS256`.
+it refused. There is no other combination to accept: the `v5` format is
+the only one the gateway signs, and the reference verifier verifies it
+with the public key of the deployment.
 
 ### Go
 
@@ -225,22 +208,19 @@ identity and without a signature — the route says whether it needs one.
 
 | Version | The format | The key | The state |
 | --- | --- | --- | --- |
-| `v5` | A JWS with a detached payload, signed with `ES256`. | The private key of the deployment; the upstreams hold the public one. | The format of a production deployment. |
-| `v4` | The same format, signed with `HS256`. | The key that is derived from the secret of the sessions. The upstreams hold it, so an upstream that verifies an identity can mint one as well. | **Deprecated**: the reference verifier accepts it only when the upstream configures the derived key explicitly. |
+| `v5` | A JWS with a detached payload, signed with `ES256`. | The private key of the deployment; the upstreams hold the public one. | **The only format of the `1.0` release.** |
+| `v4` | The same format, signed with `HS256`. | The key that was derived from the secret of the sessions. The upstreams held it, so an upstream that verified an identity could mint one as well. | **Removed** in the `1.0` release. |
 
-An upstream that verifies `v4` has to be changed before the gateway signs
-`v5`: it reads the version of the value and verifies with the public key
-of the deployment. The reference verifier does the reading of the version
-for it: `v5` is verified with the public key and `ES256`, and `v4` is
-verified with the derived key and `HS256`. The public key of the
-deployment never verifies a `v4` signature, and there is no fallback from
-one algorithm to the other.
+The gateway signs `v5` only. An upstream that verifies `v4` has to be
+changed: it reads the version of the value and verifies with the public
+key of the deployment. The reference verifier does the reading of the
+version for it, and it refuses a `v4` signature like any other signature
+of a version it does not know.
 
-The legacy support of the gateway itself lives in
-[src/domains/forwarding/identity.ts](../src/domains/forwarding/identity.ts):
-`symmetricIdentityKey` and `deriveIdentityKey` build the derived key and
-sign the `v4` format. It is there for the deployments that have not
-migrated yet, and it is removed with the format.
+The support of the gateway itself for the symmetric format lived in
+[src/domains/forwarding/identity.ts](../src/domains/forwarding/identity.ts)
+— `symmetricIdentityKey` and `deriveIdentityKey` built the derived key
+and signed the `v4` format. It is removed with the format.
 
 ## Compatibility with a revision of Shuttle
 

@@ -21,14 +21,16 @@
  * | Version | Algorithm | The key |
  * | --- | --- | --- |
  * | `v5` | `ES256` | The public key of the deployment, a key of the curve P-256. |
- * | `v4` | `HS256` | The key that is derived from the secret of the sessions, and only when it is given explicitly. |
  *
  * The version of the value decides the algorithm and the key, and the
  * protected header has to agree with it: a signature of one combination is
  * never verified with the key of another one, and there is no fallback from
- * one algorithm to another. The public key of the deployment cannot verify
- * a `v4` signature, so `v4` needs the `legacyKey` option, which is the
- * symmetric key of the deployment.
+ * one algorithm to another.
+ *
+ * The symmetric format of the earlier releases (`v4`) is **removed**: its
+ * key was shared with the upstreams, so an upstream that verified an
+ * identity could mint one as well. A `v4` signature is refused like any
+ * other signature of an unknown version.
  *
  * The guide is in [docs/upstream-identity.md](../../docs/upstream-identity.md).
  */
@@ -86,18 +88,6 @@ export interface VerifyOptions {
    * another one holds.
    */
   publicKey: KeyInput
-  /**
-   * The symmetric key of the deployment, for the **legacy** format only.
-   *
-   * It is the key that is derived from the secret of the sessions
-   * (`HMAC-SHA256(secret, "shuttle-identity-signature-v1")`). It is
-   * optional: an upstream that only accepts `v5` does not set it, and a
-   * `v4` signature is then refused.
-   *
-   * The legacy format is deprecated (§7.4 of the specification) and it is
-   * symmetric: an upstream that holds the key can mint an identity as well.
-   */
-  legacyKey?: Uint8Array
 }
 
 /** The outcome of the verification. */
@@ -110,12 +100,6 @@ export const SUPPORTED_VERSION = 'v5'
 
 /** The algorithm of the format of {@link SUPPORTED_VERSION}. */
 export const SUPPORTED_ALGORITHM = 'ES256'
-
-/** The version of the **deprecated** symmetric format. */
-export const LEGACY_VERSION = 'v4'
-
-/** The algorithm of the deprecated symmetric format. */
-export const LEGACY_ALGORITHM = 'HS256'
 
 /** The type of the protected header of the signature. */
 export const SIGNATURE_TYPE = 'shuttle-identity'
@@ -166,7 +150,7 @@ export function identityOf(headers: UpstreamHeaders): UpstreamIdentity {
  * middle of the serialization.
  */
 export async function verifyIdentity(options: VerifyOptions): Promise<VerifyResult> {
-  const { request, headers, publicKey, legacyKey } = options
+  const { request, headers, publicKey } = options
   const signature = headers['x-shuttle-signature']
   if (!signature) return { ok: false, reason: 'the request carries no signature' }
 
@@ -177,29 +161,14 @@ export async function verifyIdentity(options: VerifyOptions): Promise<VerifyResu
 
   // The version decides the algorithm and the key. There is no fallback:
   // a signature of one combination is never verified with the key of
-  // another one.
-  let algorithm: string
-  let key: KeyInput
-  if (version === SUPPORTED_VERSION) {
-    algorithm = SUPPORTED_ALGORITHM
-    const problem = problemOfPublicKey(publicKey)
-    if (problem) return { ok: false, reason: problem }
-    key = publicKey
-  } else if (version === LEGACY_VERSION) {
-    if (!legacyKey) {
-      return {
-        ok: false,
-        reason: 'the signature is of the legacy format and no legacy key is configured',
-      }
-    }
-    if (legacyKey.length < 32) {
-      return { ok: false, reason: 'the legacy key is too short for HS256' }
-    }
-    algorithm = LEGACY_ALGORITHM
-    key = legacyKey
-  } else {
+  // another one, and there is no other version.
+  if (version !== SUPPORTED_VERSION) {
     return { ok: false, reason: `the version "${version}" of the signature is not known` }
   }
+  const algorithm = SUPPORTED_ALGORITHM
+  const problem = problemOfPublicKey(publicKey)
+  if (problem) return { ok: false, reason: problem }
+  const key = publicKey
 
   const parts = serialized.split('.')
   if (parts.length !== 3) return { ok: false, reason: 'the signature is malformed' }

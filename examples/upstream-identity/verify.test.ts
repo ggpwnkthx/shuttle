@@ -1,19 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { createPublicKey, generateKeyPairSync, type KeyObject } from 'node:crypto'
+import { createHmac, createPublicKey, generateKeyPairSync, type KeyObject } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { CompactSign, importSPKI } from 'jose'
-import {
-  asymmetricIdentityKey,
-  deriveIdentityKey,
-  signIdentity,
-  symmetricIdentityKey,
-} from '../../src/domains/forwarding'
+import { asymmetricIdentityKey, signIdentity } from '../../src/domains/forwarding'
 import type { UpstreamHeaders, UpstreamRequest } from './verify'
 import {
   canonicalPayload,
   identityOf,
-  LEGACY_VERSION,
   SIGNATURE_TYPE,
   SUPPORTED_VERSION,
   verifyIdentity,
@@ -65,6 +59,14 @@ const identity = {
 /** The secret of the deployment of the tests. */
 const SECRET = 'test-secret'
 
+/**
+ * A symmetric key, of the kind the removed format used.
+ *
+ * It is built here and not taken from the gateway: the format it belongs
+ * to is removed, and the verifier has to refuse it.
+ */
+const symmetricKey = createHmac('sha256', SECRET).update('legacy').digest()
+
 /** The headers of a request that carries the identity and its signature. */
 function headersOf(signature: string, overrides: Partial<UpstreamHeaders> = {}): UpstreamHeaders {
   return {
@@ -77,14 +79,24 @@ function headersOf(signature: string, overrides: Partial<UpstreamHeaders> = {}):
   }
 }
 
-/** The signature of the gateway, in the version of the asymmetric format. */
+/** The signature of the gateway, in the version of the release. */
 async function v5Signature(): Promise<string> {
   return signIdentity(identity, request, asymmetricIdentityKey(PRIVATE_KEY))
 }
 
-/** The signature of the gateway, in the version of the symmetric format. */
+/**
+ * The signature of the removed symmetric format.
+ *
+ * It is built here, with a symmetric key, because the gateway does not
+ * sign that format any more.
+ */
 async function v4Signature(): Promise<string> {
-  return signIdentity(identity, request, symmetricIdentityKey(SECRET))
+  const signed = new TextEncoder().encode('{"v":"v4"}')
+  const jws = await new CompactSign(signed)
+    .setProtectedHeader({ alg: 'HS256', typ: SIGNATURE_TYPE })
+    .sign(symmetricKey)
+  const [protectedHeader, , signature] = jws.split('.')
+  return `v4=${protectedHeader}..${signature}`
 }
 
 /** A compact serialization with a protected header of the test. */
@@ -239,11 +251,8 @@ describe('the combination the verifier accepts', () => {
 
   test('a signature of another algorithm is refused', async () => {
     // The signature is a real one, but it is signed with the symmetric
-    // algorithm and it claims to be of the version of the asymmetric one.
-    const serialized = await compactWith(
-      { alg: 'HS256', typ: SIGNATURE_TYPE },
-      deriveIdentityKey(SECRET)
-    )
+    // algorithm and it claims to be of the version of the release.
+    const serialized = await compactWith({ alg: 'HS256', typ: SIGNATURE_TYPE }, symmetricKey)
     const result = await verifyIdentity({
       request,
       headers: headersOf(`${SUPPORTED_VERSION}=${serialized}`),
@@ -347,21 +356,8 @@ describe('the serialization the verifier refuses', () => {
   })
 })
 
-describe('the legacy format', () => {
-  test('it verifies with the symmetric key of the deployment', async () => {
-    const signature = await v4Signature()
-    const result = await verifyIdentity({
-      request,
-      headers: headersOf(signature),
-      publicKey,
-      legacyKey: deriveIdentityKey(SECRET),
-    })
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.version).toBe(LEGACY_VERSION)
-  })
-
-  test('it is refused when no legacy key is configured', async () => {
+describe('the removed symmetric format', () => {
+  test('a signature of it is refused', async () => {
     const signature = await v4Signature()
     const result = await verifyIdentity({
       request,
@@ -369,26 +365,16 @@ describe('the legacy format', () => {
       publicKey,
     })
     expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toContain('v4')
   })
 
-  test('the public key of the deployment does not verify it', async () => {
+  test('a signature of it that claims the version of the release is refused', async () => {
     const signature = await v4Signature()
     const result = await verifyIdentity({
       request,
-      headers: headersOf(signature),
+      headers: headersOf(signature.replace('v4=', `${SUPPORTED_VERSION}=`)),
       publicKey,
-      legacyKey: deriveIdentityKey('another-secret'),
-    })
-    expect(result.ok).toBe(false)
-  })
-
-  test('a legacy signature that claims the version of the new one is refused', async () => {
-    const signature = await v4Signature()
-    const result = await verifyIdentity({
-      request,
-      headers: headersOf(signature.replace(`${LEGACY_VERSION}=`, `${SUPPORTED_VERSION}=`)),
-      publicKey,
-      legacyKey: deriveIdentityKey(SECRET),
     })
     expect(result.ok).toBe(false)
   })

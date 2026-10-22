@@ -250,7 +250,8 @@ The full list, with the default of every value, is in
 
 | Variable | Why |
 | --- | --- |
-| `SHUTTLE_SESSION_SECRET` | Signs the state of the login and derives the key of the identity signature. The same value on every replica. |
+| `SHUTTLE_SESSION_SECRET` | Signs the state of the login. The same value on every replica. |
+| `SHUTTLE_IDENTITY_SIGNING_KEY` | The private key that signs the identity of the requests. The same key on every replica, and the upstreams are given the public one (§7.4). |
 | `SHUTTLE_OIDC_ISSUER` | Names the identity provider. |
 | `SHUTTLE_OIDC_CLIENT_ID` | Names the client of the gateway. |
 | `SHUTTLE_OIDC_REDIRECT_URI` | The url the provider sends the browser back to. |
@@ -696,22 +697,24 @@ upstreams refuse the signatures of the others. The script `bun run
 identity:key` generates a pair, and `bun run identity:key --public` prints
 the public key of the key that is in the environment.
 
-**The symmetric format.** A deployment that does not set the key signs with
-the symmetric key that is derived from `SHUTTLE_SESSION_SECRET`:
+**A deployment without a key.** The key belongs to the deployment: it is
+the same on every replica, or the upstreams refuse the signatures of the
+others. A deployment that does not set it — a deployment that is not a
+production one — signs with a key that is **generated for the process**:
+the format of the signature is the same, but the public key of it is
+unknown to the upstreams, so an upstream cannot verify the identity, and
+the key is neither shared by the replicas nor kept across a restart. The
+gateway writes a warning in its log when it signs that way.
 
-```
-key = HMAC-SHA256(secret, "shuttle-identity-signature-v1")
-```
-
-The upstream is then given the derived key, so an upstream that verifies an
-identity can mint one as well. The gateway refuses to start in production
-without the private key: a setting that looks active but is not is a
-security hole.
+A production deployment is **refused** at the start when it has no
+`SHUTTLE_IDENTITY_SIGNING_KEY`: a deployment whose upstreams cannot verify
+the identities they receive is a deployment that believes it is protected
+and is not.
 
 If `SHUTTLE_SESSION_SECRET` is unset, a random secret is generated **per
-process**: the signatures are then not verifiable by an upstream across
-replicas or restarts. The gateway refuses to start in production without
-it. The secret is never sent to an upstream.
+process**: the state of the login is then not valid across replicas or
+restarts. The gateway refuses to start in production without it. The
+secret is never sent to an upstream.
 
 **The format.** The signature is a **JWS** (RFC 7515) with a detached
 payload. The protected header names the algorithm and the type of the
@@ -720,8 +723,6 @@ signature:
 ```json
 { "alg": "ES256", "typ": "shuttle-identity" }
 ```
-
-The symmetric format signs the same way with `HS256`.
 
 **The payload.** The payload is **detached**: it is not transmitted. An
 upstream rebuilds it from the request and from the identity headers it
@@ -733,12 +734,12 @@ The payload is a canonical JSON **object**, so no value can move from one
 field into another and no field can be confused with another one:
 
 ```json
-{"v":"v4","method":"GET","path":"/base/ws/123","query":"?x=1","host":"api.example.com","subject":"user-1","workspaceId":"…","email":"…","roles":["admin","dev"]}
+{"v":"v5","method":"GET","path":"/base/ws/123","query":"?x=1","host":"api.example.com","subject":"user-1","workspaceId":"…","email":"…","roles":["admin","dev"]}
 ```
 
 | Field | Value |
 | --- | --- |
-| `v` | The version of the format: `v5` for the asymmetric one, `v4` for the symmetric one. |
+| `v` | The version of the format: `v5`. |
 | `method` | The method, upper-cased. |
 | `path` | The path **as the upstream received it**: the base path of the upstream in front of the request path. |
 | `query` | The query string as the upstream received it, with its leading `?`. The empty string when there is none. |
@@ -758,20 +759,18 @@ the **sanitized** subject, e-mail and workspace, and the **filtered** roles
 would make the comma separated list of `x-shuttle-roles` ambiguous). The
 roles that are handed to the access service are not filtered.
 
-**The value.** `v5=<the detached compact JWS>` for the asymmetric format
-and `v4=<the detached compact JWS>` for the symmetric one. The version is
-part of the value so the format can change without breaking the
-verification, and a signature of one format never verifies with the key of
-the other one.
+**The value.** `v5=<the detached compact JWS>`. The version is part of the
+value so the format can change without breaking the verification, and a
+signature of another version is refused like a signature of an unknown
+version.
 
 **The verification of an upstream.** The upstream:
 
 1. reads `x-shuttle-signature` and the version that is in front of it;
 2. refuses a version it does not know, and **binds** the version to the
    algorithm and to the key: `v5` is `ES256` with the public key of the
-   deployment, `v4` is `HS256` with the derived key. There is no fallback
-   from one algorithm to the other, and the public key never verifies a
-   `v4` signature;
+   deployment. There is no other version and no fallback from one
+   algorithm to another;
 3. splits the value into its three parts: the protected header, the
    **empty** payload and the signature. A value that is not a compact
    serialization, and a payload that is not detached, are refused;
@@ -792,41 +791,45 @@ and the guide is in [upstream-identity.md](upstream-identity.md).
 **The test vector** (pinned in `src/domains/forwarding/identity-signature.test.ts`):
 
 ```
-secret  = "test-secret"
-key     = 53060fda6e7406918eb25fc53342d73c12ebd6ff60b20444557bedb92be4ff5c
+key     = the private key of the deployment, an EC key on the curve P-256
 claims  = { subject: "user-1", email: "user@example.com",
             roles: ["admin","dev"],
             workspaceId: "11111111-1111-4111-8111-111111111111" }
 request = { method: "GET", path: "/base/ws/123", query: "?x=1",
             host: "api.example.com" }
-payload = {"v":"v4","method":"GET","path":"/base/ws/123","query":"?x=1",
+payload = {"v":"v5","method":"GET","path":"/base/ws/123","query":"?x=1",
            "host":"api.example.com","subject":"user-1",
            "workspaceId":"11111111-1111-4111-8111-111111111111",
            "email":"user@example.com","roles":["admin","dev"]}
-signature = v4=eyJhbGciOiJIUzI1NiIsInR5cCI6InNodXR0bGUtaWRlbnRpdHkifQ..tIL7qgT7uQOhaHjjFpgmOHYSAcjNBrddkreDMFejQm8
+header  = {"alg":"ES256","typ":"shuttle-identity"}
+value   = v5=eyJhbGciOiJFUzI1NiIsInR5cCI6InNodXR0bGUtaWRlbnRpdHkifQ..<the signature>
 ```
 
-**The migration from `v4`.** The value of `v4` is signed with a key that
-every upstream holds, so an upstream that verifies an identity can mint one
-as well. The value of `v5` is signed with the private key of the
+The payload and the protected header are pinned: they are the same for
+every request. The **signature is not**: it is an `ES256` one, and the
+signature of the same request is never the same twice. What the test
+proves is that the signature verifies with the public key of the
+deployment, and that the payload of another request does not.
+
+**The migration from `v4`.** The value of `v4` was signed with a key that
+every upstream held, so an upstream that verified an identity could mint
+one as well. The value of `v5` is signed with the private key of the
 deployment: the upstreams are given the public key, and an upstream that
 can verify an identity cannot mint one. An upstream that verifies `v4` has
 to be changed before the gateway signs `v5`: it reads the version of the
 value and verifies with the public key of the deployment.
 
-**The symmetric format is deprecated.** `v4` exists for the development
-stack and for the deployments that have not migrated yet. A production
-deployment is **refused** at the start when it has no
-`SHUTTLE_IDENTITY_SIGNING_KEY`: the symmetric format is not a production
-format. The gateway writes a warning in its log when it signs with the
-symmetric key, and the format will be removed in the release that follows
-the first one that is not a `0.x`. The `v5` format is the only one a
-deployment has to implement.
+**The symmetric format is removed.** `v4` existed for the development
+stack and for the deployments that had not migrated yet. It is **removed**
+in the `1.0` release: the gateway writes `v5` only, and an upstream that
+verifies a `v4` signature refuses it like any other signature of a version
+it does not know. The `v5` format is the only one a deployment has to
+implement.
 
 **The migration from `v3`.** The value of `v3` was a hex digest of a
 canonical JSON **array**. An upstream that verifies `v3` has to be changed:
 it rebuilds the payload as an object and verifies the JWS. The gateway
-writes `v4` only, so a deployment that changes the format changes the
+writes `v5` only, so a deployment that changes the format changes the
 contract of its upstreams with it.
 
 ### 7.5 The trace of a request
@@ -1627,6 +1630,8 @@ lists are numbered independently.
 | 40 | A route that names no workspace | The access service is asked about it only when the route asks for it with `accessCheck`. A deployment without workspaces is served by the same protocol, and the workspace of the request is then absent (§6.3). |
 | 41 | The body of a request that is never sent again | It is not held in memory: it would be held for nothing, and the upstream would only be reached once the whole body arrived (§11.4). |
 | 42 | The compatibility of the release | The contracts of §16.1 are extended by a `MINOR` release and changed by a `MAJOR` one. A `0.x` release extends them, and the changelog of the release says what changed (§16). |
+| 43 | The removal of the symmetric format of the identity | The format `v4` is removed in the `1.0` release: the key of that format was shared with the upstreams, so an upstream that verified an identity could mint one as well. The gateway signs `v5` only, and a deployment without a key signs with a key that is generated for its process (§7.4). |
+| 44 | The freeze of the contracts | The contracts of §16.1 are frozen in the `1.0` release: they were reviewed one by one, and the `1.0` release is the one that changes them. A `MINOR` release extends them and never changes one (§16.2). |
 
 ---
 
@@ -1670,6 +1675,12 @@ The version of the release is `MAJOR.MINOR.PATCH`, and the release before
   them. The first `1.0` is the release that fixes the contracts of
   `0.x`: after it, a `MINOR` release never changes one.
 
+The contracts of §16.1 are **frozen** in the `1.0` release: they were
+reviewed one by one, the changes that were needed were made, and the
+result is what a deployment of the `1.0` release is written against. The
+`1.0` release is the one that changes them, and the next `MAJOR` release
+is the one that changes them again.
+
 The rules that hold in every `0.x` release, and that are kept after the
 `1.0`:
 
@@ -1683,11 +1694,11 @@ The rules that hold in every `0.x` release, and that are kept after the
    their meaning. A field that is removed is a `MAJOR` change, and the
    changelog says how a service migrates.
 3. **The format of the signature of the identity is versioned.** The
-   version is part of the value (`v4=…`, `v5=…`) and part of the payload,
-   so an upstream that knows the version refuses the signature of another
-   one instead of misreading it. A new format gets a new version: the
-   previous one keeps working until the changelog says that it does not
-   (§7.4).
+   version is part of the value (`v5=…`) and part of the payload, so an
+   upstream that knows the version refuses the signature of another one
+   instead of misreading it. A new format gets a new version: the previous
+   one keeps working until the changelog says that it does not, and it is
+   removed in a `MAJOR` release (§7.4).
 4. **The names of the variables of the environment do not change their
    meaning.** A variable that is renamed keeps its old name until the
    changelog says that it is gone, and the old name warns in the log for a
@@ -1708,4 +1719,8 @@ table is the one of this release:
 
 | What | Deprecated in | Removed in | The way out |
 | --- | --- | --- | --- |
-| The symmetric format of the signature of the identity (`v4`) | 0.4.0 | the first release that is not a `0.x` | Set `SHUTTLE_IDENTITY_SIGNING_KEY` and give the public key to the upstreams (§7.4). |
+| The symmetric format of the signature of the identity (`v4`) | 0.4.0 | **1.0.0** | Set `SHUTTLE_IDENTITY_SIGNING_KEY` and give the public key to the upstreams (§7.4). |
+
+The deprecations of the `0.x` line are removed in the `1.0` release, and
+the table above is empty after it: a deprecation that is announced in a
+`1.x` release is removed in a `2.0` release at the earliest.

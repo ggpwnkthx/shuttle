@@ -3,11 +3,10 @@ import { CompactSign, compactVerify } from 'jose'
 import {
   asymmetricIdentityKey,
   canonicalIdentityPayload,
-  deriveIdentityKey,
+  ephemeralIdentityKey,
   publicKeyPem,
   sanitizeIdentityValue,
   signIdentity,
-  symmetricIdentityKey,
   verificationKeyOf,
   verifyIdentity,
   writtenIdentity,
@@ -16,17 +15,40 @@ import {
 } from './index'
 
 /**
+ * The private key of the deployment of the tests.
+ *
+ * It is a key of the curve P-256, and it is the same in every test of the
+ * file: the signature of the identity is asymmetric, so the signature of a
+ * request is never the same twice and only the payload of it is pinned.
+ */
+const privateKeyPem = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgkuKN/9wk9hJs4TsF
+NEjHkj8cclKv3iB9nR7vgKkcwEOhRANCAAQ8bXaNL1nQ4xpQjNBEpjn29oDvta7R
+EzXd+ms2kvgMosNye7/tEJyT6IsXi7zYekkcpLuM32a9AOSHPD/t2JPs
+-----END PRIVATE KEY-----`
+
+/** Another private key of the curve P-256, of another deployment. */
+const otherPrivateKeyPem = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgm8Zn19s4YS7acUM4
+HFOT2BicftfMfQXJwmIBquIjUD2hRANCAAQaJ0QyywD+sKyASmHfxrmwBm/YyAsT
+DlGoyiUmXDOgE8FcIlMVlFdh1sB8zPcoJIFb6BDwST2W869wEwkFwcVE
+-----END PRIVATE KEY-----`
+
+/**
  * The signature of the identity.
  *
  * The vector of the specification is pinned here: an upstream that verifies
- * the signature of the identity has to arrive at the same value, and a
+ * the signature of the identity has to arrive at the same payload, and a
  * change of the canonical form is a change of the contract.
+ *
+ * The signature itself is not pinned: it is an `ES256` one, and the
+ * signature of the same request is never the same twice. What is pinned is
+ * the payload, the protected header and the fact that the signature
+ * verifies with the public key of the deployment.
  */
 describe('the signature of the identity', () => {
-  const secret = 'test-secret'
-  const key = deriveIdentityKey(secret)
-  const symmetric = symmetricIdentityKey(secret)
-  const verification = verificationKeyOf(symmetric)
+  const signing = asymmetricIdentityKey(privateKeyPem)
+  const verification = verificationKeyOf(signing)
   const claims = {
     subject: 'user-1',
     email: 'user@example.com',
@@ -40,12 +62,6 @@ describe('the signature of the identity', () => {
     host: 'api.example.com',
   }
 
-  test('the key of the signature is derived from the secret', () => {
-    expect(key.toString('hex')).toBe(
-      '53060fda6e7406918eb25fc53342d73c12ebd6ff60b20444557bedb92be4ff5c'
-    )
-  })
-
   test('the canonical payload is the one of the specification', () => {
     const identity: WrittenIdentity = {
       subject: claims.subject,
@@ -54,26 +70,14 @@ describe('the signature of the identity', () => {
       workspaceId: claims.workspaceId,
     }
     expect(canonicalIdentityPayload(identity, request)).toBe(
-      '{"v":"v4","method":"GET","path":"/base/ws/123","query":"?x=1","host":"api.example.com","subject":"user-1","workspaceId":"11111111-1111-4111-8111-111111111111","email":"user@example.com","roles":["admin","dev"]}'
-    )
-  })
-
-  test('the signature is the one of the specification', async () => {
-    const identity: WrittenIdentity = {
-      subject: claims.subject,
-      email: claims.email,
-      roles: claims.roles,
-      workspaceId: claims.workspaceId,
-    }
-    expect(await signIdentity(identity, request, symmetric)).toBe(
-      'v4=eyJhbGciOiJIUzI1NiIsInR5cCI6InNodXR0bGUtaWRlbnRpdHkifQ..tIL7qgT7uQOhaHjjFpgmOHYSAcjNBrddkreDMFejQm8'
+      '{"v":"v5","method":"GET","path":"/base/ws/123","query":"?x=1","host":"api.example.com","subject":"user-1","workspaceId":"11111111-1111-4111-8111-111111111111","email":"user@example.com","roles":["admin","dev"]}'
     )
   })
 
   test('the signature is a detached jws', async () => {
     const identity: WrittenIdentity = { subject: claims.subject, roles: claims.roles }
-    const signature = await signIdentity(identity, request, symmetric)
-    const parts = signature.slice('v4='.length).split('.')
+    const signature = await signIdentity(identity, request, signing)
+    const parts = signature.slice('v5='.length).split('.')
     // The payload is detached: the segment in the middle is empty.
     expect(parts).toHaveLength(3)
     expect(parts[1]).toBe('')
@@ -82,8 +86,15 @@ describe('the signature of the identity', () => {
       alg: string
       typ: string
     }
-    expect(header.alg).toBe('HS256')
+    expect(header.alg).toBe('ES256')
     expect(header.typ).toBe('shuttle-identity')
+  })
+
+  test('the protected header is the one of the specification', async () => {
+    const identity: WrittenIdentity = { subject: claims.subject, roles: claims.roles }
+    const signature = await signIdentity(identity, request, signing)
+    const [protectedHeader] = signature.slice('v5='.length).split('.')
+    expect(protectedHeader).toBe('eyJhbGciOiJFUzI1NiIsInR5cCI6InNodXR0bGUtaWRlbnRpdHkifQ')
   })
 
   test('an upstream verifies the signature with the standard library', async () => {
@@ -97,13 +108,14 @@ describe('the signature of the identity', () => {
       roles: claims.roles,
       workspaceId: claims.workspaceId,
     }
-    const signature = await signIdentity(identity, request, symmetric)
-    const [protectedHeader, , detachedSignature] = signature.slice('v4='.length).split('.')
+    const signature = await signIdentity(identity, request, signing)
+    const [protectedHeader, , detachedSignature] = signature.slice('v5='.length).split('.')
     const payload = Buffer.from(canonicalIdentityPayload(identity, request), 'utf8').toString(
       'base64url'
     )
     const compact = `${protectedHeader}.${payload}.${detachedSignature}`
-    const verified = await compactVerify(compact, key)
+    const publicKey = verification.key
+    const verified = await compactVerify(compact, publicKey, { algorithms: ['ES256'] })
     expect(Buffer.from(verified.payload).toString('utf8')).toBe(
       canonicalIdentityPayload(identity, request)
     )
@@ -112,31 +124,31 @@ describe('the signature of the identity', () => {
       canonicalIdentityPayload(identity, { ...request, path: '/other' }),
       'utf8'
     ).toString('base64url')}.${detachedSignature}`
-    await expect(compactVerify(other, key)).rejects.toThrow()
+    await expect(compactVerify(other, publicKey, { algorithms: ['ES256'] })).rejects.toThrow()
   })
 
-  test('the order of the roles is not part of the meaning', async () => {
+  test('the order of the roles is not part of the meaning', () => {
     const identity: WrittenIdentity = {
       subject: claims.subject,
       email: claims.email,
       roles: ['dev', 'admin'],
       workspaceId: claims.workspaceId,
     }
-    expect(await signIdentity(identity, request, symmetric)).toBe(
-      'v4=eyJhbGciOiJIUzI1NiIsInR5cCI6InNodXR0bGUtaWRlbnRpdHkifQ..tIL7qgT7uQOhaHjjFpgmOHYSAcjNBrddkreDMFejQm8'
+    expect(canonicalIdentityPayload(identity, request)).toBe(
+      canonicalIdentityPayload({ ...identity, roles: ['admin', 'dev'] }, request)
     )
   })
 
-  test('the host is compared in lower case', async () => {
+  test('the host is compared in lower case', () => {
     const identity: WrittenIdentity = { subject: claims.subject, roles: claims.roles }
-    const lower = await signIdentity(identity, { ...request, host: 'api.example.com' }, symmetric)
-    const upper = await signIdentity(identity, { ...request, host: 'API.EXAMPLE.COM' }, symmetric)
+    const lower = canonicalIdentityPayload(identity, { ...request, host: 'api.example.com' })
+    const upper = canonicalIdentityPayload(identity, { ...request, host: 'API.EXAMPLE.COM' })
     expect(lower).toBe(upper)
   })
 
   test('a signature that belongs to another request is refused', async () => {
     const identity: WrittenIdentity = { subject: claims.subject, roles: claims.roles }
-    const signature = await signIdentity(identity, request, symmetric)
+    const signature = await signIdentity(identity, request, signing)
     expect(
       await verifyIdentity(identity, { ...request, query: '?x=2' }, verification, signature)
     ).toBe(false)
@@ -151,14 +163,18 @@ describe('the signature of the identity', () => {
 
   test('a signature of another key is refused', async () => {
     const identity: WrittenIdentity = { subject: claims.subject, roles: claims.roles }
-    const signature = await signIdentity(identity, request, symmetricIdentityKey('another-secret'))
+    const signature = await signIdentity(
+      identity,
+      request,
+      asymmetricIdentityKey(otherPrivateKeyPem)
+    )
     expect(await verifyIdentity(identity, request, verification, signature)).toBe(false)
   })
 
   test('a missing or a malformed signature is refused', async () => {
     const identity: WrittenIdentity = { subject: claims.subject, roles: claims.roles }
     expect(await verifyIdentity(identity, request, verification, null)).toBe(false)
-    expect(await verifyIdentity(identity, request, verification, 'v4=short')).toBe(false)
+    expect(await verifyIdentity(identity, request, verification, 'v5=short')).toBe(false)
     expect(await verifyIdentity(identity, request, verification, 'v2=00')).toBe(false)
     // The signature of the previous format is not a signature of this one.
     expect(
@@ -169,6 +185,16 @@ describe('the signature of the identity', () => {
         'v3=d10099233a754d22506db9d4a8d397bb8f58c0cbfe93f2782309eea1c49c7e4c'
       )
     ).toBe(false)
+    // The symmetric format of the earlier releases is removed: a `v4`
+    // signature is refused like the signature of any unknown version.
+    expect(
+      await verifyIdentity(
+        identity,
+        request,
+        verification,
+        'v4=eyJhbGciOiJIUzI1NiIsInR5cCI6InNodXR0bGUtaWRlbnRpdHkifQ..tIL7qgT7uQOhaHjjFpgmOHYSAcjNBrddkreDMFejQm8'
+      )
+    ).toBe(false)
   })
 
   test('a signature of another type or with a payload is refused', async () => {
@@ -177,19 +203,19 @@ describe('the signature of the identity', () => {
     // The protected header names another type: the signature is of another
     // kind and the upstream does not try to verify it.
     const other = await new CompactSign(signed)
-      .setProtectedHeader({ alg: 'HS256', typ: 'something-else' })
-      .sign(key)
+      .setProtectedHeader({ alg: 'ES256', typ: 'something-else' })
+      .sign(signing.key)
     const [otherHeader, , otherSignature] = other.split('.')
     expect(
-      await verifyIdentity(identity, request, verification, `v4=${otherHeader}..${otherSignature}`)
+      await verifyIdentity(identity, request, verification, `v5=${otherHeader}..${otherSignature}`)
     ).toBe(false)
     // The payload of the signature is detached: a signature that carries
     // one is not a signature of this format.
-    const signature = await signIdentity(identity, request, symmetric)
-    const [header, , detached] = signature.slice('v4='.length).split('.')
+    const signature = await signIdentity(identity, request, signing)
+    const [header, , detached] = signature.slice('v5='.length).split('.')
     const payload = Buffer.from('{}').toString('base64url')
     expect(
-      await verifyIdentity(identity, request, verification, `v4=${header}.${payload}.${detached}`)
+      await verifyIdentity(identity, request, verification, `v5=${header}.${payload}.${detached}`)
     ).toBe(false)
   })
 })
@@ -232,26 +258,15 @@ describe('the identity that is written into the headers', () => {
 })
 
 /**
- * The asymmetric signature of the identity.
+ * The key of the signature of the identity.
  *
- * The symmetric format gives the secret that signs the identity to every
- * upstream, so an upstream that verifies an identity can mint one as well.
- * The asymmetric format gives the upstreams the **public** key: they
- * verify the identity of a request and they cannot mint one.
+ * The signature is asymmetric: the upstreams hold the **public** key, they
+ * verify the identity of a request and they cannot mint one. The symmetric
+ * format of the earlier releases is removed: its key was shared with the
+ * upstreams, so an upstream that verified an identity could mint one as
+ * well.
  */
-describe('the asymmetric signature of the identity', () => {
-  const privateKeyPem = `-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgkuKN/9wk9hJs4TsF
-NEjHkj8cclKv3iB9nR7vgKkcwEOhRANCAAQ8bXaNL1nQ4xpQjNBEpjn29oDvta7R
-EzXd+ms2kvgMosNye7/tEJyT6IsXi7zYekkcpLuM32a9AOSHPD/t2JPs
------END PRIVATE KEY-----`
-
-  const otherPrivateKeyPem = `-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgm8Zn19s4YS7acUM4
-HFOT2BicftfMfQXJwmIBquIjUD2hRANCAAQaJ0QyywD+sKyASmHfxrmwBm/YyAsT
-DlGoyiUmXDOgE8FcIlMVlFdh1sB8zPcoJIFb6BDwST2W869wEwkFwcVE
------END PRIVATE KEY-----`
-
+describe('the key of the signature of the identity', () => {
   const identity: WrittenIdentity = {
     subject: 'user-1',
     email: 'user@example.com',
@@ -300,8 +315,19 @@ DlGoyiUmXDOgE8FcIlMVlFdh1sB8zPcoJIFb6BDwST2W869wEwkFwcVE
     const signing = asymmetricIdentityKey(privateKeyPem)
     const pem = publicKeyPem(signing)
     expect(pem).toContain('BEGIN PUBLIC KEY')
-    // The symmetric format has no public key: the secret is the key.
-    expect(publicKeyPem(symmetricIdentityKey('secret'))).toBeUndefined()
+  })
+
+  test('a key that is generated for the process signs the format of the release', async () => {
+    const signing = ephemeralIdentityKey()
+    expect(signing.version).toBe('v5')
+    expect(signing.algorithm).toBe('ES256')
+    const signature = await signIdentity(identity, request, signing)
+    expect(await verifyIdentity(identity, request, verificationKeyOf(signing), signature)).toBe(
+      true
+    )
+    // The key is of the process: another one does not verify its signature.
+    const other = ephemeralIdentityKey()
+    expect(await verifyIdentity(identity, request, verificationKeyOf(other), signature)).toBe(false)
   })
 
   test('a signature of another private key is refused', async () => {
@@ -329,23 +355,5 @@ DlGoyiUmXDOgE8FcIlMVlFdh1sB8zPcoJIFb6BDwST2W869wEwkFwcVE
     expect(
       await verifyIdentity(identity, { ...request, method: 'POST' }, verification, signature)
     ).toBe(false)
-  })
-
-  test('a signature of the symmetric format does not verify with the public key', async () => {
-    const signing = asymmetricIdentityKey(privateKeyPem)
-    const symmetricSignature = await signIdentity(identity, request, symmetricIdentityKey('secret'))
-    // The version is part of the value: an upstream that knows the public
-    // key refuses the signature of the symmetric format.
-    expect(
-      await verifyIdentity(identity, request, verificationKeyOf(signing), symmetricSignature)
-    ).toBe(false)
-    expect(
-      await verifyIdentity(
-        identity,
-        request,
-        verificationKeyOf(symmetricIdentityKey('secret')),
-        symmetricSignature
-      )
-    ).toBe(true)
   })
 })

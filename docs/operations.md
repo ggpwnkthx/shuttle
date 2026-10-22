@@ -508,13 +508,30 @@ destroys the session of the caller and deletes its cookie.
 1. The new secret is added to the secret store.
 2. The deployment is changed to the new secret. The replicas are replaced one
    by one: **a replica with the old secret and a replica with the new secret
-   do not understand each other** (the state of the login and the signature
-   of the identity differ), so the replicas of a rollout have to be replaced
-   quickly (`maxUnavailable: 0` with a surge, or a maintenance window).
-3. The upstreams are given the new derived key.
-4. The old secret is removed from the secret store.
+   do not understand each other** (the state of a login is signed with the
+   secret), so the replicas of a rollout have to be replaced quickly
+   (`maxUnavailable: 0` with a surge, or a maintenance window).
+3. The old secret is removed from the secret store.
 
 The callers that were in the middle of a login have to sign in again.
+
+The rotation of the secret of the sessions does **not** touch the
+signature of the identity any more: the signature is signed with the
+private key of the deployment (`SHUTTLE_IDENTITY_SIGNING_KEY`), and it is
+independent of the secret of the sessions. The key of the identity has its
+own rotation, and it is the one the upstreams are given:
+
+```bash
+bun run identity:key                     # a new pair
+SHUTTLE_IDENTITY_SIGNING_KEY=<the pem>   # the new private key
+bun run identity:key --public            # the public key the upstreams need
+```
+
+The upstreams are given the new public key, and the deployment is rolled
+out. A replica with the old key and a replica with the new key sign
+different signatures, and an upstream that holds one public key refuses
+the signatures of the other: the rollout has to be quick, and the
+upstreams have to hold both public keys for the length of it.
 
 ## The review of a deployment
 
@@ -616,8 +633,9 @@ request id.
 - the secret of the sessions is the same on every replica: a replica with
   another secret cannot read the session of a caller and cannot verify the
   state of a login;
-- the upstreams verify the signature of the identity with the **derived**
-  key, never with the secret of the sessions;
+- the upstreams verify the signature of the identity with the **public
+  key** of the deployment, never with the private one and never with the
+  secret of the sessions;
 - a secret is never in the image, in the configuration file or in the
   repository.
 

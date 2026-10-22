@@ -3,6 +3,89 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
+## Unreleased
+
+The release that fixes the contracts of the `0.x` line. It is a **MAJOR**
+release: the contracts are changed once, here, and they are **frozen**
+after it. A `MINOR` release extends them and never changes one, and the
+next release that changes a contract is a `MAJOR` one with the migration
+of each change in the changelog.
+
+### The symmetric format of the signature of the identity is removed
+
+This is the one change of the contracts of the release. The format `v4`
+was signed with a key that was **derived from the secret of the sessions**
+and that every upstream held:
+
+```
+key = HMAC-SHA256(secret, "shuttle-identity-signature-v1")
+```
+
+An upstream that held that key could **mint** an identity of its own: the
+trust boundary was the network and not the key. The format `v5` is signed
+with the private key of the deployment, and the upstreams are given the
+public one, so an upstream that verifies an identity cannot mint one.
+
+The gateway signs `v5` only, from this release on. The format `v4` was
+deprecated in `0.4.0`, and the specification promised its removal in the
+first release that is not a `0.x`: this is that release.
+
+**The migration of a deployment:**
+
+1. The upstreams are changed: they verify the signature with the **public**
+   key of the deployment and with `ES256`. The reference verifier of
+   [examples/upstream-identity/verify.ts](examples/upstream-identity/verify.ts)
+   does it, and it refuses every other combination.
+2. The deployment sets `SHUTTLE_IDENTITY_SIGNING_KEY` with the private key
+   of the deployment. The script `bun run identity:key` generates a pair,
+   and `bun run identity:key --public` prints the public key of the key
+   that is in the environment.
+3. The upstreams are given the public key.
+
+A production deployment was already **refused** at the start without the
+key, and it still is. A deployment that is not a production one and has
+no key signs with a key that is **generated for its process**: the format
+of the signature is the same, but no upstream can verify the identity, and
+the key is neither shared by the replicas nor kept across a restart. The
+gateway writes a warning in its log when it signs that way. The
+development stack generates a key for the run and prints the public key of
+it.
+
+An upstream that still verifies `v4` refuses the signatures of this
+release like any other signature of a version it does not know: the
+version is part of the value, so a signature of another format is never
+misread.
+
+### The contracts of the release are frozen
+
+The contracts of §16.1 of the specification — the behavior of the gateway,
+the protocol of the access service, the format of the signature of the
+identity, the format of the route table, the names of the variables of
+the environment and the names of the metrics — were reviewed one by one.
+The review changed one of them (the format of the signature of the
+identity, above); the others are what a deployment of this release is
+written against.
+
+The promise of the release is therefore the promise of §16.2 of the
+specification: a `PATCH` fixes, a `MINOR` extends the contracts and never
+changes one, and a `MAJOR` changes them and says how a deployment
+migrates. The decisions behind the freeze are in
+[docs/decisions.md](docs/decisions.md), decisions 57 and 58.
+
+### The documentation of the release
+
+- The specification says that the symmetric format is **removed**, and it
+  says it once: the two places that named the removal — §7.4 and the table
+  of the deprecations — named two different releases. The table now names
+  `1.0.0`.
+- The test vector of the signature of the identity is the vector of `v5`.
+  The signature itself is not pinned any more: it is an `ES256` one, and
+  the signature of the same request is never the same twice. The payload
+  and the protected header are pinned, and the test proves that the
+  signature verifies with the public key of the deployment.
+- The guide of the upstream no longer offers the symmetric format, and the
+  reference verifier refuses it.
+
 ## 0.5.0
 
 The release that makes the gateway survive what happens around it: an

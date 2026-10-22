@@ -63,11 +63,12 @@ export interface IdentitySettings {
    * is an `ES256` one. The upstreams are given the **public** key: they
    * verify the identity of a request and they cannot mint one.
    *
-   * A deployment that does not set it signs with the symmetric key that is
-   * derived from the secret of the sessions. The upstreams are then given
-   * that secret, so an upstream that verifies an identity can mint one as
-   * well. A production deployment has to set it: the key belongs to the
-   * deployment and it is the same on every replica.
+   * A deployment that does not set it signs with a key that is generated
+   * for the process: the format of the signature is the same, but no
+   * upstream can verify the identity, and the key is neither shared by the
+   * replicas nor kept across a restart. A production deployment has to set
+   * it: the key belongs to the deployment and it is the same on every
+   * replica.
    */
   signingKey?: string
 }
@@ -449,9 +450,9 @@ const EnvSchema = z.object({
    * upstream that verifies an identity cannot mint one. The script
    * `scripts/identity-key.ts` generates a pair.
    *
-   * A production deployment has to set it: without it the signature is
-   * symmetric, the upstreams hold the secret that signs it, and a setting
-   * that looks active but is not is a security hole.
+   * A production deployment has to set it: without it the key is generated
+   * for the process, so no upstream can verify an identity and the
+   * replicas do not share it.
    */
   SHUTTLE_IDENTITY_SIGNING_KEY: z.string().optional(),
   SHUTTLE_IDENTITY_SIGNING_KEY_BASE64: z.string().optional(),

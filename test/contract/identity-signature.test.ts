@@ -15,10 +15,9 @@ import {
  * headers, rebuilds the compact serialization around it and verifies the
  * signature with the **public** key of the deployment.
  *
- * The symmetric format gives the secret that signs the identity to every
- * upstream, so an upstream that verifies an identity can mint one as well.
- * The asymmetric format does not: the gateway holds the private key and
- * the upstream holds the public one.
+ * The signature is asymmetric: the gateway holds the private key and the
+ * upstream holds the public one, so an upstream that verifies an identity
+ * cannot mint one as well.
  */
 const PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgkuKN/9wk9hJs4TsF

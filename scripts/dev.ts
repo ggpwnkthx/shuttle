@@ -14,8 +14,10 @@
  * the two behave the same. A change in the configuration is picked up by the
  * gateway itself, a change in the code restarts the process.
  */
+import { generateKeyPairSync } from 'node:crypto'
 import { readEnv } from '../src/runtime/env'
 import { createRuntime } from '../src/runtime/composition'
+import { publicKeyPem, asymmetricIdentityKey } from '../src/domains/forwarding'
 import { watchConfiguration } from '../src/runtime/lifecycle'
 import { startAccessService } from '../services/access-fixture'
 import { startOidcProvider } from '../services/oidc-provider'
@@ -52,6 +54,15 @@ async function main(): Promise<void> {
   // run in a production environment.
   process.env.NODE_ENV = 'development'
 
+  // The key of the signature of the identity is generated for the run: the
+  // symmetric format of the earlier releases is removed, so the gateway
+  // signs with the asymmetric one. The public key is printed below, so an
+  // upstream of the development stack can verify the identities it
+  // receives.
+  const identityKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+  const identityKeyPem = identityKey.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+  const identityPublicKeyPem = publicKeyPem(asymmetricIdentityKey(identityKeyPem))
+
   const idp = await startOidcProvider({
     port: IDP_PORT,
     issuer: `http://localhost:${IDP_PORT}`,
@@ -64,7 +75,11 @@ async function main(): Promise<void> {
   const upstreamA = await startUpstream({ name: 'upstream-a', port: UPSTREAM_A_PORT })
   const upstreamB = await startUpstream({ name: 'upstream-b', port: UPSTREAM_B_PORT })
 
-  const settings = readEnv({ ...process.env, ...DEV_ENV })
+  const settings = readEnv({
+    ...process.env,
+    ...DEV_ENV,
+    SHUTTLE_IDENTITY_SIGNING_KEY: identityKeyPem,
+  })
   const runtime = await createRuntime(settings)
   const config = await Bun.file(settings.configPath).text()
   const loaded = runtime.config.applyText(config)
@@ -94,6 +109,12 @@ async function main(): Promise<void> {
   console.log(
     `  workspace API  http://localhost:${GATEWAY_PORT}/ws/11111111-1111-4111-8111-111111111111/`
   )
+  console.log('')
+  console.log('  The key of the identity signature is generated for this run.')
+  console.log('  An upstream that verifies the identities of the stack needs')
+  console.log('  the public key of this run:')
+  console.log('')
+  console.log(identityPublicKeyPem.trimEnd())
   console.log('')
 
   let stopping = false

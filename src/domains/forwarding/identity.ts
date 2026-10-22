@@ -14,17 +14,22 @@
  * The signed payload is the identity itself plus the request it belongs to,
  * so a signature cannot be moved to another request or to another route.
  *
- * The signature is a **JWS** (RFC 7515) signed with `HS256` and a derived
- * key. The payload is **detached**: it is not transmitted, because the
- * upstream rebuilds it from the request and from the identity headers it
- * received. The upstream rebuilds the compact serialization around its own
- * payload and verifies it with the library, so a signature that does not
- * belong to the request is refused by the verification itself and not by a
- * comparison that could be written wrong.
+ * The signature is a **JWS** (RFC 7515) signed with `ES256` and the
+ * private key of the deployment. The payload is **detached**: it is not
+ * transmitted, because the upstream rebuilds it from the request and from
+ * the identity headers it received. The upstream rebuilds the compact
+ * serialization around its own payload and verifies it with the library,
+ * so a signature that does not belong to the request is refused by the
+ * verification itself and not by a comparison that could be written wrong.
+ *
+ * The symmetric format of the earlier releases (`v4`) is **removed**: the
+ * key of that format was shared with the upstreams, so an upstream that
+ * verified an identity could mint one as well. The trust boundary is the
+ * key, and it is the private key of the deployment.
  */
 
 import { CompactSign, base64url, compactVerify } from 'jose'
-import { createHmac, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
+import { createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject } from 'node:crypto'
 
 /** The identity of a caller, as the authentication domain knows it. */
 export interface CallerIdentity {
@@ -59,21 +64,17 @@ export const MAX_IDENTITY_VALUE_LENGTH = 512
 /**
  * The version of the signature format.
  *
- * `v4` binds the whole request target: the method, the path, the query
+ * `v5` binds the whole request target: the method, the path, the query
  * string and the host, as the upstream receives them. It is a JWS with a
- * detached payload, so an upstream verifies it with a standard library.
- */
-export const IDENTITY_SIGNATURE_VERSION = 'v4'
-
-/**
- * The version of the signature format of an **asymmetric** key.
+ * detached payload, signed with `ES256` and a private key the gateway
+ * holds, so an upstream verifies it with the **public** key with a
+ * standard library and cannot mint an identity of its own.
  *
- * `v5` is the same format — a JWS with a detached payload — signed with
- * `ES256` and a private key the gateway holds. The upstream verifies it
- * with the **public** key, so an upstream that can verify an identity
- * cannot mint one: the trust boundary is the key, and not the network.
+ * The symmetric format of the earlier releases (`v4`) is removed in the
+ * `1.0` release: its key was shared with the upstreams, so an upstream
+ * that verified an identity could mint one as well.
  */
-export const IDENTITY_SIGNATURE_VERSION_ASYMMETRIC = 'v5'
+export const IDENTITY_SIGNATURE_VERSION = 'v5'
 
 /** The header the signature is written to. */
 export const IDENTITY_SIGNATURE_HEADER = 'x-shuttle-signature'
@@ -113,71 +114,48 @@ export interface SignedRequest {
   host: string
 }
 
-/** The algorithm of the signature of the identity. */
-export type IdentityAlgorithm = 'HS256' | 'ES256'
+/**
+ * The algorithm of the signature of the identity.
+ *
+ * There is only one: the signature is asymmetric, so an upstream that
+ * verifies an identity cannot mint one.
+ */
+export type IdentityAlgorithm = 'ES256'
 
 /**
  * A key that signs the identity of a request.
  *
- * The symmetric key (`HS256`) is shared with the upstreams: an upstream
- * that can verify an identity can then mint one, so the trust boundary is
- * the network. The asymmetric key (`ES256`) is not: the gateway holds the
- * private key and the upstream holds the public one, so an upstream that
- * can verify an identity cannot mint one.
+ * The key is the **private** key of the deployment (`ES256`): the gateway
+ * holds it and the upstream holds the public one, so an upstream that can
+ * verify an identity cannot mint one. The trust boundary is the key, and
+ * not the network.
  */
 export interface IdentitySigningKey {
   /** The version of the format of the signature. */
   version: string
   /** The algorithm of the signature. */
   algorithm: IdentityAlgorithm
-  /** The key: a secret for `HS256`, a private key for `ES256`. */
-  key: Buffer | KeyObject
+  /** The key: the private key of the deployment. */
+  key: KeyObject
 }
 
 /**
  * A key that verifies the identity of a request.
  *
- * It is the counterpart of the signing key: the secret of the symmetric
- * one, the public key of the asymmetric one.
+ * It is the counterpart of the signing key: the public key of the private
+ * one.
  */
 export interface IdentityVerificationKey {
   /** The version of the format of the signature. */
   version: string
   /** The algorithm of the signature. */
   algorithm: IdentityAlgorithm
-  /** The key: a secret for `HS256`, a public key for `ES256`. */
-  key: Buffer | KeyObject
+  /** The key: the public key of the deployment. */
+  key: KeyObject
 }
 
 /**
- * Derives the key of the identity signature from the secret of the gateway.
- *
- * The key is derived, so the secret that signs the login state is not used
- * for the signature itself and the two can not be confused. The upstream is
- * given the derived key, not the secret.
- */
-export function deriveIdentityKey(secret: string): Buffer {
-  return createHmac('sha256', secret).update('shuttle-identity-signature-v1').digest()
-}
-
-/**
- * The signing key of the symmetric format.
- *
- * The key is derived from the secret of the gateway, and the upstream is
- * given it: an upstream that verifies an identity with it can mint one as
- * well. A deployment that can hold a private key uses
- * `asymmetricIdentityKey` instead.
- */
-export function symmetricIdentityKey(secret: string): IdentitySigningKey {
-  return {
-    version: IDENTITY_SIGNATURE_VERSION,
-    algorithm: 'HS256',
-    key: deriveIdentityKey(secret),
-  }
-}
-
-/**
- * The signing key of the asymmetric format.
+ * The signing key of the deployment.
  *
  * The private key is a PEM of an elliptic curve key on the curve P-256,
  * and the signature is an `ES256` one. The upstream is given the **public**
@@ -201,7 +179,7 @@ export function asymmetricIdentityKey(privateKeyPem: string): IdentitySigningKey
     )
   }
   return {
-    version: IDENTITY_SIGNATURE_VERSION_ASYMMETRIC,
+    version: IDENTITY_SIGNATURE_VERSION,
     algorithm: 'ES256',
     key,
   }
@@ -210,21 +188,13 @@ export function asymmetricIdentityKey(privateKeyPem: string): IdentitySigningKey
 /**
  * The key that verifies what a signing key signs.
  *
- * The public key of an asymmetric key, and the secret itself for a
- * symmetric one.
+ * It is the public key of the private one.
  */
 export function verificationKeyOf(signingKey: IdentitySigningKey): IdentityVerificationKey {
-  if (signingKey.algorithm === 'HS256') {
-    return {
-      version: signingKey.version,
-      algorithm: signingKey.algorithm,
-      key: signingKey.key,
-    }
-  }
   return {
     version: signingKey.version,
     algorithm: signingKey.algorithm,
-    key: createPublicKey(signingKey.key as KeyObject),
+    key: createPublicKey(signingKey.key),
   }
 }
 
@@ -232,14 +202,31 @@ export function verificationKeyOf(signingKey: IdentitySigningKey): IdentityVerif
  * The public key of a signing key, as a PEM.
  *
  * It is what the upstreams are given: an upstream that holds the public
- * key verifies the identity of a request and it cannot mint one. The
- * symmetric format has no public key: the secret is the key.
+ * key verifies the identity of a request and it cannot mint one.
  */
-export function publicKeyPem(signingKey: IdentitySigningKey): string | undefined {
-  if (signingKey.algorithm === 'HS256') return undefined
-  return createPublicKey(signingKey.key as KeyObject)
-    .export({ type: 'spki', format: 'pem' })
-    .toString()
+export function publicKeyPem(signingKey: IdentitySigningKey): string {
+  return createPublicKey(signingKey.key).export({ type: 'spki', format: 'pem' }).toString()
+}
+
+/**
+ * A signing key that is generated for the process that uses it.
+ *
+ * It is the key of a deployment that has none: the identity is signed with
+ * the format of the release, but the public key of it is unknown to the
+ * upstreams, so an upstream cannot verify the identity of the request. The
+ * key changes with every restart, and it is not shared by the replicas.
+ *
+ * A deployment that wants its upstreams to verify the identities sets
+ * `SHUTTLE_IDENTITY_SIGNING_KEY`: the key belongs to the deployment, and it
+ * is the same on every replica.
+ */
+export function ephemeralIdentityKey(): IdentitySigningKey {
+  const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+  return {
+    version: IDENTITY_SIGNATURE_VERSION,
+    algorithm: 'ES256',
+    key: privateKey,
+  }
 }
 
 /**
