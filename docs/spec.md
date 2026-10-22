@@ -1154,6 +1154,15 @@ A revalidation that cannot be made closes the connection: a connection the
 gateway cannot vouch for is a connection it must not keep. A value of `0`
 disables the revalidation.
 
+**The schedule of a connection is jittered.** The first check of a
+connection happens somewhere inside the interval, and the period of the
+connection is drawn from a band of forty percent around it. A fixed
+interval would make every connection of the deployment revalidate at the
+same moment: the connections that were opened together would ask the access
+service at the same instant, and the burst would land on the service that
+decides the access of the callers. The revalidation asks the service again
+and not from the cache (§6.2), so the burst is not absorbed by the cache.
+
 **The guards.** At most `SHUTTLE_WS_MAX_CONNECTIONS` open connections (`503
 too_many_connections`). A message larger than `SHUTTLE_WS_MAX_PAYLOAD_BYTES`
 is refused. The outbound buffer is bounded
@@ -1756,6 +1765,7 @@ lists are numbered independently.
 | 45 | The number of requests inside the gateway | They are bounded by `SHUTTLE_MAX_PENDING_REQUESTS`, apart from the exchanges, which are bounded by `SHUTTLE_MAX_CONCURRENT_REQUESTS`. The admission covers the phase that waits for a dependency, which the cap of the exchanges never reaches (§2.4, §11.2). |
 | 46 | The health of the access service | The service is not called while it is failing: after `SHUTTLE_ACCESS_BREAKER_FAILURES` failures the requests are answered at once with the unavailability of the service, instead of waiting for a call that is going to fail. The breaker only refuses (§6.4). |
 | 47 | The reason of a denial in the metrics | The **code** of the reason is counted when the service sends one. A service that sends no code is counted with the legacy rule, so a deployment written against the `1.0` keeps working (§6.5). |
+| 48 | The schedule of the revalidation of a WebSocket | It is jittered: the first check of a connection is spread over the interval and its period is drawn around it, so the connections of the deployment do not ask the access service at the same instant (§10). |
 
 ---
 

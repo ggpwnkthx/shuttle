@@ -31,7 +31,9 @@ export {
   CLOSE_POLICY_VIOLATION,
   CLOSE_TRY_AGAIN_LATER,
   MAX_CLOSE_REASON_BYTES,
+  REVALIDATION_JITTER,
   WebSocketBridge,
+  periodOf,
   truncateCloseReason,
 } from './bridge'
 export type { BridgeOptions } from './bridge'

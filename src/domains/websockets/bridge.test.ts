@@ -3,6 +3,7 @@ import {
   CLOSE_GOING_AWAY,
   CLOSE_TRY_AGAIN_LATER,
   WebSocketBridge,
+  periodOf,
   truncateCloseReason,
   type ClientLeg,
   type UpstreamSocket,
@@ -306,5 +307,54 @@ describe('the reason of a close', () => {
     expect(new TextEncoder().encode(cut).byteLength).toBeLessThanOrEqual(123)
     // The cut is a valid string: a half of a character would not be.
     expect(cut).toBe('ä'.repeat(cut.length))
+  })
+})
+
+describe('the schedule of the revalidation', () => {
+  test('the period of a connection is drawn around the interval', () => {
+    // The period is the interval of the deployment, drawn from a band of
+    // forty percent around it: the latency of a revocation stays close to
+    // the interval and the checks of the deployment do not line up.
+    for (let index = 0; index < 200; index += 1) {
+      const period = periodOf(60_000)
+      expect(period).toBeGreaterThanOrEqual(48_000)
+      expect(period).toBeLessThanOrEqual(72_000)
+    }
+  })
+
+  test('two connections do not have the same period', () => {
+    const periods = new Set<number>()
+    for (let index = 0; index < 50; index += 1) periods.add(periodOf(60_000))
+    // The probability of fifty draws landing on the same millisecond is
+    // negligible: the connections of the deployment do not revalidate at
+    // the same moment.
+    expect(periods.size).toBeGreaterThan(45)
+  })
+
+  test('the first check of a connection is spread over the interval', async () => {
+    const delays: number[] = []
+    for (let index = 0; index < 20; index += 1) {
+      const client = fakeClient()
+      const upstream = fakeUpstream()
+      const bridge = new WebSocketBridge({
+        ...options(client.leg, upstream.socket),
+        revalidateIntervalMs: 60_000,
+      })
+      bridge.start()
+      let called = false
+      bridge.startRevalidation(async () => {
+        called = true
+        return { allowed: true }
+      })
+      // The first check happens somewhere inside the interval: the
+      // connections that were opened together do not all check at the
+      // same instant.
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      delays.push(called ? 1 : 0)
+      bridge.close(1000, 'done')
+    }
+    // With an interval of a minute, no connection has checked yet, and
+    // they are not all at the same point of their schedule.
+    expect(delays.every((delay) => delay === 0)).toBe(true)
   })
 })

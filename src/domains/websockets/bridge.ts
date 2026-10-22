@@ -33,6 +33,29 @@ export const CLOSE_POLICY_VIOLATION = 1008
 export const CLOSE_TRY_AGAIN_LATER = 1013
 
 /**
+ * The share of the interval the period of a connection is drawn from.
+ *
+ * The period of a connection is the interval of the revalidation, drawn
+ * from a band of forty percent around it. The band is wide enough to
+ * spread the checks of the deployment and narrow enough to keep the
+ * latency of a revocation close to the interval.
+ */
+export const REVALIDATION_JITTER = 0.2
+
+/**
+ * The period of the revalidation of a connection, in milliseconds.
+ *
+ * The period is drawn around the interval of the deployment, so the
+ * connections do not revalidate at the same moment. A connection that was
+ * opened at the same time as another one still has a different period,
+ * and the checks of the deployment are spread over the interval.
+ */
+export function periodOf(intervalMs: number): number {
+  const factor = 1 + (Math.random() * 2 - 1) * REVALIDATION_JITTER
+  return Math.max(1, Math.round(intervalMs * factor))
+}
+
+/**
  * The maximum size of the reason of a close frame, in bytes.
  *
  * The protocol reserves 125 bytes for the code and the reason together, so
@@ -148,12 +171,27 @@ export class WebSocketBridge {
    * stay open; a failure of the port closes the connection, because a
    * connection the gateway cannot vouch for is a connection it must not
    * keep.
+   *
+   * The schedule of every connection is **jittered**. A fixed interval
+   * would make every connection of the deployment revalidate at the same
+   * moment: the connections that were opened together would ask the access
+   * service at the same instant, and the burst would land on the service
+   * that decides the access of the callers. The first check is spread over
+   * the whole interval and the period of the connection is drawn around it,
+   * so the checks of the deployment are spread over the interval as well.
    */
   startRevalidation(revalidate: () => Promise<{ allowed: boolean; reason?: string }>): void {
     const interval = this.#options.revalidateIntervalMs ?? 0
     if (interval <= 0) return
-    this.#revalidateTimer = setInterval(() => void this.#revalidateTick(revalidate), interval)
-    this.#revalidateTimer.unref?.()
+    const schedule = (delay: number): void => {
+      this.#revalidateTimer = setTimeout(() => {
+        void this.#revalidateTick(revalidate).finally(() => schedule(periodOf(interval)))
+      }, delay)
+      this.#revalidateTimer.unref?.()
+    }
+    // The first check is spread over the whole interval, and the period of
+    // the connection is drawn around it: the checks never line up.
+    schedule(Math.floor(Math.random() * interval))
   }
 
   /**
