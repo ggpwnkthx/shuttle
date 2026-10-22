@@ -43,12 +43,15 @@ jobs:
     name: the tag of the release
     # The run is the one of the CI on the branch of the release, and it
     # succeeded. A run of the CI on a branch of a pull request is not one:
-    # a tag of it would publish a release that was never merged.
+    # a tag of it would publish a release that was never merged. The run
+    # of a CI that was dispatched by hand on the branch counts too: it
+    # proved the same thing.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main')
+       github.event.workflow_run.head_branch == 'main' &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
