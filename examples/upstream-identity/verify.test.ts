@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createPublicKey, generateKeyPairSync } from 'node:crypto'
+import { createPublicKey, generateKeyPairSync, type KeyObject } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { CompactSign, importSPKI } from 'jose'
@@ -35,7 +35,7 @@ EzXd+ms2kvgMosNye7/tEJyT6IsXi7zYekkcpLuM32a9AOSHPD/t2JPs
 -----END PRIVATE KEY-----`
 
 const publicKey = await importSPKI(
-  createPublicKey(asymmetricIdentityKey(PRIVATE_KEY).key as never).export({
+  createPublicKey(asymmetricIdentityKey(PRIVATE_KEY).key as KeyObject).export({
     type: 'spki',
     format: 'pem',
   }),
