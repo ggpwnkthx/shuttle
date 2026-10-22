@@ -8,6 +8,7 @@
  */
 
 import { createGatewayApp, createGatewayHandler } from '../app/app'
+import { AdmissionController } from '../app/admission'
 import type { GatewayDependencies } from '../app/dependencies'
 import { AuthenticationService } from '../domains/authentication'
 import type { SessionStore } from '../domains/authentication'
@@ -418,6 +419,15 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     onUpstreamSkipped: () => observer.recordUpstreamSkipped(),
   })
 
+  // The admission of the requests. It bounds the requests that are inside
+  // the gateway at the same time, and it covers the phase that comes
+  // before the exchange: the limits, the session and the decision of the
+  // access service. A request that waits for a hanging access service
+  // would never reach the cap of the exchanges.
+  const admission = new AdmissionController({
+    max: settings.resources.maxPendingRequests,
+  })
+
   // The websockets. The domain owns the reservations, the handshake and the
   // bridge; the platform owns the sockets.
   const reservations = new ReservationManager({
@@ -452,6 +462,10 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     auth,
     access,
     exchanges,
+    // The admission bounds the requests that are inside the gateway at
+    // the same time. It covers the phase that waits for a dependency,
+    // which the cap of the exchanges does not reach.
+    admission,
     rateLimiter,
     globalRateLimiter,
     principalRateLimiter,

@@ -14,6 +14,7 @@ import type { RequestLimiter } from '../domains/rate-limiting'
 import type { AccessClient } from '../domains/workspace-access'
 import type { WebSocketServicePort } from '../domains/websockets'
 import type { Logger, Observer } from '../observability'
+import type { AdmissionController } from './admission'
 
 /** The settings of the browser that the application needs. */
 export interface BrowserSettings {
@@ -37,6 +38,15 @@ export interface GatewayDependencies {
   access: AccessClient
   /** The exchanges with the upstreams. */
   exchanges: HttpExchangeService
+  /**
+   * The admission of the requests.
+   *
+   * It bounds the requests that are inside the gateway at the same time,
+   * including the ones that wait for a dependency. The cap of the
+   * exchanges bounds the phase of the proxying; this one bounds the phase
+   * that comes before it.
+   */
+  admission: AdmissionController
   /** The limiter of the requests of a caller over all the routes. */
   globalRateLimiter: RequestLimiter
   /** The limiter of the requests of a caller on one route. */

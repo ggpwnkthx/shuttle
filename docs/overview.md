@@ -49,6 +49,7 @@ order. A step that refuses the request stops it there.
 | Step | What happens | If it fails |
 | --- | --- | --- |
 | Match a route | The host, path and method pick a route from the configuration file. | `404`, once the rate limits have counted the request |
+| Admit the request | The number of requests inside the gateway is bounded, so a dependency that hangs cannot pile them up. | `503`, at once |
 | Rate limits | The deployment's total, the caller's budget across all routes, and the caller's budget on this route. | `429` |
 | Authenticate | The route's mode says which credential to accept (see below). Then the signed-in caller's own budget on the route is checked. | `401`, or a redirect to the login page for a browser; `429` |
 | Cross-site guard | A request from another site that carries the session cookie is refused. | `403` |

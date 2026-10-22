@@ -89,8 +89,39 @@ function recordOutcome(
 
 /**
  * Runs the pipeline of a request that is not an endpoint of the gateway.
+ *
+ * The request is admitted first: the admission bounds the number of
+ * requests that are inside the gateway at the same time, and it covers
+ * the phase that waits for a dependency — the limits, the session and the
+ * decision of the access service. The cap of the exchanges bounds the
+ * phase of the proxying; without the admission, a request that waits for
+ * a hanging access service would never reach that cap.
  */
 export async function dispatch(
+  context: Context<GatewayEnv>,
+  dependencies: GatewayDependencies,
+  requestId: string,
+  started: number
+): Promise<Response> {
+  const release = dependencies.admission.tryAcquire()
+  if (!release) {
+    // The gateway is full. The request is refused at once: a refusal is
+    // faster than a wait, and a wait is what turns a slow dependency into
+    // an outage.
+    recordOutcome(dependencies, UNMATCHED_ROUTE, context.req.method, 503, started)
+    return jsonError(503, 'gateway_overloaded', 'the gateway is handling too many requests')
+  }
+  try {
+    return await dispatchRequest(context, dependencies, requestId, started)
+  } finally {
+    release()
+  }
+}
+
+/**
+ * The pipeline of a request that was admitted.
+ */
+async function dispatchRequest(
   context: Context<GatewayEnv>,
   dependencies: GatewayDependencies,
   requestId: string,

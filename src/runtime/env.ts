@@ -232,6 +232,23 @@ export interface ResourceSettings {
    * the bound of that. A value of zero means "no limit".
    */
   maxConcurrentRequests: number
+  /**
+   * The maximum number of requests that may be inside the gateway at the
+   * same time.
+   *
+   * The cap above bounds the exchanges with the upstreams. This one
+   * bounds the whole pipeline, and it covers the phase that comes before
+   * the exchange: the limits, the session and the decision of the access
+   * service. A request that waits for a hanging access service holds the
+   * resources of the process for the whole budget of the call, and the
+   * cap of the exchanges never sees it.
+   *
+   * A request that does not fit is refused at once with `503
+   * gateway_overloaded`: a refusal is faster than a wait.
+   *
+   * A value of zero means "no limit".
+   */
+  maxPendingRequests: number
 }
 
 /** The settings of the websockets. */
@@ -522,6 +539,17 @@ const EnvSchema = z.object({
   SHUTTLE_METRICS_TOKEN: z.string().optional(),
   SHUTTLE_MAX_BODY_BYTES: intEnv(10_485_760, { min: 0 }),
   SHUTTLE_MAX_CONCURRENT_REQUESTS: intEnv(1_000, { min: 0 }),
+  /**
+   * The maximum number of requests that may be inside the gateway at the
+   * same time.
+   *
+   * The cap above bounds the exchanges with the upstreams. This one
+   * bounds the whole pipeline, including the phase that waits for a
+   * dependency: the limits, the session and the decision of the access
+   * service. A request that waits for a hanging access service would
+   * never reach the cap above.
+   */
+  SHUTTLE_MAX_PENDING_REQUESTS: intEnv(1_000, { min: 0 }),
   /**
    * The budget of one attempt to an upstream, when the route names several.
    *
@@ -872,6 +900,7 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
     },
     resources: {
       maxConcurrentRequests: parsed.SHUTTLE_MAX_CONCURRENT_REQUESTS,
+      maxPendingRequests: parsed.SHUTTLE_MAX_PENDING_REQUESTS,
     },
     websockets: {
       maxConnections: parsed.SHUTTLE_WS_MAX_CONNECTIONS,

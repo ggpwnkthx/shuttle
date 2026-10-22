@@ -60,6 +60,7 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_COOKIE_SECURE` | `true` | The cookies of the gateway are `Secure`. |
 | `SHUTTLE_MAX_BODY_BYTES` | The limit of the deployment | The limit of the routes wins over it. |
 | `SHUTTLE_MAX_CONCURRENT_REQUESTS` | `1000` | The exchanges that run at the same time. |
+| `SHUTTLE_MAX_PENDING_REQUESTS` | `1000` | The requests that are inside the gateway at the same time. It covers the phase that waits for a dependency — the limits, the session and the decision of the access service — which the cap above never reaches. A request that does not fit is refused at once with `503 gateway_overloaded`. `0` disables it. |
 | `SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS` | `2000` | The budget of one attempt to an upstream, when a route names several. An attempt that does not answer in time is abandoned and the next upstream is tried. `0` disables it. |
 | `SHUTTLE_REPLAY_MAX_BYTES` | `65536` | The size of a body that may be sent again to a second upstream. A body that fits is held in memory. `0` disables it. |
 | `SHUTTLE_UPSTREAM_BREAKER_FAILURES` | `3` | The number of consecutive failures before an upstream is skipped. The breaker is passive: it learns from the failures the gateway observes and it never probes an upstream. `0` disables it: the order of the list is always the order of the file. |

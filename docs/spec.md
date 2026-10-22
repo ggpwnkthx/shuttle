@@ -97,29 +97,60 @@ Every other request runs these steps, in this order:
 4. **Route match.** The route is matched (host and path) **before** the
    limiters, so the budget of a route is keyed by the route that would
    handle the request.
-5. **Rate limits.** The budget of the deployment, then the budget of the
+5. **Admission.** The number of requests that are inside the gateway at the
+   same time is bounded by `SHUTTLE_MAX_PENDING_REQUESTS`. A request that
+   does not fit → `503 gateway_overloaded`, at once.
+6. **Rate limits.** The budget of the deployment, then the budget of the
    caller over all the routes, then the budget of the caller on this route
    (§9). A refusal → `429 too_many_requests` with `retry-after`.
-6. **No route.** A request that matched no route → `404 no_route`. It has
+7. **No route.** A request that matched no route → `404 no_route`. It has
    already been counted by the limiters, in the `none:<ip>` bucket: a flood
    of requests to a path that does not exist is a flood like any other.
-7. **Authentication.** Per the mode of the route (§5). Failure → `401
+8. **Authentication.** Per the mode of the route (§5). Failure → `401
    unauthorized`, or a `302` to `/auth/login?redirect=…` when the client
    accepts HTML and the mode is not `jwt`-only.
-8. **Principal limit.** The budget of the authenticated caller on this
+9. **Principal limit.** The budget of the authenticated caller on this
    route (§9). Refusal → `429 too_many_requests`.
-9. **Cross-site guard.** Applied when the request carries the session
-   cookie (§8). Refusal → `403 cross_site_request`.
-10. **Workspace check.** The placeholder is read, validated as a UUID when
+10. **Cross-site guard.** Applied when the request carries the session
+    cookie (§8). Refusal → `403 cross_site_request`.
+11. **Workspace check.** The placeholder is read, validated as a UUID when
     `requireUuid` is set, and the access service is asked (§6). A denial →
     `403 workspace_forbidden`; an outage of the access service → `503
     access_unavailable`.
-11. **Dispatch.** A WebSocket upgrade (§10) or HTTP proxying (§11).
+12. **Dispatch.** A WebSocket upgrade (§10) or HTTP proxying (§11).
 
 The answers the gateway generates itself are JSON
 `{"error": <code>, "message": <text>}`, except the documented redirects,
 the client-disconnect outcome and the upgrade behavior. The bodies of the
 upstreams are forwarded as they are.
+
+### 2.4 The admission of the requests
+
+The gateway bounds the number of requests that are **inside it** at the
+same time: `SHUTTLE_MAX_PENDING_REQUESTS` (1 000; `0` disables it). A
+request that does not fit is refused at once with `503
+gateway_overloaded`.
+
+The cap is separate from the cap of the exchanges
+(`SHUTTLE_MAX_CONCURRENT_REQUESTS`, §11.2) because it covers a different
+phase. The cap of the exchanges bounds the requests that are talking to an
+upstream; the admission bounds the requests that are **waiting**, and the
+waiting is where a dependency hurts: a request that waits for a decision of
+the access service holds the resources of the process for the whole budget
+of the call — three seconds by default — and it never reaches the cap of
+the exchanges.
+
+A refusal is faster than a wait, and a wait is what turns a slow
+dependency into an outage of the deployment: the requests pile up behind
+the dependency, the gateway answers later and later, and the outage
+amplifies itself. The admission bounds the pile.
+
+The slot is taken when the request enters the pipeline and given back when
+the gateway hands the answer to the runtime. The requests that are being
+handled are published as `shuttle_active_requests`. A request that did
+not fit is counted as a refusal of the gateway, before the route is
+matched: it is counted on the `unmatched` route, with the status `503`
+that tells it apart from a request that matched no route.
 
 ---
 
@@ -1275,6 +1306,12 @@ opens a request and never sends its body holds a connection until the idle
 budget of the upload runs out, so the cap is the bound of that. An exchange
 that does not fit → `503 gateway_overloaded`.
 
+The cap covers the **exchange**. The requests that are waiting for a
+dependency are bounded by the admission of §2.4, which is a separate cap
+for a separate phase: a request that waits for a decision of the access
+service never reaches the exchange, so the cap of the exchanges never sees
+it.
+
 ### 11.3 The failures and what the caller sees
 
 **Before the response headers are sent**, the gateway can still answer with
@@ -1632,6 +1669,7 @@ lists are numbered independently.
 | 42 | The compatibility of the release | The contracts of §16.1 are extended by a `MINOR` release and changed by a `MAJOR` one. A `0.x` release extends them, and the changelog of the release says what changed (§16). |
 | 43 | The removal of the symmetric format of the identity | The format `v4` is removed in the `1.0` release: the key of that format was shared with the upstreams, so an upstream that verified an identity could mint one as well. The gateway signs `v5` only, and a deployment without a key signs with a key that is generated for its process (§7.4). |
 | 44 | The freeze of the contracts | The contracts of §16.1 are frozen in the `1.0` release: they were reviewed one by one, and the `1.0` release is the one that changes them. A `MINOR` release extends them and never changes one (§16.2). |
+| 45 | The number of requests inside the gateway | They are bounded by `SHUTTLE_MAX_PENDING_REQUESTS`, apart from the exchanges, which are bounded by `SHUTTLE_MAX_CONCURRENT_REQUESTS`. The admission covers the phase that waits for a dependency, which the cap of the exchanges never reaches (§2.4, §11.2). |
 
 ---
 
