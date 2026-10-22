@@ -833,3 +833,20 @@ deployment:
 | The latency of a decision that is not cached | The control plane has to be fast. The cache absorbs the rest. |
 | One hostname per product surface | Subdomains, or one host with distinct path prefixes. |
 | The upstream of a websocket over TLS | The websocket client of the runtime cannot speak TLS: the upstream of a websocket is served over plain http. The measurements are in [runtime.md](runtime.md). |
+
+## What is not proven yet
+
+The contract of [spec.md](spec.md) is complete. The following is **not**:
+these are the places where the design is settled and the evidence is thin.
+They are written down because an operator has to know where the ground is
+soft, and because a limit nobody knows about is a limit nobody relies on.
+
+| What | Where it stands |
+| --- | --- |
+| The history of the project | The repository is young: the design is the work of a few days and it has never carried the traffic of a deployment. Every number of [capacity.md](capacity.md) was measured on one machine with the upstream in the same process. |
+| The calls of the access service that are shared | The calls that are in flight are shared **per replica**: a burst that arrives on N replicas asks the service N times, and not once. The cache of the decisions is shared, so the burst is bounded by the lifetime of the cache, and a deployment that needs one call needs a lock in the shared state. |
+| The breaker of the access service | The state is **per process**, like the breaker of the upstreams. A replica that did not see the failures calls the service while the others do not, and it learns from its own failures in the same way. |
+| The breaker of the upstreams | The state is per process for the same reason: a replica that did not see the failure sends its next requests to the upstream that is down, and it pays the budget of the route. |
+| The capacity behind an ingress | There is no ingress in the build environment. The settings that matter are in [the ingress](#the-ingress). |
+| The capacity with the shared state on another host | The measurements of [capacity.md](capacity.md) were made with the servers on the same machine: a deployment that reaches them over the network pays the latency of the network on every round trip. |
+| The interoperability with a real provider | The contract tests run against the provider of the project and the interop tests run against dex. A provider with another shape — a claim of another name, an id token that carries no nonce — has not been tried. |
