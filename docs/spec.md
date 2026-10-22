@@ -2,7 +2,7 @@
 
 Shuttle is an application gateway. It authenticates a caller against an
 OpenID Connect provider, asks an access service whether the caller may use a
-workspace, and forwards the request to a single configured upstream.
+workspace, and forwards the request to an upstream of the route it matched.
 
 This document is normative for product behavior and source organization.
 [architecture.md](architecture.md) describes how the code is laid out and
@@ -24,7 +24,7 @@ WebSocket on `SHUTTLE_GATEWAY_HOST:SHUTTLE_GATEWAY_PORT` (default
 | --- | --- |
 | **caller** | The client of the gateway: a browser or an API client. |
 | **principal** | The authenticated caller: `subject`, optional `email`, `roles`, and the `source` of the credential (`session` or `jwt`). |
-| **route** | A host and path match with exactly one upstream and one policy. |
+| **route** | A host and path match with one policy and one upstream, or an ordered list of upstreams that a request is sent to one at a time. |
 | **workspace** | The unit of access control, named by a path placeholder (`{workspaceId}`). |
 | **upstream** | The application a request is forwarded to. |
 | **access service** | The external service that decides whether a subject may use a workspace. |
@@ -1485,9 +1485,11 @@ Shuttle does not:
   rewrite the body, the query string or the headers);
 - buffer or cache responses;
 - aggregate WebSockets;
-- support more than one upstream per route with a health check: the
-  upstreams are tried in the order of the list and there is no probe (§11.4);
-- retry a failed request or break the circuit of a failing upstream.
+- probe the health of an upstream: the upstreams of a route are tried in
+  the order of the list, and the breaker of §11.4 only learns from the
+  failures the gateway observes;
+- send a request to a second upstream when it may change the state of the
+  first one (§11.4).
 
 ---
 

@@ -2,7 +2,7 @@
 
 Shuttle is an application gateway. It authenticates a caller against an
 OpenID Connect provider, asks an access service whether the caller may use
-a workspace, and forwards the request to one configured upstream.
+a workspace, and forwards the request to an upstream of the route it matched.
 
 It has no domain model of its own: the workspaces, the roles and the
 quotas live in the access service. Shuttle enforces "authenticated +
@@ -12,6 +12,7 @@ The documentation is in [docs/](docs/):
 
 | Document | What it holds |
 | --- | --- |
+| [docs/overview.md](docs/overview.md) | Start here: what the gateway does and how the pieces fit, in one page. |
 | [docs/spec.md](docs/spec.md) | The normative behavior, and the only document that changes the contract. |
 | [docs/architecture.md](docs/architecture.md) | How the code is laid out, which import is allowed where, and which file owns what. |
 | [docs/decisions.md](docs/decisions.md) | The decisions behind the contract, with their evidence. |

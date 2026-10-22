@@ -3,7 +3,7 @@
   "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "Shuttle: an application gateway that authenticates a caller, asks an access service and forwards the request to a single upstream.",
+  "description": "Shuttle: an application gateway that authenticates a caller, asks an access service and forwards the request to an upstream of its route.",
   "scripts": {
     "dev": "bun --watch scripts/dev.ts",
     "start": "bun run src/main.ts",
