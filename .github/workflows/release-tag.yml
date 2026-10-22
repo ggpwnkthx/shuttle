@@ -1,0 +1,91 @@
+# The tag of a release.
+#
+# The workflow watches the version of the package: when it is greater than
+# the version of the latest tag, the tag is created and pushed, and the
+# release of the tag starts.
+#
+# The workflow runs **after** the CI workflow of the same commit, and only
+# when it succeeded: a tag publishes a release, and a release of a commit
+# that did not pass the tests is a release that has to be withdrawn.
+#
+# The release is dispatched and not triggered. A tag that is pushed with
+# the token of the repository does **not** start a workflow by itself:
+# GitHub holds the events of the token back, so that a workflow cannot
+# make itself run in a loop. The two workflows of the release are
+# dispatched on the tag they publish, and they run in the context of that
+# tag: the version, the revision and the image are the ones of the tag.
+#
+# A tag that is pushed by hand starts them by itself, as it always did.
+name: release-tag
+
+on:
+  # The workflow of the CI, when it ended on the branch of the release.
+  workflow_run:
+    workflows: ['ci']
+    types: [completed]
+  # A run by hand, for a release that the workflow of the CI did not start.
+  workflow_dispatch:
+
+permissions:
+  # The tag is pushed to the repository: it is what publishes the release.
+  contents: write
+  # The workflows of the release are dispatched by this one.
+  actions: write
+
+# Two runs at the same time would read the same tags and would push two
+# tags: the second one waits for the first.
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: the tag of the release
+    # The run is the one of the CI on the branch of the release, and it
+    # succeeded. A run of the CI on a branch of a pull request is not one:
+    # a tag of it would publish a release that was never merged.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit that the CI proved: the tag points at it, and not at
+          # the head of the branch, which may have moved since.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # The tags are the history of the releases: the decision needs
+          # all of them.
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+
+      - name: what the tag would be
+        run: bun run scripts/release-tag.ts
+
+      - name: the tag of the release
+        id: tag
+        run: |
+          set -euo pipefail
+          bun run release:tag -- --tag > "$RUNNER_TEMP/tag.txt"
+          cat "$RUNNER_TEMP/tag.txt"
+          created=$(grep '^created=' "$RUNNER_TEMP/tag.txt" | cut -d= -f2)
+          tag=$(grep '^tag=' "$RUNNER_TEMP/tag.txt" | cut -d= -f2)
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The release is dispatched on the tag: the workflows read the
+      # version and the revision of the tag they publish.
+      - name: the release of the tag
+        if: steps.tag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh workflow run release.yml --ref "${TAG}"
+          gh workflow run release-binaries.yml --ref "${TAG}" -f "tag=${TAG}"

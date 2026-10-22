@@ -28,6 +28,7 @@
     "format:check": "biome format .",
     "architecture": "bun run scripts/architecture.ts",
     "versions": "bun run scripts/version.ts",
+    "release:tag": "bun run scripts/release-tag.ts",
     "environment": "bun run scripts/environment.ts",
     "identity:key": "bun run scripts/identity-key.ts",
     "load": "bun run scripts/load.ts",

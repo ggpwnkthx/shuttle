@@ -777,6 +777,44 @@ The libc of a binary is the one of its platform: a binary of `linux-x64`
 needs glibc and a binary of `linux-x64-musl` needs musl, so a deployment on
 Alpine takes the second one.
 
+## The tag of a release
+
+The version of a release lives in the package and in the files that name
+it, and the **tag** is what turns a commit into a release. The workflow of
+the tag (`.github/workflows/release-tag.yml`) creates it:
+
+| When | What it does |
+| --- | --- |
+| The CI of a push on `main` succeeded | It compares the version of the package with the version of the latest tag. The version that is greater is tagged, and the release of the tag starts. |
+| The version is the version of the latest tag | There is nothing to do: the release of that version is already published. |
+| The version is older than the latest tag | The version was rolled back, and nothing is tagged. |
+
+The tag is created on the commit that the CI proved, and it is never
+moved: a tag that exists is a release that was published, and a release
+that was published is not republished under another name.
+
+The workflow waits for the CI: a tag publishes a release, and a release of
+a commit that did not pass the tests is a release that has to be
+withdrawn.
+
+The release is **dispatched** and not triggered. A tag that is pushed with
+the token of the repository does not start a workflow by itself — GitHub
+holds the events of the token back — so the two workflows of the release
+are dispatched on the tag they publish, and they run in the context of
+that tag. A tag that is pushed by hand starts them by itself, as it
+always did.
+
+The decision is a script, and it runs on a machine as well:
+
+```bash
+bun run release:tag             # what it would do
+bun run release:tag -- --tag   # it does it
+```
+
+The script refuses to tag a commit whose files do not agree on the
+version: a release whose manifests name another version deploys
+something else than the one that was released.
+
 ## The gaps of the deployment
 
 Nothing is missing from the contract of [spec.md](spec.md). The following

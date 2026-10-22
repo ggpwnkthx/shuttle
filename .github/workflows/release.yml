@@ -13,9 +13,15 @@ name: release
 # and the version itself (`0.2.0`). The manifests of the deployment name
 # the second one, so a deployment that pins a version pins the image of
 # that release.
+#
+# The workflow also runs by hand, on a ref. The workflow of the tag
+# dispatches it that way: a tag that is pushed with the token of the
+# repository does **not** start a workflow by itself, so the release is
+# dispatched explicitly, on the tag it publishes.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
