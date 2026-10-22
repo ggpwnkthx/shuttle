@@ -3,7 +3,7 @@
 # The version of the runtime and the revision of the build are labels of the
 # image: an operator has to know what is running without reading the logs.
 ARG BUN_VERSION=1.4.3
-ARG VERSION=1.0.0
+ARG VERSION=1.1.0
 ARG REVISION=unknown
 
 # ---------------------------------------------------------------- dependencies

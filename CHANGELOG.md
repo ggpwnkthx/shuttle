@@ -3,6 +3,114 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
+## 1.1.0
+
+A **MINOR** release: the contracts of §16.1 of the specification are
+**extended**, never changed. A deployment written against the `1.0` keeps
+working without a change.
+
+The release closes the gaps of the availability of the gateway. The three
+of them are the same shape: the gateway was waiting for a dependency
+without a bound, and a wait is what turns a slow dependency into an
+outage of the deployment.
+
+### The requests that are inside the gateway are bounded
+
+`SHUTTLE_MAX_CONCURRENT_REQUESTS` bounds the **exchanges**: the requests
+that are talking to an upstream at the same time. It did not bound the
+requests that are *waiting*.
+
+A request that waits for a decision of the access service holds the
+resources of the process for the whole budget of the call — three seconds
+by default — and it never reaches the exchange, so the cap of the
+exchanges never saw it. The number of requests that waited at the same
+time was bounded by the number of sockets and by the memory of the
+process, and the operator who set the cap believed they had bounded it.
+
+The gateway now **admits** the requests into itself.
+`SHUTTLE_MAX_PENDING_REQUESTS` (1 000 by default) bounds the requests
+that are inside the gateway, and a request that does not fit is refused at
+once with `503 gateway_overloaded`. A refusal is faster than a wait.
+
+The cap is **separate** from the cap of the exchanges because it covers a
+different phase, and the two are tuned independently. The name of the
+existing variable is not changed: it keeps its meaning (§16.2, rule 4).
+
+### The access service is not called while it is failing
+
+The access service is on the path of every request of a route that names
+a workspace. A service that is down does not only refuse the requests: it
+makes them **slow**, because every request waits for the budget of the
+call before it is answered. The outage amplified itself — the requests
+piled up behind the service, the gateway answered later and later, and the
+slower gateway fell further behind.
+
+The gateway now keeps a **breaker** of the service. After
+`SHUTTLE_ACCESS_BREAKER_FAILURES` consecutive failures (5 by default) it
+is not called for `SHUTTLE_ACCESS_BREAKER_COOLDOWN_MS` (5 s by default),
+and a request that arrives while the breaker is open is answered at once
+with the unavailability of the service.
+
+The breaker **only refuses**: it answers the unavailability of the service,
+which is a refusal, so it cannot let a caller in that the service would
+not have allowed. A denial is not a failure — the service answered — and
+a `400` is not a failure either, because a bug in the gateway must not
+refuse every caller of the deployment by opening the breaker. The grace of
+an outage still applies while the breaker is open.
+
+`SHUTTLE_ACCESS_BREAKER_FAILURES=0` disables the breaker.
+
+### The protocol of the access service carries the code of a reason
+
+The reason of a denial was counted by looking at the **free text** of the
+reason of the service: a reason that mentions a role was counted as a
+missing role. Free text is not a machine readable channel, and a service
+that reworded its reason silently changed the metric of the gateway.
+
+The answer of the service may now carry a **`reasonCode`**:
+
+```json
+{"allow": false, "reason": "the subject does not have the role of the workspace", "reasonCode": "missing_role"}
+```
+
+The codes are `missing_role`, `workspace_not_found`, `policy_denied` and
+`access_denied`. The field is **optional**: a service that sends none is
+counted with the legacy rule, and the behavior of the `1.0` release is
+kept. A service that sends the code is counted exactly.
+
+The reference implementation and the conformance suite of the protocol
+carry the codes. The conformance suite checks that a code is one of the
+four.
+
+### The schedule of the revalidation of a WebSocket is jittered
+
+Every connection was revalidated on a fixed interval, so the connections
+of the deployment revalidated together: the connections that were opened
+at the same time asked the access service at the same instant. The
+revalidation asks the service **again** and not from the cache, so the
+cache does not absorb the burst, and the burst lands on the service that
+decides the access of the callers.
+
+The first check of a connection is now spread over the whole interval and
+its period is drawn from a band of forty percent around it. The latency of
+a revocation stays close to the interval.
+
+### The identity of a caller that cannot be written is refused explicitly
+
+A subject that cannot be written into a header made the dispatcher throw
+in the middle of the pipeline. The answer was a `500` with a body, but the
+failure looked like a bug of the gateway rather than the data error it
+was. The dispatcher refuses the request explicitly now, and the identity
+is never forwarded.
+
+### The variables of the environment that are added
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `SHUTTLE_MAX_PENDING_REQUESTS` | `1000` | The requests that are inside the gateway at the same time. `0` disables it. |
+| `SHUTTLE_ACCESS_BREAKER_FAILURES` | `5` | The failures of the access service before it is not called any more. `0` disables the breaker. |
+| `SHUTTLE_ACCESS_BREAKER_COOLDOWN_MS` | `5000` | How long the access service is not called after it failed. |
+
 ## 1.0.0
 
 The release that fixes the contracts of the `0.x` line. It is a **MAJOR**
