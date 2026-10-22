@@ -209,7 +209,9 @@ describe('the workspace of a request', () => {
   })
 
   test('an access service that is not available is not a denial', async () => {
-    const token = await harness.token()
+    // A subject no other test asks about: a decision another test cached
+    // would answer instead of the service.
+    const token = await harness.idp!.mintAccessToken({ subject: 'user-outage-refused' })
     harness.access.setUnavailable(true)
     try {
       const response = await fetch(`${harness.gatewayUrl}/ws/${WORKSPACE_ID}/`, {
@@ -228,7 +230,7 @@ describe('the workspace of a request', () => {
   })
 
   test('an access service that is not available is counted apart', async () => {
-    const token = await harness.token()
+    const token = await harness.idp!.mintAccessToken({ subject: 'user-outage-counted' })
     const before = await readMetrics()
     harness.access.setUnavailable(true)
     try {

@@ -67,6 +67,37 @@ async function metrics(harness: Harness): Promise<string> {
   return await response.text()
 }
 
+/** The decisions of the graceful route that were served while the service was down. */
+function staleCount(text: string): number {
+  const match = /shuttle_access_stale_total\{route="graceful-workspace-api"\} (\d+)/.exec(text)
+  return match ? Number(match[1]) : 0
+}
+
+/**
+ * Asks the graceful route while the access service is down.
+ *
+ * The first request lets the service decide, so the cache holds a decision
+ * that allows the caller. The decision is then older than its lifetime of a
+ * millisecond, and inside the grace: the answer of the second request is
+ * the one of the stale decision.
+ */
+async function requestDuringOutage(harness: Harness): Promise<Response> {
+  const token = await harness.token()
+  const first = await fetch(`${harness.gatewayUrl}/ws/${WORKSPACE_ID}/`, {
+    headers: { host: 'graceful.shuttle.test', authorization: `Bearer ${token}` },
+  })
+  expect(first.status).toBe(200)
+  harness.access.setUnavailable(true)
+  try {
+    await Bun.sleep(10)
+    return await fetch(`${harness.gatewayUrl}/ws/${WORKSPACE_ID}/`, {
+      headers: { host: 'graceful.shuttle.test', authorization: `Bearer ${token}` },
+    })
+  } finally {
+    harness.access.setUnavailable(false)
+  }
+}
+
 describe('the access service of the gateway', () => {
   let harness: Harness
 
@@ -146,28 +177,14 @@ describe('the access service of the gateway', () => {
   })
 
   test('a decision is served while the service is down when the grace allows it', async () => {
-    const token = await harness.token()
-    const first = await fetch(`${harness.gatewayUrl}/ws/${WORKSPACE_ID}/`, {
-      headers: { host: 'graceful.shuttle.test', authorization: `Bearer ${token}` },
-    })
-    expect(first.status).toBe(200)
-    harness.access.setUnavailable(true)
-    try {
-      // The decision is older than its lifetime of a millisecond and it is
-      // inside the grace: the request goes on.
-      await Bun.sleep(10)
-      const response = await fetch(`${harness.gatewayUrl}/ws/${WORKSPACE_ID}/`, {
-        headers: { host: 'graceful.shuttle.test', authorization: `Bearer ${token}` },
-      })
-      expect(response.status).toBe(200)
-    } finally {
-      harness.access.setUnavailable(false)
-    }
+    const response = await requestDuringOutage(harness)
+    expect(response.status).toBe(200)
   })
 
   test('a decision that was served while the service was down is counted', async () => {
-    const text = await metrics(harness)
-    expect(text).toContain('shuttle_access_stale_total')
-    expect(text).toMatch(/shuttle_access_stale_total\{route="graceful-workspace-api"\} \d+/)
+    const before = staleCount(await metrics(harness))
+    const response = await requestDuringOutage(harness)
+    expect(response.status).toBe(200)
+    expect(staleCount(await metrics(harness))).toBe(before + 1)
   })
 })

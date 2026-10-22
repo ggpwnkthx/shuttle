@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { WORKSPACE_ID, createHarness, type Harness } from './harness'
 
 /**
@@ -23,14 +23,16 @@ afterAll(async () => {
 describe('the pipeline of a request', () => {
   let harness: Harness
 
-  beforeAll(async () => {
+  // Every test starts with a full budget: a test that spent the budget of
+  // another one would pass or fail with the order of the tests.
+  beforeEach(async () => {
     harness = await createHarness({
       rateLimitMax: 2,
       rateLimitGlobalMax: 0,
     })
   })
 
-  afterAll(async () => {
+  afterEach(async () => {
     await harness.stop()
   })
 
@@ -68,6 +70,10 @@ describe('the pipeline of a request', () => {
   })
 
   test('a request that is refused by the limiter never reaches the upstream', async () => {
+    // The budget of the route is two requests.
+    for (let spent = 0; spent < 2; spent++) {
+      await fetch(`${harness.gatewayUrl}/`, { headers: { host: 'public.shuttle.test' } })
+    }
     const response = await fetch(`${harness.gatewayUrl}/`, {
       headers: { host: 'public.shuttle.test' },
     })

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { createHarness, type Harness } from './harness'
 
 /**
@@ -15,7 +15,10 @@ import { createHarness, type Harness } from './harness'
  */
 let harness: Harness
 
-beforeAll(async () => {
+// Every test starts with a breaker that has seen no failure: a test that
+// relied on the failures of another one would pass or fail with the order
+// of the tests.
+beforeEach(async () => {
   harness = await createHarness({
     env: {
       // One failure is enough to skip an upstream, so the test does not
@@ -35,7 +38,7 @@ beforeAll(async () => {
   })
 })
 
-afterAll(async () => {
+afterEach(async () => {
   await harness.stop()
 })
 
@@ -52,6 +55,14 @@ describe('the health of the upstreams', () => {
   })
 
   test('the next request of the route goes to the upstream that answered', async () => {
+    // The first upstream fails once.
+    const failed = await fetch(`${harness.gatewayUrl}/mutating/asset`, {
+      method: 'POST',
+      headers: { host: 'api.shuttle.test' },
+      body: JSON.stringify({ hello: 'world' }),
+    })
+    expect(failed.status).toBe(502)
+
     const response = await fetch(`${harness.gatewayUrl}/mutating/asset`, {
       method: 'POST',
       headers: { host: 'api.shuttle.test' },

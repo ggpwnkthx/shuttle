@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { rename, writeFile } from 'node:fs/promises'
 import { watchConfiguration } from '../../src/runtime/lifecycle'
 import { createHarness, type Harness } from './harness'
@@ -13,11 +13,14 @@ import { createHarness, type Harness } from './harness'
 describe('the reload of the configuration', () => {
   let harness: Harness
 
-  beforeAll(async () => {
+  // Every test starts from the configuration of the harness: a test that
+  // relied on the file another one wrote would pass or fail with the order
+  // of the tests.
+  beforeEach(async () => {
     harness = await createHarness()
   })
 
-  afterAll(async () => {
+  afterEach(async () => {
     await harness.stop()
   })
 
@@ -82,7 +85,7 @@ describe('the reload of the configuration', () => {
       // The last good configuration is still the running one.
       expect(harness.runtime.config.revision).toBe(before)
       const response = await fetch(`${harness.gatewayUrl}/`, {
-        headers: { host: 'other.shuttle.test' },
+        headers: { host: 'public.shuttle.test' },
       })
       expect(response.status).toBe(200)
 
@@ -138,11 +141,13 @@ describe('the reload of the configuration', () => {
 describe('the shutdown of the gateway', () => {
   let harness: Harness
 
-  beforeAll(async () => {
+  // Every test drains its own gateway: a gateway that is drained does not
+  // accept the work of the next test.
+  beforeEach(async () => {
     harness = await createHarness()
   })
 
-  afterAll(async () => {
+  afterEach(async () => {
     await harness.stop()
   })
 
