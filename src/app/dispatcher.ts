@@ -32,6 +32,7 @@ import {
   buildUpstreamTarget,
   buildWebsocketUpstreamHeaders,
   checkCrossSite,
+  IdentityNotWritableError,
   resolveForwardingContext,
   rewriteLocation,
   signIdentity,
@@ -40,6 +41,7 @@ import {
   upstreamOrigin,
   writtenIdentity,
   type CallerIdentity,
+  type WrittenIdentity,
 } from '../domains/forwarding'
 import { TOTAL_RATE_LIMIT_KEY, rateLimitKey } from '../domains/rate-limiting'
 import { matchRoute } from '../domains/routing'
@@ -422,7 +424,15 @@ async function dispatchRequest(
       recordOutcome(dependencies, route.id, method, 503, started)
       return jsonError(503, 'websocket_unavailable', 'the websockets are not available')
     }
-    const identity = principal ? writtenIdentity(identityOf(principal, workspaceId)) : undefined
+    const identity = identityFor(principal, workspaceId)
+    if (identity === null) {
+      logger.error('the identity of the caller cannot be written into a header', {
+        requestId,
+        routeId: route.id,
+      })
+      recordOutcome(dependencies, route.id, method, 500, started)
+      return jsonError(500, 'internal_error', 'the identity of the caller cannot be forwarded')
+    }
     // The path the route forwards: the path of the request, or the path
     // the route rewrites it to.
     // The handshake of a websocket goes to the first upstream of the
@@ -506,7 +516,15 @@ async function dispatchRequest(
   )
   const target = targets[0]!
   const targetUrl = new URL(target)
-  const identity = principal ? writtenIdentity(identityOf(principal, workspaceId)) : undefined
+  const identity = identityFor(principal, workspaceId)
+  if (identity === null) {
+    logger.error('the identity of the caller cannot be written into a header', {
+      requestId,
+      routeId: route.id,
+    })
+    recordOutcome(dependencies, route.id, method, 500, started)
+    return jsonError(500, 'internal_error', 'the identity of the caller cannot be forwarded')
+  }
   const headers = buildUpstreamHeaders({
     incoming: context.req.raw.headers,
     forwarding,
@@ -653,6 +671,30 @@ function identityOf(principal: Principal, workspaceId: string | undefined): Call
     email: principal.email,
     roles: principal.roles,
     workspaceId,
+  }
+}
+
+/**
+ * The identity of the caller, as it is written into the headers.
+ *
+ * A subject that cannot be written into a header is refused with a `500`:
+ * the upstream never receives an identity it cannot trust. The failure is
+ * reported instead of being thrown through the pipeline, so the operator
+ * sees it as the error it is.
+ *
+ * The result is `null` when the identity cannot be written, and
+ * `undefined` when there is no caller to write.
+ */
+function identityFor(
+  principal: Principal | null,
+  workspaceId: string | undefined
+): WrittenIdentity | undefined | null {
+  if (!principal) return undefined
+  try {
+    return writtenIdentity(identityOf(principal, workspaceId))
+  } catch (error) {
+    if (error instanceof IdentityNotWritableError) return null
+    throw error
   }
 }
 
