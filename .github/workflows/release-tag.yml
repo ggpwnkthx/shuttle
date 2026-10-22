@@ -70,8 +70,27 @@ jobs:
       - name: what the tag would be
         run: bun run scripts/release-tag.ts
 
+      # The tag points at the commit that the CI proved, and at nothing
+      # else. A commit that is not the tip of the branch is not tagged:
+      # the CI of the tip is the one that tags it, and the tag of an
+      # older commit would be a ref that changes a workflow file — the
+      # token of the repository is not allowed to push one.
+      - name: the commit that the CI proved
+        id: proved
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          tip=$(git rev-parse origin/main)
+          proved=$(git rev-parse HEAD)
+          echo "tip=$tip" >> "$GITHUB_OUTPUT"
+          echo "proved=$proved" >> "$GITHUB_OUTPUT"
+          if [ "$tip" != "$proved" ]; then
+            echo "the branch moved: $proved is not the tip ($tip). The CI of the tip tags it."
+          fi
+
       - name: the tag of the release
         id: tag
+        if: steps.proved.outputs.tip == steps.proved.outputs.proved
         run: |
           set -euo pipefail
           bun run release:tag -- --tag > "$RUNNER_TEMP/tag.txt"
