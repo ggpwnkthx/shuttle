@@ -5,6 +5,36 @@ decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
 ## Unreleased
 
+### The reference verifier of the identity binds the version, the algorithm and the key
+
+The reference verifier an upstream copies — `examples/upstream-identity/verify.ts`
+— accepted a `v4` signature through an interface that only had a public
+key, so the version it claimed to support was not one it could verify, and
+it called the library without an allowlist of the algorithm and without
+reading the type of the protected header.
+
+The verifier now binds the combination it accepts: `v5` is `ES256` with
+the public key of the deployment, a key of the curve P-256, and `v4` is
+`HS256` with the derived key, which the upstream has to configure
+explicitly. A version it does not know, an algorithm that does not match
+the version, a protected header whose type is not `shuttle-identity`, a
+malformed compact serialization and a payload that is not detached are all
+refused. There is no fallback from one algorithm to the other.
+
+The wire format of the gateway is untouched: the gateway signs exactly as
+it did, and the upstreams that verify `v5` with the public key keep
+working. The legacy `v4` support of the gateway itself lives where it
+lived, in `src/domains/forwarding/identity.ts`.
+
+### The repository of the project and the projects around it
+
+The package names the repository it lives in, and the documentation names
+Hub and Depot, the projects that implement the contracts the gateway
+integrates with. The repositories hold the source of the three services:
+they are not the addresses of the services, and a deployment names the
+issuer, the access service and the upstream in its environment and in its
+route table.
+
 ### Cached access decisions keep role names distinct
 
 The cache key now encodes the sorted roles as an array. A role named

@@ -21,6 +21,52 @@ The documentation is in [docs/](docs/):
 | [docs/runtime.md](docs/runtime.md) | The capabilities of the runtime the gateway is written against. |
 | [docs/upstream-identity.md](docs/upstream-identity.md) | How an upstream verifies the identity of a request, with the code. |
 
+## The projects around Shuttle
+
+Shuttle is one project of a small family. The three of them are separate
+repositories and separate services:
+
+| Project | Repository | Role |
+| --- | --- | --- |
+| **Shuttle** | <https://github.com/ggpwnkthx/shuttle> | The gateway. It owns the routing, the contract of the access decision and the format of the identity it forwards. |
+| **Hub** | <https://github.com/ggpwnkthx/hub> | The OpenID Connect broker and the access service. It implements the contracts the gateway integrates with. |
+| **Depot** | <https://github.com/ggpwnkthx/depot> | The data service behind the gateway. It verifies the identity the gateway forwards and asks Hub for the access context. |
+
+The repositories are the **source code** of the three services. They are
+not the addresses of the services: a deployment names the addresses in its
+environment and in its route table, and it names them as the urls of the
+services.
+
+A deployment of Shuttle in front of Hub and Depot looks like this:
+
+| What | Where the address is configured |
+| --- | --- |
+| The issuer of Hub | `SHUTTLE_OIDC_ISSUER`, with the client and the redirect of the deployment |
+| The access service of Hub | `SHUTTLE_ACCESS_URL` |
+| The upstream address of Depot | The `upstream` of the route in the route table |
+
+Shuttle integrates with **any** conforming identity provider, access
+service and upstream. Hub and Depot are the ones that ship with it, not
+the only ones it can talk to.
+
+## How a project consumes Shuttle
+
+Shuttle is a service, not a library. There is no published package and no
+exported api: the gateway is built, deployed and reached over http.
+
+An upstream that wants to trust the identity of a request copies the
+reference verifier — [examples/upstream-identity/verify.ts](examples/upstream-identity/verify.ts),
+which imports nothing of the gateway — or writes its own, and it checks it
+against the revision of Shuttle it pins. The
+[guide for the upstream](docs/upstream-identity.md) says how.
+
+A git dependency (`bun add github:ggpwnkthx/shuttle`) installs the sources
+of a repository as a package, and an import of an url at runtime fetches a
+module over http. Neither of them is a supported way to use Shuttle: the
+package is private, it has no entry point for a consumer, and the files
+under `src/` are the internals of the service. A consumer never imports
+them.
+
 ## What it does
 
 | | |

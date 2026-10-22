@@ -2,8 +2,8 @@
  * The verification of the identity of a request, as an upstream writes it.
  *
  * This file is the reference implementation of the contract of §7.4 of the
- * specification. It is **standalone**: it does not import anything of the
- * gateway, so an upstream copies it, or reads it and writes its own.
+ * specification. It is **standalone**: it imports nothing of the gateway, so
+ * an upstream copies it, or reads it and writes its own.
  *
  * The upstream:
  *
@@ -16,9 +16,23 @@
  * The last step is one call of a standard library. An upstream does not
  * implement a signature of Shuttle, it verifies a JWS.
  *
+ * The verifier is **strict about the combination** it accepts:
+ *
+ * | Version | Algorithm | The key |
+ * | --- | --- | --- |
+ * | `v5` | `ES256` | The public key of the deployment, a key of the curve P-256. |
+ * | `v4` | `HS256` | The key that is derived from the secret of the sessions, and only when it is given explicitly. |
+ *
+ * The version of the value decides the algorithm and the key, and the
+ * protected header has to agree with it: a signature of one combination is
+ * never verified with the key of another one, and there is no fallback from
+ * one algorithm to another. The public key of the deployment cannot verify
+ * a `v4` signature, so `v4` needs the `legacyKey` option, which is the
+ * symmetric key of the deployment.
+ *
  * The guide is in [docs/upstream-identity.md](../../docs/upstream-identity.md).
  */
-import { compactVerify, type KeyInput } from 'jose'
+import { base64url, compactVerify, type KeyInput } from 'jose'
 
 /** The identity of a caller, as the upstream reads it from the headers. */
 export interface UpstreamIdentity {
@@ -66,8 +80,24 @@ export interface VerifyOptions {
    * with it and it cannot mint an identity with it. A PEM is imported with
    * `importSPKI(pem, 'ES256')` of the `jose` package, which returns a
    * `KeyObject` on the server and a `CryptoKey` in the browser.
+   *
+   * The key has to be a **public** key of the curve **P-256**: another key
+   * is refused, so a deployment cannot verify an identity with a key that
+   * another one holds.
    */
   publicKey: KeyInput
+  /**
+   * The symmetric key of the deployment, for the **legacy** format only.
+   *
+   * It is the key that is derived from the secret of the sessions
+   * (`HMAC-SHA256(secret, "shuttle-identity-signature-v1")`). It is
+   * optional: an upstream that only accepts `v5` does not set it, and a
+   * `v4` signature is then refused.
+   *
+   * The legacy format is deprecated (§7.4 of the specification) and it is
+   * symmetric: an upstream that holds the key can mint an identity as well.
+   */
+  legacyKey?: Uint8Array
 }
 
 /** The outcome of the verification. */
@@ -75,8 +105,20 @@ export type VerifyResult =
   | { ok: true; identity: UpstreamIdentity; version: string }
   | { ok: false; reason: string }
 
-/** The version of the format of the signature the upstream understands. */
-export const SUPPORTED_VERSIONS = ['v5', 'v4'] as const
+/** The version of the format the gateway signs with its asymmetric key. */
+export const SUPPORTED_VERSION = 'v5'
+
+/** The algorithm of the format of {@link SUPPORTED_VERSION}. */
+export const SUPPORTED_ALGORITHM = 'ES256'
+
+/** The version of the **deprecated** symmetric format. */
+export const LEGACY_VERSION = 'v4'
+
+/** The algorithm of the deprecated symmetric format. */
+export const LEGACY_ALGORITHM = 'HS256'
+
+/** The type of the protected header of the signature. */
+export const SIGNATURE_TYPE = 'shuttle-identity'
 
 /**
  * The payload of the signature.
@@ -124,18 +166,42 @@ export function identityOf(headers: UpstreamHeaders): UpstreamIdentity {
  * middle of the serialization.
  */
 export async function verifyIdentity(options: VerifyOptions): Promise<VerifyResult> {
-  const { request, headers, publicKey } = options
+  const { request, headers, publicKey, legacyKey } = options
   const signature = headers['x-shuttle-signature']
   if (!signature) return { ok: false, reason: 'the request carries no signature' }
 
   const separator = signature.indexOf('=')
   if (separator === -1) return { ok: false, reason: 'the signature is malformed' }
   const version = signature.slice(0, separator)
-  if (!(SUPPORTED_VERSIONS as readonly string[]).includes(version)) {
+  const serialized = signature.slice(separator + 1)
+
+  // The version decides the algorithm and the key. There is no fallback:
+  // a signature of one combination is never verified with the key of
+  // another one.
+  let algorithm: string
+  let key: KeyInput
+  if (version === SUPPORTED_VERSION) {
+    algorithm = SUPPORTED_ALGORITHM
+    const problem = problemOfPublicKey(publicKey)
+    if (problem) return { ok: false, reason: problem }
+    key = publicKey
+  } else if (version === LEGACY_VERSION) {
+    if (!legacyKey) {
+      return {
+        ok: false,
+        reason: 'the signature is of the legacy format and no legacy key is configured',
+      }
+    }
+    if (legacyKey.length < 32) {
+      return { ok: false, reason: 'the legacy key is too short for HS256' }
+    }
+    algorithm = LEGACY_ALGORITHM
+    key = legacyKey
+  } else {
     return { ok: false, reason: `the version "${version}" of the signature is not known` }
   }
 
-  const parts = signature.slice(separator + 1).split('.')
+  const parts = serialized.split('.')
   if (parts.length !== 3) return { ok: false, reason: 'the signature is malformed' }
   const [protectedHeader, payload, detachedSignature] = parts
   if (!protectedHeader || !detachedSignature) {
@@ -145,20 +211,153 @@ export async function verifyIdentity(options: VerifyOptions): Promise<VerifyResu
     // The payload is detached: the upstream rebuilds it and puts it back.
     return { ok: false, reason: 'the payload of the signature is not detached' }
   }
+  if (!isBase64url(protectedHeader) || !isBase64url(detachedSignature)) {
+    return { ok: false, reason: 'the signature is malformed' }
+  }
+
+  const header = decodeProtectedHeader(protectedHeader)
+  if (!header) return { ok: false, reason: 'the protected header of the signature is malformed' }
+  if (header.alg !== algorithm) {
+    return {
+      ok: false,
+      reason: `the signature of the version "${version}" has to be signed with "${algorithm}" and not with "${String(header.alg)}"`,
+    }
+  }
+  if (header.typ !== SIGNATURE_TYPE) {
+    return {
+      ok: false,
+      reason: `the type of the protected header has to be "${SIGNATURE_TYPE}" and not "${String(header.typ)}"`,
+    }
+  }
 
   const identity = identityOf(headers)
   const rebuilt = canonicalPayload(identity, request, version)
-  const compact = `${protectedHeader}.${base64url(rebuilt)}.${detachedSignature}`
+  const compact = `${protectedHeader}.${base64url.encode(rebuilt)}.${detachedSignature}`
 
   try {
-    await compactVerify(compact, publicKey)
+    await compactVerify(compact, key, { algorithms: [algorithm] })
   } catch {
     return { ok: false, reason: 'the signature does not verify' }
   }
   return { ok: true, identity, version }
 }
 
-/** The base64url encoding of a string, without padding. */
-function base64url(value: string): string {
-  return Buffer.from(value, 'utf8').toString('base64url')
+/** The protected header of a signature. */
+interface ProtectedHeader {
+  alg?: unknown
+  typ?: unknown
+}
+
+/**
+ * Reads the protected header of a signature.
+ *
+ * It is the header of the JWS: the algorithm and the type of the
+ * signature. A header that is not a json object is refused.
+ */
+function decodeProtectedHeader(segment: string): ProtectedHeader | undefined {
+  let decoded: string
+  try {
+    decoded = new TextDecoder().decode(base64url.decode(segment))
+  } catch {
+    return undefined
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(decoded)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+  return parsed as ProtectedHeader
+}
+
+/** Reports whether a segment of the compact serialization is base64url. */
+function isBase64url(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value)
+}
+
+/**
+ * Reports whether the configured key is the public key of the deployment.
+ *
+ * The verifier accepts a public key of the curve P-256 and nothing else: a
+ * private key, another curve or another kind of key is refused, so the
+ * trust boundary of the upstream stays the key of the deployment.
+ */
+function problemOfPublicKey(key: KeyInput): string | undefined {
+  if (isKeyObject(key)) {
+    if (key.type !== 'public') {
+      return 'the public key of the deployment is not a public key'
+    }
+    if (key.asymmetricKeyType !== 'ec') {
+      return 'the public key of the deployment is not an elliptic curve key'
+    }
+    if (key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
+      return 'the public key of the deployment is not a key of the curve P-256'
+    }
+    return undefined
+  }
+  if (isCryptoKey(key)) {
+    if (key.algorithm.name !== 'ECDSA') {
+      return 'the public key of the deployment is not an elliptic curve key'
+    }
+    if (key.algorithm.namedCurve !== 'P-256') {
+      return 'the public key of the deployment is not a key of the curve P-256'
+    }
+    return undefined
+  }
+  if (isJwk(key)) {
+    if (key.kty !== 'EC') {
+      return 'the public key of the deployment is not an elliptic curve key'
+    }
+    if (key.crv !== 'P-256') {
+      return 'the public key of the deployment is not a key of the curve P-256'
+    }
+    return undefined
+  }
+  return 'the public key of the deployment is not a key of the curve P-256'
+}
+
+/** A key of node, with the fields the check of the curve reads. */
+interface NodeKeyObject {
+  type: string
+  asymmetricKeyType?: string
+  asymmetricKeyDetails?: { namedCurve?: string }
+}
+
+/** Reports whether a key is a key of node. */
+function isKeyObject(key: KeyInput): key is KeyInput & NodeKeyObject {
+  return (
+    typeof key === 'object' &&
+    key !== null &&
+    'type' in key &&
+    typeof (key as { type: unknown }).type === 'string' &&
+    'asymmetricKeyType' in key
+  )
+}
+
+/** A key of the web crypto, with the fields the check of the curve reads. */
+interface WebCryptoKey {
+  algorithm: { name: string; namedCurve?: string }
+}
+
+/** Reports whether a key is a key of the web crypto. */
+function isCryptoKey(key: KeyInput): key is KeyInput & WebCryptoKey {
+  return (
+    typeof key === 'object' &&
+    key !== null &&
+    'algorithm' in key &&
+    typeof (key as { algorithm: unknown }).algorithm === 'object' &&
+    (key as { algorithm: unknown }).algorithm !== null
+  )
+}
+
+/** A key in the json form, with the fields the check of the curve reads. */
+interface JsonWebKey {
+  kty?: string
+  crv?: string
+}
+
+/** Reports whether a key is a key in the json form. */
+function isJwk(key: KeyInput): key is KeyInput & JsonWebKey {
+  return typeof key === 'object' && key !== null && 'kty' in key
 }

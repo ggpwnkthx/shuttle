@@ -35,6 +35,14 @@ The public key is a PEM of an elliptic curve key on the curve P-256, and
 the signature is an `ES256` one. An upstream that verifies an identity
 with the public key cannot mint one.
 
+The upstream never receives the **private** key of the deployment and
+never receives the **secret of the sessions**: the private key signs, the
+public key verifies, and the secret stays in the gateway. The only key an
+upstream holds besides the public one is the derived key of the legacy
+format, and that one is symmetric: an upstream that holds it can mint an
+identity as well. It is deprecated and it is refused by default (§ *The
+versions*).
+
 ## The verification
 
 The upstream:
@@ -46,6 +54,30 @@ The upstream:
    the payload of the signature is **detached**, so the middle segment is
    empty and the upstream puts its own payload there;
 4. verifies it with the public key.
+
+The verification is **bound to one combination** of version, algorithm and
+key. There is no fallback from one algorithm to another, and a signature
+of one combination is never verified with the key of another one:
+
+| The version of the value | The algorithm of the protected header | The key |
+| --- | --- | --- |
+| `v5` | `ES256` | The public key of the deployment, a key of the curve P-256. |
+| `v4` | `HS256` | The derived key of the deployment, and only when the upstream is configured with it. |
+
+An upstream therefore refuses:
+
+- a version it does not know (`v3`, `v6`, an empty version, …);
+- a value whose protected header names another algorithm than the one the
+  version requires;
+- a protected header whose type is not `shuttle-identity`;
+- a public key that is not a public key of the curve P-256;
+- a compact serialization that is malformed, and a payload that is not
+  detached (the middle segment has to be empty).
+
+The values that are signed are the values of the headers, as they are: the
+upstream does not normalize them before it rebuilds the payload, apart
+from the normalization the wire format requires — the method is
+upper-cased, the host is lower-cased and the roles are sorted.
 
 The payload is a canonical JSON object, and the fields are written in this
 order:
@@ -73,7 +105,8 @@ signature covers exactly the roles of the header.
 The verification is one call of a standard library. The reference
 implementation is in
 [examples/upstream-identity/verify.ts](../examples/upstream-identity/verify.ts),
-and it is **standalone**: it imports nothing of the gateway.
+and it is **standalone**: it imports nothing of the gateway — only the
+`jose` package.
 
 ## The code
 
@@ -103,6 +136,26 @@ if (!result.ok) {
 }
 const identity = result.identity
 ```
+
+The reference verifier refuses a signature it does not understand, and it
+says why: the reason is a text, and an upstream that logs it learns what
+it refused. An upstream that also accepts the legacy format configures
+the derived key explicitly:
+
+```ts
+const result = await verifyIdentity({
+  request,
+  headers,
+  publicKey: key,
+  // The deprecated symmetric format: the key is derived from the secret
+  // of the sessions, HMAC-SHA256(secret, "shuttle-identity-signature-v1").
+  legacyKey: derivedKey,
+})
+```
+
+Without `legacyKey`, a `v4` signature is refused: the public key of the
+deployment cannot verify it, and the verifier never falls back from
+`ES256` to `HS256`.
 
 ### Go
 
@@ -145,6 +198,18 @@ body, err := object.Verify(key)
 The `jose` package expects the payload of the JWS, so the detached payload
 is put back before the verification: `object.DetachedPayload(canonical)`.
 
+The Go implementation has to bind the combination as well: it reads the
+version of the value, refuses a version it does not know, and checks that
+the protected header names `ES256` and the type `shuttle-identity` before
+it verifies:
+
+```go
+if !strings.HasPrefix(signature, "v5=") { return errUnknownVersion }
+if len(object.Signatures) != 1 { return errMalformed }
+header := object.Signatures[0].Header
+if header.Algorithm != "ES256" || header.Type != "shuttle-identity" { return errMalformed }
+```
+
 ## What to do when the verification fails
 
 The request did not go through the gateway, or it was tampered with. The
@@ -158,11 +223,57 @@ identity and without a signature — the route says whether it needs one.
 
 ## The versions
 
-| Version | The format | The key |
-| --- | --- | --- |
-| `v5` | A JWS with a detached payload, signed with `ES256`. | The private key of the deployment; the upstreams hold the public one. |
-| `v4` | The same format, signed with `HS256`. | The key that is derived from the secret of the sessions. The upstreams hold it, so an upstream that verifies an identity can mint one as well. |
+| Version | The format | The key | The state |
+| --- | --- | --- | --- |
+| `v5` | A JWS with a detached payload, signed with `ES256`. | The private key of the deployment; the upstreams hold the public one. | The format of a production deployment. |
+| `v4` | The same format, signed with `HS256`. | The key that is derived from the secret of the sessions. The upstreams hold it, so an upstream that verifies an identity can mint one as well. | **Deprecated**: the reference verifier accepts it only when the upstream configures the derived key explicitly. |
 
 An upstream that verifies `v4` has to be changed before the gateway signs
 `v5`: it reads the version of the value and verifies with the public key
-of the deployment.
+of the deployment. The reference verifier does the reading of the version
+for it: `v5` is verified with the public key and `ES256`, and `v4` is
+verified with the derived key and `HS256`. The public key of the
+deployment never verifies a `v4` signature, and there is no fallback from
+one algorithm to the other.
+
+The legacy support of the gateway itself lives in
+[src/domains/forwarding/identity.ts](../src/domains/forwarding/identity.ts):
+`symmetricIdentityKey` and `deriveIdentityKey` build the derived key and
+sign the `v4` format. It is there for the deployments that have not
+migrated yet, and it is removed with the format.
+
+## Compatibility with a revision of Shuttle
+
+The contract of the identity is the one of §7.4 of the specification, and
+an upstream that implements it is compatible with every revision of the
+gateway that keeps that section. A project that wants **evidence** pins a
+revision and checks its implementation against it.
+
+The stable links follow `main` and they are the ones to read:
+
+- The specification: [docs/spec.md §7.4](spec.md#74-the-identity-signature)
+- The guide: [docs/upstream-identity.md](upstream-identity.md)
+- The reference verifier: [examples/upstream-identity/verify.ts](../examples/upstream-identity/verify.ts)
+
+The evidence of a tested baseline names the **full commit sha**, so the
+link resolves to the same bytes that were tested:
+
+```
+https://github.com/ggpwnkthx/shuttle/blob/<commit-sha>/docs/spec.md#74-the-identity-signature
+https://github.com/ggpwnkthx/shuttle/blob/<commit-sha>/examples/upstream-identity/verify.ts
+https://github.com/ggpwnkthx/shuttle/blob/<commit-sha>/examples/upstream-identity/verify.test.ts
+```
+
+The tests of the verifier are the contract test of the format: they sign
+with the real signer of the gateway and they verify with the reference
+implementation, so a change of the payload, of the version or of the
+algorithm fails the build of the gateway. A consumer runs the same check
+against its own implementation, with the fixtures of its own project.
+
+The protocol of the access service — the other contract between the
+gateway and the services around it — has a conformance suite of its own:
+[test/integration/access-conformance.ts](../test/integration/access-conformance.ts).
+It is parameterized by the expectations of the implementation, so an
+access service (Hub, for instance) runs it against itself with a profile
+that names the subjects and the workspaces it knows. It is guidance for
+the integration and it is not a runtime dependency of Shuttle.

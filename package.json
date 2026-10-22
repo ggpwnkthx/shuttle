@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "description": "Shuttle: an application gateway that authenticates a caller, asks an access service and forwards the request to an upstream of its route.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggpwnkthx/shuttle.git"
+  },
+  "homepage": "https://github.com/ggpwnkthx/shuttle#readme",
+  "bugs": {
+    "url": "https://github.com/ggpwnkthx/shuttle/issues"
+  },
   "scripts": {
     "dev": "bun --watch scripts/dev.ts",
     "start": "bun run src/main.ts",

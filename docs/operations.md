@@ -184,6 +184,14 @@ The access service is a dependency of the deployment and not a part of
 Shuttle. The gateway asks it and fails closed: without a decision, the
 request is refused.
 
+The address of the service is a **service address**: `SHUTTLE_ACCESS_URL`
+names the service that answers the protocol, and `SHUTTLE_OIDC_ISSUER`
+names the issuer of the tokens. The repository of a service holds its
+source code, not its endpoint, so a deployment never puts the url of a
+repository in the environment. The upstream of a route — the data service
+behind the gateway — is named the same way, in the `upstream` of the route
+of the route table.
+
 The protocol of the service is published in
 [spec.md](spec.md) §6.1, and a deployment that writes its own service runs
 the conformance suite against it:

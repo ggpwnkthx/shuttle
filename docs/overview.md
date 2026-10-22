@@ -22,6 +22,24 @@ and Shuttle enforces both answers.
 It does not terminate TLS, cache responses, or decide access on its own.
 The full list is in [spec.md §13](spec.md#13-what-shuttle-does-not-do).
 
+## The projects around it
+
+Shuttle is the gateway of a family of three projects. They are separate
+repositories and separate services, and each one of them owns a contract:
+
+| Project | Repository | What it owns |
+| --- | --- | --- |
+| Shuttle | <https://github.com/ggpwnkthx/shuttle> | The routing, the contract of the access decision, and the format of the identity it forwards. |
+| Hub | <https://github.com/ggpwnkthx/hub> | The OpenID Connect broker and the access service the gateway asks. |
+| Depot | <https://github.com/ggpwnkthx/depot> | The data service behind the gateway: it verifies the forwarded identity and asks Hub for the access context. |
+
+A deployment names the **addresses** of the services — the issuer, the
+access service and the upstream — in its environment and in its route
+table. The repositories hold the source of the services; they are not
+service endpoints. Shuttle works with any conforming identity provider,
+access service and upstream, and Hub and Depot are the ones that ship
+with it.
+
 ## The life of a request
 
 Every request that is not one of Shuttle's own endpoints (`/healthz`,

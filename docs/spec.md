@@ -766,17 +766,28 @@ the other one.
 
 **The verification of an upstream.** The upstream:
 
-1. reads `x-shuttle-signature` and removes the `v5=` prefix;
-2. splits the value into its three parts: the protected header, the
-   **empty** payload and the signature;
-3. rebuilds the payload from the request and from the identity headers;
-4. rebuilds the compact serialization around its own payload:
+1. reads `x-shuttle-signature` and the version that is in front of it;
+2. refuses a version it does not know, and **binds** the version to the
+   algorithm and to the key: `v5` is `ES256` with the public key of the
+   deployment, `v4` is `HS256` with the derived key. There is no fallback
+   from one algorithm to the other, and the public key never verifies a
+   `v4` signature;
+3. splits the value into its three parts: the protected header, the
+   **empty** payload and the signature. A value that is not a compact
+   serialization, and a payload that is not detached, are refused;
+4. checks that the protected header names the algorithm of the version
+   and the type `shuttle-identity`;
+5. rebuilds the payload from the request and from the identity headers;
+6. rebuilds the compact serialization around its own payload:
    `<protected>.<base64url(payload)>.<signature>`;
-5. verifies it with the public key of the deployment.
+7. verifies it with the public key of the deployment.
 
 The last step is one call of a standard library: `jose.compactVerify(token,
-key)`. An upstream does not implement a signature of Shuttle, it verifies a
-JWS.
+key, { algorithms: ['ES256'] })`. An upstream does not implement a
+signature of Shuttle, it verifies a JWS. The reference implementation of
+the whole verification is in
+[examples/upstream-identity/verify.ts](../examples/upstream-identity/verify.ts)
+and the guide is in [upstream-identity.md](upstream-identity.md).
 
 **The test vector** (pinned in `src/domains/forwarding/identity-signature.test.ts`):
 

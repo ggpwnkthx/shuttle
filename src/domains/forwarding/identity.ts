@@ -385,7 +385,9 @@ export async function signIdentity(
  * Verifies a signature.
  *
  * It is the counterpart of `signIdentity` and it exists so that the format
- * can be tested, and so that an upstream has a reference implementation.
+ * can be tested. The reference implementation an upstream copies is in
+ * `examples/upstream-identity/verify.ts`, and it is the one that describes
+ * the contract of §7.4 of the specification.
  *
  * The payload of the upstream is the one it rebuilt from the request and
  * from the identity headers: a signature that does not belong to them is
@@ -393,6 +395,11 @@ export async function signIdentity(
  *
  * A signature of another version is refused: the version is part of the
  * payload, so the signature of another format does not verify.
+ *
+ * The verification is bound to the combination of the version, the
+ * algorithm and the key: the protected header has to name the algorithm of
+ * the key and the type of the signature, and the payload of the signature
+ * has to be detached. There is no fallback from one algorithm to another.
  */
 export async function verifyIdentity(
   identity: WrittenIdentity,
@@ -405,16 +412,47 @@ export async function verifyIdentity(
   if (!signature.startsWith(prefix)) return false
   const parts = signature.slice(prefix.length).split('.')
   if (parts.length !== 3) return false
-  const [protectedHeader, , detachedSignature] = parts
+  const [protectedHeader, payload, detachedSignature] = parts
   if (!protectedHeader || !detachedSignature) return false
-  const payload = new TextEncoder().encode(
+  // The payload is detached: the upstream rebuilds it and puts it back.
+  if (payload !== '') return false
+  const header = protectedHeaderOf(protectedHeader)
+  if (!header) return false
+  if (header.alg !== verificationKey.algorithm) return false
+  if (header.typ !== IDENTITY_SIGNATURE_TYPE) return false
+  const signed = new TextEncoder().encode(
     canonicalIdentityPayload(identity, request, verificationKey.version)
   )
-  const compact = `${protectedHeader}.${base64url.encode(payload)}.${detachedSignature}`
+  const compact = `${protectedHeader}.${base64url.encode(signed)}.${detachedSignature}`
   try {
-    await compactVerify(compact, verificationKey.key as Parameters<typeof compactVerify>[1])
+    await compactVerify(compact, verificationKey.key as Parameters<typeof compactVerify>[1], {
+      algorithms: [verificationKey.algorithm],
+    })
     return true
   } catch {
     return false
   }
+}
+
+/**
+ * The protected header of a signature.
+ *
+ * It is the header of the JWS: the algorithm and the type of the
+ * signature. A header that is not a json object is refused.
+ */
+function protectedHeaderOf(segment: string): { alg?: string; typ?: string } | undefined {
+  let decoded: string
+  try {
+    decoded = new TextDecoder().decode(base64url.decode(segment))
+  } catch {
+    return undefined
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(decoded)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+  return parsed as { alg?: string; typ?: string }
 }
