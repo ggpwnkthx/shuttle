@@ -266,7 +266,7 @@ so the protocol and its reference do not drift apart.
 
 | Kind | Where | What it proves |
 | --- | --- | --- |
-| Unit | `src/domains/*/*.test.ts` | The policy of one domain, without the network. |
+| Unit | `src/**/*.test.ts` | The policy of one domain, or of one part of the runtime, without the network. |
 | Contract | `test/contract/` | The pipeline of the gateway, over a socket, with the real fixtures around it. |
 | Network | `test/network/` | The capabilities of the runtime that the proxying depends on. |
 | Integration | `test/integration/` | The shared state against a real Redis and a real Postgres, the contract the two backends share, and a deployment with several replicas. |

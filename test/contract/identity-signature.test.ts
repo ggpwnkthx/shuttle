@@ -26,13 +26,18 @@ EzXd+ms2kvgMosNye7/tEJyT6IsXi7zYekkcpLuM32a9AOSHPD/t2JPs
 -----END PRIVATE KEY-----`
 
 let harness: Harness
+let harnessWithoutKey: Harness
 
 beforeAll(async () => {
   harness = await createHarness({ env: { SHUTTLE_IDENTITY_SIGNING_KEY: PRIVATE_KEY } })
+  // The deployment without a key: the gateway signs with a key of its own
+  // process (§7.4 of the specification).
+  harnessWithoutKey = await createHarness()
 })
 
 afterAll(async () => {
   await harness.stop()
+  await harnessWithoutKey.stop()
 })
 
 describe('the signature of the identity of a request', () => {
@@ -115,5 +120,66 @@ describe('the signature of the identity of a request', () => {
     )
     expect(payload).toContain('"v":"v5"')
     expect(payload).toContain('"subject":"user-alice"')
+  })
+})
+
+/**
+ * The signature of the identity of a deployment without a key.
+ *
+ * The symmetric format is removed, so a deployment that has no
+ * `SHUTTLE_IDENTITY_SIGNING_KEY` and is not a production one signs with a
+ * key that is generated for its process: the format of the signature is
+ * the same, but the key is neither shared by the replicas nor kept across
+ * a restart, and no upstream can verify the identity.
+ */
+describe('the signature of the identity of a deployment without a key', () => {
+  test('the gateway signs with the format of the release', async () => {
+    const token = await harnessWithoutKey.token()
+    const response = await fetch(
+      `${harnessWithoutKey.gatewayUrl}/ws/11111111-1111-4111-8111-111111111111/`,
+      { headers: { host: 'api.shuttle.test', authorization: `Bearer ${token}` } }
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { headers: Record<string, string> }
+    const signature = body.headers['x-shuttle-signature'] ?? ''
+    expect(signature).not.toBe('')
+    expect(signature.startsWith('v5=')).toBe(true)
+    // The protected header names the algorithm and the type of the signature.
+    const [protectedHeader] = signature.slice('v5='.length).split('.')
+    const header = JSON.parse(Buffer.from(protectedHeader!, 'base64url').toString('utf8')) as {
+      alg: string
+      typ: string
+    }
+    expect(header.alg).toBe('ES256')
+    expect(header.typ).toBe('shuttle-identity')
+  })
+
+  test('the key of the process does not verify with the key of the deployment', async () => {
+    const token = await harnessWithoutKey.token()
+    const response = await fetch(
+      `${harnessWithoutKey.gatewayUrl}/ws/11111111-1111-4111-8111-111111111111/`,
+      { headers: { host: 'api.shuttle.test', authorization: `Bearer ${token}` } }
+    )
+    const body = (await response.json()) as { headers: Record<string, string>; target: string }
+    const headers = body.headers
+    const separator = body.target.indexOf('?')
+    const path = separator === -1 ? body.target : body.target.slice(0, separator)
+    const query = separator === -1 ? '' : body.target.slice(separator)
+    const identity: WrittenIdentity = {
+      subject: headers['x-shuttle-user'] ?? '',
+      email: headers['x-shuttle-email'],
+      roles: (headers['x-shuttle-roles'] ?? '').split(',').filter((role) => role.length > 0),
+      workspaceId: headers['x-shuttle-workspace'],
+    }
+    // The key of the deployment is the key of the other harness: the
+    // signature of the process is signed with another key, and the
+    // verification refuses it.
+    const verified = await verifyIdentity(
+      identity,
+      { method: 'GET', path, query, host: headers['x-forwarded-host'] ?? '' },
+      verificationKeyOf(asymmetricIdentityKey(PRIVATE_KEY)),
+      headers['x-shuttle-signature']
+    )
+    expect(verified).toBe(false)
   })
 })
