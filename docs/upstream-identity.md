@@ -270,6 +270,11 @@ implementation, so a change of the payload, of the version or of the
 algorithm fails the build of the gateway. A consumer runs the same check
 against its own implementation, with the fixtures of its own project.
 
+The baseline that was tested with this guide is the revision
+`48b08781054cd6522267415263a89d6bce92a8a0` of the repository: the
+specification, the guide, the reference verifier and its tests are the ones
+of that commit.
+
 The protocol of the access service — the other contract between the
 gateway and the services around it — has a conformance suite of its own:
 [test/integration/access-conformance.ts](../test/integration/access-conformance.ts).
