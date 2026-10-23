@@ -47,7 +47,20 @@ describe('the schema of the configuration', () => {
     ).toThrow()
   })
 
-  test('an upstream with a query string is refused', () => {
+  test.each([
+    {
+      case: 'an upstream with a query string is refused',
+      upstream: 'http://upstream:3000/?token=1',
+    },
+    {
+      case: 'an upstream with a fragment is refused',
+      upstream: 'http://upstream:3000/#fragment',
+    },
+    {
+      case: 'an upstream that is not served over http is refused',
+      upstream: 'ftp://upstream:3000',
+    },
+  ])('$case', ({ upstream }) => {
     expect(() =>
       parseConfig(
         baseConfig({
@@ -55,7 +68,7 @@ describe('the schema of the configuration', () => {
             {
               id: 'a',
               match: { host: '*', path: '/' },
-              upstream: 'http://upstream:3000/?token=1',
+              upstream,
             },
           ],
         })
@@ -63,130 +76,70 @@ describe('the schema of the configuration', () => {
     ).toThrow()
   })
 
-  test('an upstream with a fragment is refused', () => {
-    expect(() =>
-      parseConfig(
-        baseConfig({
-          routes: [
-            {
-              id: 'a',
-              match: { host: '*', path: '/' },
-              upstream: 'http://upstream:3000/#fragment',
-            },
-          ],
-        })
-      )
-    ).toThrow()
-  })
-
-  test('an upstream that is not served over http is refused', () => {
-    expect(() =>
-      parseConfig(
-        baseConfig({
-          routes: [
-            {
-              id: 'a',
-              match: { host: '*', path: '/' },
-              upstream: 'ftp://upstream:3000',
-            },
-          ],
-        })
-      )
-    ).toThrow()
-  })
-
-  test('a workspace check without a credential is refused', () => {
-    expect(() =>
-      parseConfig(
-        baseConfig({
-          routes: [
-            {
-              id: 'a',
-              match: { host: '*', path: '/ws/{workspaceId}/' },
-              upstream: 'http://upstream:3000',
-              auth: { mode: 'none', workspace: { param: 'workspaceId' } },
-            },
-          ],
-        })
-      )
-    ).toThrow()
-  })
-
-  test('a workspace check that names a placeholder the path does not have is refused', () => {
-    expect(() =>
-      parseConfig(
-        baseConfig({
-          routes: [
-            {
-              id: 'a',
-              match: { host: '*', path: '/ws/{workspaceId}/' },
-              upstream: 'http://upstream:3000',
-              auth: { mode: 'any', workspace: { param: 'otherId' } },
-            },
-          ],
-        })
-      )
-    ).toThrow()
-  })
-
-  test('the path template of a route is validated', () => {
-    expect(() =>
-      parseConfig(
-        baseConfig({
-          routes: [{ id: 'a', match: { host: '*', path: 'ws' }, upstream: 'http://upstream:3000' }],
-        })
-      )
-    ).toThrow()
-  })
-
-  test('the rewrite of a route is validated', () => {
-    // A rewrite is a list of segments that starts with a slash.
-    expect(() =>
-      parseConfig(
-        baseConfig({
-          routes: [
-            {
-              id: 'a',
-              match: { host: '*', path: '/ws/{workspaceId}/' },
-              upstream: 'http://upstream:3000',
-              rewrite: 'v1/{rest}',
-            },
-          ],
-        })
-      )
-    ).toThrow()
-    // The rest of the path may only be the last segment.
-    expect(() =>
-      parseConfig(
-        baseConfig({
-          routes: [
-            {
-              id: 'a',
-              match: { host: '*', path: '/ws/{workspaceId}/' },
-              upstream: 'http://upstream:3000',
-              rewrite: '/{rest}/more',
-            },
-          ],
-        })
-      )
-    ).toThrow()
-  })
-
-  test('a rewrite that names a placeholder the path does not have is refused', () => {
-    expect(() =>
-      parseConfig(
-        baseConfig({
-          routes: [
-            {
-              id: 'a',
-              match: { host: '*', path: '/ws/{workspaceId}/' },
-              upstream: 'http://upstream:3000',
-              rewrite: '/v1/{otherId}/{rest}',
-            },
-          ],
-        })
-      )
-    ).toThrow()
+  test.each([
+    {
+      case: 'a workspace check without a credential is refused',
+      route: {
+        id: 'a',
+        match: { host: '*', path: '/ws/{workspaceId}/' },
+        upstream: 'http://upstream:3000',
+        auth: { mode: 'none', workspace: { param: 'workspaceId' } },
+      },
+    },
+    {
+      case: 'a workspace check that names a placeholder the path does not have is refused',
+      route: {
+        id: 'a',
+        match: { host: '*', path: '/ws/{workspaceId}/' },
+        upstream: 'http://upstream:3000',
+        auth: { mode: 'any', workspace: { param: 'otherId' } },
+      },
+    },
+    {
+      case: 'the path template of a route is validated',
+      route: {
+        id: 'a',
+        match: { host: '*', path: 'ws' },
+        upstream: 'http://upstream:3000',
+      },
+    },
+    {
+      case: 'a rewrite that is not a list of segments is refused',
+      route: {
+        id: 'a',
+        match: { host: '*', path: '/ws/{workspaceId}/' },
+        upstream: 'http://upstream:3000',
+        rewrite: 'v1/{rest}',
+      },
+    },
+    {
+      case: 'a rewrite whose rest is not the last segment is refused',
+      route: {
+        id: 'a',
+        match: { host: '*', path: '/ws/{workspaceId}/' },
+        upstream: 'http://upstream:3000',
+        rewrite: '/{rest}/more',
+      },
+    },
+    {
+      case: 'a rewrite that names a placeholder the path does not have is refused',
+      route: {
+        id: 'a',
+        match: { host: '*', path: '/ws/{workspaceId}/' },
+        upstream: 'http://upstream:3000',
+        rewrite: '/v1/{otherId}/{rest}',
+      },
+    },
+    {
+      case: 'a list of upstreams may not be empty',
+      route: {
+        id: 'a',
+        match: { host: '*', path: '/' },
+        upstream: [],
+      },
+    },
+  ])('$case', ({ route }) => {
+    expect(() => parseConfig(baseConfig({ routes: [route] }))).toThrow()
   })
 
   test('a route may name several upstreams', () => {
@@ -202,16 +155,6 @@ describe('the schema of the configuration', () => {
       })
     )
     expect(configuration.routes[0]?.upstream).toEqual(['http://first:3000', 'http://second:3000'])
-  })
-
-  test('a list of upstreams may not be empty', () => {
-    expect(() =>
-      parseConfig(
-        baseConfig({
-          routes: [{ id: 'a', match: { host: '*', path: '/' }, upstream: [] }],
-        })
-      )
-    ).toThrow()
   })
 
   test('a rewrite that names a placeholder of the path is accepted', () => {

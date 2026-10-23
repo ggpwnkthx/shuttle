@@ -138,73 +138,26 @@ describe('the identity of a request, as an upstream verifies it', () => {
     expect(result.identity.workspaceId).toBe('11111111-1111-4111-8111-111111111111')
   })
 
-  test('an identity that was changed does not verify', async () => {
+  test.each([
+    ['an identity that was changed', { headers: { 'x-shuttle-user': 'another-user' } }],
+    ['a request of another path', { request: { ...request, path: '/v1/other' } }],
+    ['a request of another method', { request: { ...request, method: 'DELETE' } }],
+    ['a request of another query', { request: { ...request, query: '?x=2' } }],
+    ['a request of another host', { request: { ...request, host: 'other.example.com' } }],
+    [
+      'an identity of another workspace',
+      {
+        headers: {
+          'x-shuttle-workspace': '22222222-2222-4222-8222-222222222222',
+        },
+      },
+    ],
+    ['an identity of another role', { headers: { 'x-shuttle-roles': 'admin,other' } }],
+  ])('%s does not verify', async (_case, tamper) => {
     const signature = await v5Signature()
     const result = await verifyIdentity({
-      request,
-      headers: headersOf(signature, { 'x-shuttle-user': 'another-user' }),
-      publicKey,
-    })
-    expect(result.ok).toBe(false)
-  })
-
-  test('a request of another path does not verify', async () => {
-    const signature = await v5Signature()
-    const result = await verifyIdentity({
-      request: { ...request, path: '/v1/other' },
-      headers: headersOf(signature),
-      publicKey,
-    })
-    expect(result.ok).toBe(false)
-  })
-
-  test('a request of another method does not verify', async () => {
-    const signature = await v5Signature()
-    const result = await verifyIdentity({
-      request: { ...request, method: 'DELETE' },
-      headers: headersOf(signature),
-      publicKey,
-    })
-    expect(result.ok).toBe(false)
-  })
-
-  test('a request of another query does not verify', async () => {
-    const signature = await v5Signature()
-    const result = await verifyIdentity({
-      request: { ...request, query: '?x=2' },
-      headers: headersOf(signature),
-      publicKey,
-    })
-    expect(result.ok).toBe(false)
-  })
-
-  test('a request of another host does not verify', async () => {
-    const signature = await v5Signature()
-    const result = await verifyIdentity({
-      request: { ...request, host: 'other.example.com' },
-      headers: headersOf(signature),
-      publicKey,
-    })
-    expect(result.ok).toBe(false)
-  })
-
-  test('an identity of another workspace does not verify', async () => {
-    const signature = await v5Signature()
-    const result = await verifyIdentity({
-      request,
-      headers: headersOf(signature, {
-        'x-shuttle-workspace': '22222222-2222-4222-8222-222222222222',
-      }),
-      publicKey,
-    })
-    expect(result.ok).toBe(false)
-  })
-
-  test('an identity of another role does not verify', async () => {
-    const signature = await v5Signature()
-    const result = await verifyIdentity({
-      request,
-      headers: headersOf(signature, { 'x-shuttle-roles': 'admin,other' }),
+      request: (tamper as { request?: typeof request }).request ?? request,
+      headers: headersOf(signature, (tamper as { headers?: Record<string, string> }).headers),
       publicKey,
     })
     expect(result.ok).toBe(false)
@@ -249,36 +202,26 @@ describe('the combination the verifier accepts', () => {
     expect(result.reason).toContain('v9')
   })
 
-  test('a signature of another algorithm is refused', async () => {
-    // The signature is a real one, but it is signed with the symmetric
-    // algorithm and it claims to be of the version of the release.
-    const serialized = await compactWith({ alg: 'HS256', typ: SIGNATURE_TYPE }, symmetricKey)
-    const result = await verifyIdentity({
-      request,
-      headers: headersOf(`${SUPPORTED_VERSION}=${serialized}`),
-      publicKey,
-    })
-    expect(result.ok).toBe(false)
-  })
-
-  test('a signature of another type is refused', async () => {
-    const serialized = await compactWith(
+  test.each([
+    [
+      'a signature of another algorithm',
+      { alg: 'HS256', typ: SIGNATURE_TYPE },
+      symmetricKey,
+    ],
+    [
+      'a signature of another type',
       { alg: 'ES256', typ: 'something-else' },
-      asymmetricIdentityKey(PRIVATE_KEY).key as Parameters<CompactSign['sign']>[0]
-    )
-    const result = await verifyIdentity({
-      request,
-      headers: headersOf(`${SUPPORTED_VERSION}=${serialized}`),
-      publicKey,
-    })
-    expect(result.ok).toBe(false)
-  })
-
-  test('a protected header without a type is refused', async () => {
-    const serialized = await compactWith(
+      asymmetricIdentityKey(PRIVATE_KEY).key as Parameters<CompactSign['sign']>[0],
+    ],
+    [
+      'a protected header without a type',
       { alg: 'ES256' },
-      asymmetricIdentityKey(PRIVATE_KEY).key as Parameters<CompactSign['sign']>[0]
-    )
+      asymmetricIdentityKey(PRIVATE_KEY).key as Parameters<CompactSign['sign']>[0],
+    ],
+  ])('%s is refused', async (_case, header, key) => {
+    // The signature is a real one, but the protected header claims
+    // something the verifier does not accept.
+    const serialized = await compactWith(header, key)
     const result = await verifyIdentity({
       request,
       headers: headersOf(`${SUPPORTED_VERSION}=${serialized}`),

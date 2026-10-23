@@ -176,28 +176,19 @@ describe('the environment of a production deployment', () => {
     expect(settings.limits.route.max).toBe(0)
   })
 
-  test('the secret of the sessions is required', () => {
-    expect(() => readEnv({ ...production, SHUTTLE_SESSION_SECRET: undefined })).toThrow(
-      /SHUTTLE_SESSION_SECRET/
-    )
-  })
-
-  test('the identity provider is required', () => {
-    expect(() => readEnv({ ...production, SHUTTLE_OIDC_ISSUER: undefined })).toThrow(
-      /SHUTTLE_OIDC_ISSUER/
-    )
-    expect(() => readEnv({ ...production, SHUTTLE_OIDC_CLIENT_ID: undefined })).toThrow(
-      /SHUTTLE_OIDC_CLIENT_ID/
-    )
-    expect(() => readEnv({ ...production, SHUTTLE_OIDC_REDIRECT_URI: undefined })).toThrow(
-      /SHUTTLE_OIDC_REDIRECT_URI/
-    )
+  test.each([
+    ['SHUTTLE_SESSION_SECRET'],
+    ['SHUTTLE_OIDC_ISSUER'],
+    ['SHUTTLE_OIDC_CLIENT_ID'],
+    ['SHUTTLE_OIDC_REDIRECT_URI'],
+    ['SHUTTLE_OIDC_CLIENT_SECRET'],
+    ['SHUTTLE_ACCESS_URL'],
+    ['SHUTTLE_ACCESS_TOKEN'],
+  ])('a production deployment needs %s', (name) => {
+    expect(() => readEnv({ ...production, [name]: undefined })).toThrow(new RegExp(name))
   })
 
   test('the secret of the client is required, unless the provider accepts a public client', () => {
-    expect(() => readEnv({ ...production, SHUTTLE_OIDC_CLIENT_SECRET: undefined })).toThrow(
-      /SHUTTLE_OIDC_CLIENT_SECRET/
-    )
     const settings = readEnv({
       ...production,
       SHUTTLE_OIDC_CLIENT_SECRET: undefined,
@@ -207,12 +198,6 @@ describe('the environment of a production deployment', () => {
   })
 
   test('the access service is required', () => {
-    expect(() => readEnv({ ...production, SHUTTLE_ACCESS_URL: undefined })).toThrow(
-      /SHUTTLE_ACCESS_URL/
-    )
-    expect(() => readEnv({ ...production, SHUTTLE_ACCESS_TOKEN: undefined })).toThrow(
-      /SHUTTLE_ACCESS_TOKEN/
-    )
     const settings = readEnv({
       ...production,
       SHUTTLE_ACCESS_TOKEN: undefined,

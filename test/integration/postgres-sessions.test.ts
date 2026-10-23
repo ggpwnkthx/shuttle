@@ -3,6 +3,10 @@
  *
  * The test proves that the store behaves like the one of Redis: the same
  * contract, the same lifetime, the same refusals.
+ *
+ * The contract itself is the one of `shared-state-conformance.ts`, and it
+ * runs against this server as well: the tests here are the ones the
+ * shared suite cannot state, the ones that are particular to Postgres.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -31,34 +35,6 @@ afterAll(async () => {
 })
 
 describe('the sessions of a Postgres server', () => {
-  test('a session is written and read again', async () => {
-    const store = newStore()
-    const created = await store.create({
-      subject: 'alice',
-      email: 'alice@example.test',
-      roles: ['a'],
-    })
-    expect(created.id).toBeString()
-
-    const read = await store.get(created.id)
-    expect(read?.subject).toBe('alice')
-    expect(read?.email).toBe('alice@example.test')
-    expect(read?.roles).toEqual(['a'])
-  })
-
-  test('a session that does not exist is not created by a read', async () => {
-    const store = newStore()
-    expect(await store.get('does-not-exist')).toBeNull()
-    expect(await store.get(undefined)).toBeNull()
-  })
-
-  test('a destroyed session is gone', async () => {
-    const store = newStore()
-    const created = await store.create({ subject: 'bob' })
-    await store.destroy(created.id)
-    expect(await store.get(created.id)).toBeNull()
-  })
-
   test('the expiry is refreshed when the touch interval is over', async () => {
     const store = newStore({ ttlMs: 60_000, touchIntervalMs: 0 })
     const created = await store.create({ subject: 'carol' })
@@ -70,37 +46,6 @@ describe('the sessions of a Postgres server', () => {
     const second = await store.get(created.id)
     expect(second).not.toBeNull()
     expect(second!.expiresAt).toBeGreaterThan(first!.expiresAt)
-  })
-
-  test('a session that is over its idle lifetime is refused', async () => {
-    const store = newStore({ ttlMs: 1_000, touchIntervalMs: 0 })
-    const created = await store.create({ subject: 'dave' })
-    expect(await store.get(created.id)).not.toBeNull()
-
-    await Bun.sleep(1_100)
-    expect(await store.get(created.id)).toBeNull()
-  })
-
-  test('a session that is over its maximum age is refused', async () => {
-    const store = newStore({ ttlMs: 60_000, maxAgeMs: 1_000, touchIntervalMs: 0 })
-    const created = await store.create({ subject: 'erin' })
-    expect(created.absoluteExpiresAt).toBeNumber()
-    expect(await store.get(created.id)).not.toBeNull()
-
-    await Bun.sleep(1_100)
-    expect(await store.get(created.id)).toBeNull()
-  })
-
-  test('the expiry of a session never reaches beyond its maximum age', async () => {
-    const store = newStore({ ttlMs: 60_000, maxAgeMs: 1_500, touchIntervalMs: 0 })
-    const created = await store.create({ subject: 'frank' })
-    expect(created.absoluteExpiresAt).toBeNumber()
-
-    // A read that refreshes the expiry clamps it to the maximum age.
-    await Bun.sleep(1_100)
-    const read = await store.get(created.id)
-    expect(read).not.toBeNull()
-    expect(read!.expiresAt).toBeLessThanOrEqual(read!.absoluteExpiresAt!)
   })
 
   test('the store knows that the server is there', async () => {

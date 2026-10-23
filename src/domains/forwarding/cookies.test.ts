@@ -18,20 +18,13 @@ describe('the cookies of a request', () => {
     expect(parseCookieHeader('')).toEqual({})
   })
 
-  test('the quotes of a value are delimiters and not part of it', () => {
-    expect(parseCookieHeader('app="hello world"')).toEqual({ app: 'hello world' })
-  })
-
-  test('the escapes of a value are decoded', () => {
-    expect(parseCookieHeader('app=a%20b')).toEqual({ app: 'a b' })
-  })
-
-  test('a value that carries an equal sign is a value', () => {
-    expect(parseCookieHeader('app=b=c')).toEqual({ app: 'b=c' })
-  })
-
-  test('a value that cannot be decoded is kept as it is', () => {
-    expect(parseCookieHeader('app=%E0%A4%A')).toEqual({ app: '%E0%A4%A' })
+  test.each([
+    ['the quotes of a value are delimiters and not part of it', 'app="hello world"', 'hello world'],
+    ['the escapes of a value are decoded', 'app=a%20b', 'a b'],
+    ['a value that carries an equal sign is a value', 'app=b=c', 'b=c'],
+    ['a value that cannot be decoded is kept as it is', 'app=%E0%A4%A', '%E0%A4%A'],
+  ])('%s', (_case, header, value) => {
+    expect(parseCookieHeader(header)).toEqual({ app: value })
   })
 
   test('the first value of a name that appears twice is the one of the caller', () => {

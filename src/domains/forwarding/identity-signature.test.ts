@@ -341,19 +341,4 @@ describe('the key of the signature of the identity', () => {
       false
     )
   })
-
-  test('a signature of another request is refused', async () => {
-    const signing = asymmetricIdentityKey(privateKeyPem)
-    const verification = verificationKeyOf(signing)
-    const signature = await signIdentity(identity, request, signing)
-    expect(
-      await verifyIdentity(identity, { ...request, path: '/other' }, verification, signature)
-    ).toBe(false)
-    expect(
-      await verifyIdentity(identity, { ...request, query: '?x=2' }, verification, signature)
-    ).toBe(false)
-    expect(
-      await verifyIdentity(identity, { ...request, method: 'POST' }, verification, signature)
-    ).toBe(false)
-  })
 })

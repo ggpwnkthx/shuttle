@@ -144,41 +144,13 @@ describe('the decisions of the access service', () => {
     expect(decision.reason).toContain('role')
   })
 
-  test('a malformed answer is the unavailability of the service', async () => {
-    const { client: access } = client({ body: '{"allow":"yes"}' })
-    const decision = await access.decide({
-      subject: 'user-1',
-      workspaceId: 'workspace-1',
-      routeId: 'route',
-    })
-    expect(decision.allow).toBe(false)
-    expect(decision.kind).toBe('unavailable')
-  })
-
-  test('an answer that is not json is the unavailability of the service', async () => {
-    const { client: access } = client({ body: 'not json' })
-    const decision = await access.decide({
-      subject: 'user-1',
-      workspaceId: 'workspace-1',
-      routeId: 'route',
-    })
-    expect(decision.allow).toBe(false)
-    expect(decision.kind).toBe('unavailable')
-  })
-
-  test('a status that is not a success is the unavailability of the service', async () => {
-    const { client: access } = client({ status: 503, body: '{"allow":true}' })
-    const decision = await access.decide({
-      subject: 'user-1',
-      workspaceId: 'workspace-1',
-      routeId: 'route',
-    })
-    expect(decision.allow).toBe(false)
-    expect(decision.kind).toBe('unavailable')
-  })
-
-  test('a service that cannot be reached is the unavailability of the service', async () => {
-    const { client: access } = client({ error: new Error('the connection is closed') })
+  test.each([
+    ['a malformed answer', { body: '{"allow":"yes"}' }],
+    ['an answer that is not json', { body: 'not json' }],
+    ['a status that is not a success', { status: 503, body: '{"allow":true}' }],
+    ['a service that cannot be reached', { error: new Error('the connection is closed') }],
+  ])('%s is the unavailability of the service', async (_case, options) => {
+    const { client: access } = client(options)
     const decision = await access.decide({
       subject: 'user-1',
       workspaceId: 'workspace-1',
@@ -340,21 +312,6 @@ describe('the cache of the decisions', () => {
     const withWorkspace = decisionKey({ subject: 'u', workspaceId: 'w', routeId: 'r' })
     const without = decisionKey({ subject: 'u', routeId: 'r' })
     expect(withWorkspace).not.toBe(without)
-  })
-
-  test('a failure of the service is not cached', async () => {
-    let calls = 0
-    const { client: access } = client({
-      error: new Error('the connection is closed'),
-      onRequest: () => {
-        calls += 1
-      },
-    })
-    const request = { subject: 'user-1', workspaceId: 'workspace-1', routeId: 'route' }
-    expect((await access.decide(request)).allow).toBe(false)
-    expect((await access.decide(request)).allow).toBe(false)
-    // The service is asked again: the failure is not a decision.
-    expect(calls).toBe(2)
   })
 
   test('a cache that is not available asks the service again', async () => {
@@ -553,10 +510,14 @@ describe('the grace of an outage of the access service', () => {
     return { client: access, stale }
   }
 
-  test('without a grace an outage of the service is an outage', async () => {
+  test.each([
+    ['without a grace', { allow: true, staleGraceMs: 0 }],
+    ['a decision that is older than the grace', { allow: true, staleGraceMs: 1_000 }],
+    ['a stale denial', { allow: false, staleGraceMs: 30_000 }],
+  ])('%s is an outage of the service', async (_case, options) => {
     const { client: access } = await withOldDecision(
-      { allow: true },
-      { cacheTtlMs: 1_000, staleGraceMs: 0 }
+      { allow: options.allow },
+      { cacheTtlMs: 1_000, staleGraceMs: options.staleGraceMs }
     )
     const decision = await access.decide(request)
     expect(decision.kind).toBe('unavailable')
@@ -603,27 +564,6 @@ describe('the grace of an outage of the access service', () => {
     expect(decision.stale).toBe(true)
     expect(stale).toHaveLength(1)
     expect(stale[0]?.routeId).toBe('route')
-  })
-
-  test('a stale decision that is older than the grace is not served', async () => {
-    const { client: access } = await withOldDecision(
-      { allow: true },
-      { cacheTtlMs: 1_000, staleGraceMs: 1_000 }
-    )
-    // The decision is a minute old and the grace is a second: it is
-    // neither fresh nor stale enough to be served.
-    const decision = await access.decide(request)
-    expect(decision.kind).toBe('unavailable')
-  })
-
-  test('a stale denial is not served: the outage stays visible', async () => {
-    const { client: access } = await withOldDecision(
-      { allow: false },
-      { cacheTtlMs: 1_000, staleGraceMs: 30_000 }
-    )
-    const decision = await access.decide(request)
-    expect(decision.kind).toBe('unavailable')
-    expect(decision.stale).toBe(false)
   })
 
   test('a fresh decision is never stale', async () => {

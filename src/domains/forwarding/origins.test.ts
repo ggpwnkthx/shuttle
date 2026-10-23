@@ -37,131 +37,117 @@ describe('the origin of a request', () => {
   })
 })
 
+/** One case of the guard: the request, and what the guard answers. */
+interface CrossSiteCase {
+  case: string
+  method?: string
+  headers?: Record<string, string>
+  strict?: boolean
+  allowedOrigins?: string[]
+  allowed: boolean
+}
+
 describe('the guard of the cross site requests', () => {
-  test('a request from another site that changes the state is refused', () => {
-    const check = checkCrossSite({
-      ...options(),
+  test.each<CrossSiteCase>([
+    {
+      case: 'a request from another site that changes the state is refused',
       method: 'POST',
-      headers: new Headers({ 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' }),
-    })
-    expect(check.allowed).toBe(false)
-  })
-
-  test('a request from another site that does not change the state is allowed by default', () => {
-    const check = checkCrossSite({
-      ...options(),
+      headers: { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' },
+      allowed: false,
+    },
+    {
+      case: 'a request from another site that does not change the state is allowed by default',
       method: 'GET',
-      headers: new Headers({ 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' }),
-    })
-    expect(check.allowed).toBe(true)
-  })
-
-  test('the strict mode refuses the navigations as well', () => {
-    const check = checkCrossSite({
-      ...options({ strict: true }),
+      headers: { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' },
+      allowed: true,
+    },
+    {
+      case: 'the strict mode refuses the navigations as well',
       method: 'GET',
-      headers: new Headers({ 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' }),
-    })
-    expect(check.allowed).toBe(false)
-  })
-
-  test('a request from an allowed origin is allowed', () => {
-    const check = checkCrossSite({
-      ...options(),
+      strict: true,
+      headers: { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' },
+      allowed: false,
+    },
+    {
+      case: 'a request from an allowed origin is allowed',
       method: 'POST',
-      headers: new Headers({
-        'sec-fetch-site': 'cross-site',
-        origin: 'https://app.example.com',
-      }),
-    })
-    expect(check.allowed).toBe(true)
-  })
-
-  test('an origin of the list of the deployment is allowed', () => {
-    const check = checkCrossSite({
-      ...options({ allowedOrigins: ['https://portal.example.com'] }),
+      headers: { 'sec-fetch-site': 'cross-site', origin: 'https://app.example.com' },
+      allowed: true,
+    },
+    {
+      case: 'an origin of the list of the deployment is allowed',
       method: 'POST',
-      headers: new Headers({
-        'sec-fetch-site': 'cross-site',
-        origin: 'https://portal.example.com',
-      }),
-    })
-    expect(check.allowed).toBe(true)
-  })
-
-  test('a sibling subdomain is not the same origin', () => {
-    const check = checkCrossSite({
-      ...options(),
+      allowedOrigins: ['https://portal.example.com'],
+      headers: { 'sec-fetch-site': 'cross-site', origin: 'https://portal.example.com' },
+      allowed: true,
+    },
+    {
+      case: 'a sibling subdomain is not the same origin',
       method: 'POST',
-      headers: new Headers({
-        'sec-fetch-site': 'same-site',
-        origin: 'https://sibling.example.com',
-      }),
-    })
-    expect(check.allowed).toBe(false)
-  })
-
-  test('a request without the headers of a browser is allowed', () => {
-    expect(checkCrossSite({ ...options(), method: 'POST' }).allowed).toBe(true)
-  })
-
-  test('an unknown value of the header is not a reason to refuse', () => {
-    const check = checkCrossSite({
-      ...options(),
+      headers: { 'sec-fetch-site': 'same-site', origin: 'https://sibling.example.com' },
+      allowed: false,
+    },
+    {
+      case: 'a request without the headers of a browser is allowed',
       method: 'POST',
-      headers: new Headers({ 'sec-fetch-site': 'unknown-value' }),
-    })
-    expect(check.allowed).toBe(true)
-  })
-
-  test('a foreign origin without the header of the browser is refused when it changes the state', () => {
-    const check = checkCrossSite({
-      ...options(),
+      allowed: true,
+    },
+    {
+      case: 'an unknown value of the header is not a reason to refuse',
       method: 'POST',
-      headers: new Headers({ origin: 'https://evil.example' }),
+      headers: { 'sec-fetch-site': 'unknown-value' },
+      allowed: true,
+    },
+    {
+      case: 'a foreign origin without the header of the browser is refused when it changes the state',
+      method: 'POST',
+      headers: { origin: 'https://evil.example' },
+      allowed: false,
+    },
+  ])('$case', ({ method, headers, strict, allowedOrigins, allowed }) => {
+    const check = checkCrossSite({
+      ...options({ strict, allowedOrigins }),
+      method: method ?? 'GET',
+      headers: new Headers(headers),
     })
-    expect(check.allowed).toBe(false)
+    expect(check.allowed).toBe(allowed)
   })
 })
 
 describe('the navigation of the logout', () => {
-  test('a logout from another site is refused', () => {
-    const check = checkCrossSiteNavigation({
-      ...options(),
-      headers: new Headers({ 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' }),
-    })
-    expect(check.allowed).toBe(false)
-  })
-
-  test('a logout from the site itself is allowed', () => {
-    const check = checkCrossSiteNavigation({
-      ...options(),
-      headers: new Headers({ 'sec-fetch-site': 'same-origin', origin: 'https://app.example.com' }),
-    })
-    expect(check.allowed).toBe(true)
+  test.each<{ case: string; headers: Record<string, string>; allowed: boolean }>([
+    {
+      case: 'a logout from another site is refused',
+      headers: { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example' },
+      allowed: false,
+    },
+    {
+      case: 'a logout from the site itself is allowed',
+      headers: { 'sec-fetch-site': 'same-origin', origin: 'https://app.example.com' },
+      allowed: true,
+    },
+  ])('$case', ({ headers, allowed }) => {
+    const check = checkCrossSiteNavigation({ ...options(), headers: new Headers(headers) })
+    expect(check.allowed).toBe(allowed)
   })
 })
 
 describe('the origin of a websocket handshake', () => {
-  test('a handshake without an origin is refused', () => {
-    const check = checkWebsocketOrigin({ ...options(), headers: new Headers() })
-    expect(check.allowed).toBe(false)
-  })
-
-  test('a handshake from another site is refused', () => {
-    const check = checkWebsocketOrigin({
-      ...options(),
-      headers: new Headers({ origin: 'https://evil.example' }),
-    })
-    expect(check.allowed).toBe(false)
-  })
-
-  test('a handshake from the site itself is allowed', () => {
-    const check = checkWebsocketOrigin({
-      ...options(),
-      headers: new Headers({ origin: 'https://app.example.com' }),
-    })
-    expect(check.allowed).toBe(true)
+  test.each<{ case: string; headers: Record<string, string>; allowed: boolean }>([
+    { case: 'a handshake without an origin is refused', headers: {}, allowed: false },
+    {
+      case: 'a handshake from another site is refused',
+      headers: { origin: 'https://evil.example' },
+      allowed: false,
+    },
+    {
+      case: 'a handshake from the site itself is allowed',
+      headers: { origin: 'https://app.example.com' },
+      allowed: true,
+    },
+  ])('$case', ({ headers, allowed }) => {
+    const check = checkWebsocketOrigin({ ...options(), headers: new Headers(headers) })
+    expect(check.allowed).toBe(allowed)
   })
 
   test('the strict mode does not change the rule of the handshake', () => {
