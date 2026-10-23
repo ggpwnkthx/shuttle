@@ -6,13 +6,10 @@
  * what happened, the runtime gives it the logger and the metrics.
  */
 
-export type {
-  AuthFailureReason,
-  Observer,
-  RequestObservation,
-  WebSocketRefusalReason,
-} from './metrics'
-export { MetricsStore, UNMATCHED_ROUTE, createSilentObserver } from './metrics'
+export type { Observer } from './metrics'
 
-export type { LogFields, LogLevel, Logger } from './logging'
-export { createLogger, createSilentLogger, parseLogLevel, redactFields, redactUrl } from './logging'
+export { MetricsStore, UNMATCHED_ROUTE } from './metrics'
+
+export type { Logger } from './logging'
+
+export { createLogger, redactFields, redactUrl } from './logging'

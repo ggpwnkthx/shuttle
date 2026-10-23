@@ -60,7 +60,6 @@ export const RouteTimeoutsSchema = z.strictObject({
   bodyMs: z.number().int().min(100).max(3_600_000).optional(),
   upstreamAttemptMs: z.number().int().min(0).max(600_000).optional(),
 })
-export type RouteTimeouts = z.infer<typeof RouteTimeoutsSchema>
 
 /**
  * The upstream of a route.

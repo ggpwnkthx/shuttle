@@ -9,23 +9,12 @@
  * service and it fails closed.
  */
 
-export { authFailureReason, isAccessReasonCode, ACCESS_REASON_CODES } from './decision'
-export type {
-  AccessDecision,
-  AccessReasonCode,
-  AccessRequest,
-  AuthFailureReason,
-} from './decision'
+export { authFailureReason } from './decision'
 
 export { isUuid, validateWorkspace } from './workspace'
-export type { WorkspaceRefusal } from './workspace'
-
-export { AccessBreaker } from './breaker'
-export type { AccessBreakerOptions, AccessBreakerState } from './breaker'
 
 export { AccessClient, decisionKey } from './client'
 export type {
-  AccessClientOptions,
   AccessTransport,
   CachedDecision,
   DecisionCache,

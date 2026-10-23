@@ -466,28 +466,3 @@ export class MetricsStore implements Observer {
     return routeId
   }
 }
-
-/** An observer that measures nothing; it is used by the tests. */
-export function createSilentObserver(): Observer {
-  return {
-    requestStarted: () => undefined,
-    requestFinished: () => undefined,
-    recordRequest: () => undefined,
-    recordAuthFailure: () => undefined,
-    recordAccessUnavailable: () => undefined,
-    recordAccessStale: () => undefined,
-    recordAccess: () => undefined,
-    recordUpstream: () => undefined,
-    recordUpstreamFailure: () => undefined,
-    recordUpstreamSkipped: () => undefined,
-    recordWebsocket: () => undefined,
-    recordWebsocketRefusal: () => undefined,
-    recordConfigReload: () => undefined,
-    recordRateLimit: () => undefined,
-    recordCrossSiteRefusal: () => undefined,
-    recordSharedStateError: () => undefined,
-    recordRateLimitFallback: () => undefined,
-    render: async () => '',
-    contentType: 'text/plain; version=0.0.4',
-  }
-}

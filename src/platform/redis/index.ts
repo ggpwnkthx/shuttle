@@ -7,7 +7,6 @@
  */
 
 export { createRedisClient, isConnectionError, isRedisUrl } from './client'
-export type { RedisClientOptions, SharedStateClient } from './client'
+export type { SharedStateClient } from './client'
 
 export { withRetries } from './commands'
-export type { RedisCommands } from './commands'

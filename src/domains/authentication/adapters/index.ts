@@ -5,14 +5,8 @@
  * deployment. The domain itself knows nothing about them.
  */
 
-export { DEFAULT_MAX_SESSIONS, MemorySessionStore } from './memory-sessions'
-export type { MemorySessionStoreOptions } from './memory-sessions'
+export { MemorySessionStore } from './memory-sessions'
 
-export { RedisSessionStore, TOUCH_SCRIPT } from './redis-sessions'
-export type { RedisSessionCommands, RedisSessionStoreOptions } from './redis-sessions'
+export { RedisSessionStore } from './redis-sessions'
 
 export { PostgresSessionStore } from './postgres-sessions'
-export type {
-  PostgresSessionCommands,
-  PostgresSessionStoreOptions,
-} from './postgres-sessions'

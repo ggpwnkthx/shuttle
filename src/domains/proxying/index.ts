@@ -6,23 +6,10 @@
  * committed and the registry of the exchanges that are running.
  */
 
-export { HttpExchangeService, expectsBody, isIdempotentMethod } from './exchange'
-export type {
-  ExchangeFailure,
-  ExchangeFailureKind,
-  ExchangeOutcome,
-  ExchangeRequest,
-  ExchangeResponse,
-  ExchangeResult,
-  ExchangeTimeouts,
-  HttpExchangeOptions,
-} from './exchange'
+export { HttpExchangeService, expectsBody } from './exchange'
+
+export type { ExchangeFailure } from './exchange'
 
 export type { HttpTransport, UpstreamRequest, UpstreamResponse } from './transport'
 
-export {
-  DEFAULT_BREAKER_COOLDOWN_MS,
-  DEFAULT_BREAKER_FAILURES,
-  UpstreamBreaker,
-} from './breaker'
-export type { UpstreamBreakerOptions } from './breaker'
+export { UpstreamBreaker } from './breaker'

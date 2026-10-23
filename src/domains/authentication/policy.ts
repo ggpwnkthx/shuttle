@@ -37,7 +37,6 @@ export const WorkspacePolicySchema = z.strictObject({
   /** Refuse a workspace identifier that is not a UUID. */
   requireUuid: z.boolean().default(true),
 })
-export type WorkspacePolicy = z.infer<typeof WorkspacePolicySchema>
 
 /**
  * The authentication policy of a route.
@@ -61,6 +60,3 @@ export const AuthPolicySchema = z
     }
   })
 export type AuthPolicy = z.infer<typeof AuthPolicySchema>
-
-/** The policy of the routes that do not declare one. */
-export const DEFAULT_AUTH_POLICY: AuthPolicy = { mode: 'none' }

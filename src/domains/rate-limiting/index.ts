@@ -8,13 +8,12 @@
  */
 
 export { MAX_TRACKED_KEYS, MemoryRateLimiter } from './limiter'
-export type { RateLimitDecision, RateLimiterOptions, RequestLimiter } from './limiter'
+export type { RateLimitDecision, RequestLimiter } from './limiter'
 
 export { FallbackRateLimiter } from './fallback'
-export type { FallbackRateLimiterOptions, RateLimitFallbackMode } from './fallback'
+export type { RateLimitFallbackMode } from './fallback'
 
 export { rateLimitKey, TOTAL_RATE_LIMIT_KEY } from './policy'
-export type { RateLimitKeyInput, RateLimitScope } from './policy'
 
 export {
   MAX_WINDOW_BUCKETS,
@@ -23,4 +22,3 @@ export {
   evaluateWindow,
   windowBucketCount,
 } from './window'
-export type { WindowBucket, WindowEvaluation } from './window'

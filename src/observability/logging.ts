@@ -177,21 +177,3 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     error: (message, fields) => emit((f, m) => logger.error(f, m), message, fields),
   }
 }
-
-/** Parses a level of the log, falling back to `info`. */
-export function parseLogLevel(value: string | undefined, fallback: LogLevel = 'info'): LogLevel {
-  if (!value) return fallback
-  const normalized = value.toLowerCase() as LogLevel
-  return ['debug', 'info', 'warn', 'error', 'silent'].includes(normalized) ? normalized : fallback
-}
-
-/** A logger that writes nothing; it is used by the tests. */
-export function createSilentLogger(): Logger {
-  return {
-    level: 'silent',
-    debug: () => undefined,
-    info: () => undefined,
-    warn: () => undefined,
-    error: () => undefined,
-  }
-}

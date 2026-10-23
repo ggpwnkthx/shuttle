@@ -7,19 +7,7 @@
  */
 
 export { createPostgresClient, isConnectionError, isPostgresUrl, PostgresClient } from './client'
-export type {
-  PostgresClientOptions,
-  PostgresQueryClient,
-  PostgresResult,
-} from './client'
 
-export {
-  BOOTSTRAP_LOCK_KEY,
-  ensureSchema,
-  SCHEMA_NAME,
-  SCHEMA_STATEMENTS,
-} from './schema'
-export type { SchemaClient } from './schema'
+export { ensureSchema } from './schema'
 
 export { withPostgresRetries } from './commands'
-export type { PostgresCommands } from './commands'

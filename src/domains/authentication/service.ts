@@ -25,7 +25,7 @@ import {
   type LoginState,
 } from './login-state'
 import { OidcError, type OidcPort, type VerifiedIdentity } from './oidc'
-import { selectCredential, type CredentialPlan, type Principal } from './principal'
+import type { CredentialPlan, Principal } from './principal'
 import { SessionStoreError, cookieMaxAgeSeconds } from './session'
 
 /** The logger the service uses. */
@@ -267,6 +267,3 @@ export class AuthenticationService {
     }
   }
 }
-
-export { selectCredential }
-export type { CredentialInput, CredentialPlan, Principal } from './principal'

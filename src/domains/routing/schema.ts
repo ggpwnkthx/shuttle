@@ -18,9 +18,6 @@ export const PATH_TEMPLATE_MAX = 512
 /** The shape of the id of a route: lowercase kebab-case. */
 export const ROUTE_ID_PATTERN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
 
-/** The shape of the name of a placeholder. */
-export const PARAM_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
-
 /** A placeholder of a path template: `{name}`. */
 const PLACEHOLDER_PATTERN = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/
 

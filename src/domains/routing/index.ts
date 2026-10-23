@@ -11,41 +11,25 @@
  */
 
 export {
-  HOST_PATTERN_MAX,
   HostPatternSchema,
-  METHOD_PATTERN,
   MethodsSchema,
-  PARAM_NAME_PATTERN,
-  PATH_TEMPLATE_MAX,
   PathTemplateSchema,
   REST_PLACEHOLDER,
-  ROUTE_ID_PATTERN,
   RewriteTemplateSchema,
   RouteIdSchema,
-  isValidHostPattern,
-  isValidPathTemplate,
-  isValidRewriteTemplate,
   normalizeHost,
-  parseHostPattern,
 } from './schema'
-export type { HostKind, HostPattern } from './schema'
 
 export {
-  RouteTemplateError,
   claimsReservedPath,
   compileRoute,
   detectConflicts,
-  hostMatches,
   matchRoute,
   placeholderNames,
-  rewrittenPath,
   sortRoutes,
 } from './match'
+
 export type {
   CompiledRoute,
-  PathSegment,
-  Precedence,
-  RewriteSegment,
-  RouteMatch,
   RouteMatchDefinition,
 } from './match'

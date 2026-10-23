@@ -19,7 +19,6 @@
 
 import type { Context } from 'hono'
 import {
-  GATEWAY_COOKIE_NAMES,
   SESSION_COOKIE_NAME,
   selectCredential,
   serializeCookie,
@@ -710,5 +709,3 @@ function identityFor(
     throw error
   }
 }
-
-export { GATEWAY_COOKIE_NAMES, UNMATCHED_ROUTE }

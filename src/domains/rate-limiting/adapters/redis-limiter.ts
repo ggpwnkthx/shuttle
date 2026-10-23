@@ -18,7 +18,6 @@
  */
 
 import { createHash } from 'node:crypto'
-import { rateLimitKey } from '../policy'
 import { bucketSizeMs, windowBucketCount } from '../window'
 import type { RateLimitDecision, RequestLimiter } from '../limiter'
 
@@ -209,5 +208,3 @@ export class RedisRateLimiter implements RequestLimiter {
 function hashKey(key: string): string {
   return createHash('sha256').update(key).digest('hex').slice(0, 32)
 }
-
-export { rateLimitKey }
