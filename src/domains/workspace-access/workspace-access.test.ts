@@ -320,6 +320,7 @@ describe('the cache of the decisions', () => {
       get: () => Promise<CachedDecision | null>
       set: () => Promise<void>
       delete: () => Promise<void>
+      purge: () => Promise<number>
       close: () => Promise<void>
     } = {
       async get() {
@@ -329,6 +330,9 @@ describe('the cache of the decisions', () => {
         throw new Error('the cache is not available')
       },
       async delete() {},
+      async purge() {
+        return 0
+      },
       async close() {},
     }
     const access = new AccessClient({

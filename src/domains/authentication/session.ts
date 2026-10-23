@@ -20,6 +20,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import type { AuditEntry } from '../../observability'
 
 /**
  * Raised when the session store cannot be reached.
@@ -106,8 +107,12 @@ export interface SessionStore {
    *
    * It returns the number of sessions that were removed. A subject that
    * has no session removes nothing.
+   *
+   * The revocation of the control plane carries the entry of the audit
+   * trail: the entry is written with the revocation, in the same
+   * transaction, so a revocation that left no trace cannot exist.
    */
-  destroyBySubject(subject: string): Promise<number>
+  destroyBySubject(subject: string, audit?: AuditEntry): Promise<number>
   /** Reports whether the store can be reached. */
   ping(): Promise<boolean>
   close(): Promise<void>

@@ -69,6 +69,25 @@ describe('the endpoints of the gateway', () => {
     expect(body.sessionStore).toBe('ok')
   })
 
+  test('the gateway exposes no administrative endpoint', async () => {
+    // The control plane is a separate process: the gateway answers nothing
+    // of its endpoints (decision 55).
+    for (const path of [
+      '/v1/config',
+      '/v1/config/history',
+      '/v1/config/validate',
+      '/v1/replicas',
+      '/v1/audit',
+      '/v1/sessions',
+      '/v1/decisions',
+    ]) {
+      const response = await fetch(`${harness.gatewayUrl}${path}`, { method: 'DELETE' })
+      expect(response.status).not.toBe(200)
+      const read = await fetch(`${harness.gatewayUrl}${path}`)
+      expect(read.status).not.toBe(200)
+    }
+  })
+
   test('the metrics need a token', async () => {
     const withoutToken = await fetch(`${harness.gatewayUrl}/metrics`)
     expect(withoutToken.status).toBe(401)

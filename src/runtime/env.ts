@@ -14,10 +14,20 @@
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import type { RateLimitFallbackMode } from '../domains/rate-limiting'
+import type { EnvironmentDefaults } from '../domains/configuration'
 import { isSharedStateUrl } from './shared-state'
 
 /** The level of the log. */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent'
+
+/**
+ * Where the route table of a deployment comes from.
+ *
+ * - `file`: the file of `SHUTTLE_CONFIG`, watched by the gateway;
+ * - `store`: the shared state, where the control plane writes the
+ *   revisions of the table (§3.4 of the specification).
+ */
+export type ConfigSource = 'file' | 'store'
 
 /** The settings of the identity provider. */
 export interface OidcSettings {
@@ -318,6 +328,14 @@ export interface RuntimeSettings {
   production: boolean
   /** The file the route table is read from. */
   configPath: string
+  /**
+   * Where the route table comes from.
+   *
+   * `file` reads it from `SHUTTLE_CONFIG` and watches the file; `store`
+   * reads it from the shared state, where the control plane writes the
+   * revisions of the table (§3.4 of the specification).
+   */
+  configSource: ConfigSource
   network: NetworkSettings
   oidc: OidcSettings
   access: AccessSettings
@@ -410,6 +428,15 @@ const EnvSchema = z.object({
   NODE_ENV: z.string().optional(),
 
   SHUTTLE_CONFIG: z.string().default('./config/routes.json'),
+  /**
+   * Where the route table comes from.
+   *
+   * `file` (the default) reads the table from `SHUTTLE_CONFIG` and watches
+   * the file. `store` reads it from the shared state, where the control
+   * plane writes the revisions of the table: the pointer of the active
+   * revision is watched, and every replica converges on the same table.
+   */
+  SHUTTLE_CONFIG_SOURCE: z.enum(['file', 'store']).default('file'),
   SHUTTLE_GATEWAY_HOST: z.string().default('0.0.0.0'),
   SHUTTLE_GATEWAY_PORT: intEnv(8080, { max: 65_535 }),
 
@@ -885,6 +912,7 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
   return {
     production,
     configPath: parsed.SHUTTLE_CONFIG,
+    configSource: parsed.SHUTTLE_CONFIG_SOURCE,
     network: {
       host: parsed.SHUTTLE_GATEWAY_HOST,
       port: parsed.SHUTTLE_GATEWAY_PORT,
@@ -1017,5 +1045,166 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       metricsToken: parsed.SHUTTLE_METRICS_TOKEN,
     },
     shutdownTimeoutMs: parsed.SHUTTLE_SHUTDOWN_TIMEOUT_MS,
+  }
+}
+
+/** The settings of the control plane. */
+export interface ControlSettings {
+  /** True when `NODE_ENV=production`. */
+  production: boolean
+  /** The address the control plane listens on. It is internal. */
+  host: string
+  /** The port the control plane listens on. */
+  port: number
+  /** The map of the tokens, as it is written in the environment. */
+  tokens?: string
+  /** The file that holds the map of the tokens. */
+  tokensFile?: string
+  /** The shared state the control plane acts on. */
+  stateUrl: string
+  /** The authority that signs the certificate of the server. */
+  stateTlsCa?: string
+  /** The prefix of the keys of the state: the sessions and the route table. */
+  keyPrefix: string
+  /** The prefix of the keys of the decisions of the access service. */
+  sharedStateKeyPrefix: string
+  /** The routes a write may not remove and may not change. */
+  protectedRoutes: string[]
+  /** The defaults of the deployment, the ones of the file of the gateway. */
+  defaults: EnvironmentDefaults
+  /** The ranges whose forwarding headers are trusted. */
+  trustedProxies: string[]
+  /** The settings of the pool of the connections of a Postgres server. */
+  postgres: PostgresSettings
+}
+
+/**
+ * The schema of the environment of the control plane.
+ *
+ * The control plane is a separate process with its own environment: the
+ * names of its variables live here as well, so that the check of the
+ * documentation of the environment sees them.
+ */
+const ControlEnvSchema = z.object({
+  NODE_ENV: z.string().optional(),
+
+  SHUTTLE_CONTROL_HOST: z.string().default('127.0.0.1'),
+  SHUTTLE_CONTROL_PORT: intEnv(9090, { max: 65_535 }),
+
+  /**
+   * The map of the tokens of the control plane, as a JSON object of
+   * `{token: {operator, scope}}`.
+   */
+  SHUTTLE_CONTROL_TOKENS: z.string().optional(),
+  /**
+   * The file that holds the map of the tokens.
+   *
+   * The map of the tokens is a secret: it is usually in a file that only
+   * the control plane reads, and not in the environment of a deployment.
+   */
+  SHUTTLE_CONTROL_TOKENS_FILE: z.string().optional(),
+
+  /**
+   * The shared state the control plane acts on.
+   *
+   * It is the state of the sessions and of the route table of the
+   * deployment, reached with the credentials of the control plane (§12.8).
+   */
+  SHUTTLE_CONTROL_STATE_URL: z.string(),
+  SHUTTLE_CONTROL_STATE_TLS_CA: tlsCaEnv(),
+  SHUTTLE_CONTROL_STATE_TLS_CA_BASE64: tlsCaEnv(),
+
+  /**
+   * The prefix of the keys of the state.
+   *
+   * It is the prefix the gateway uses for its sessions: the control plane
+   * revokes the sessions of the deployment and it writes the route table
+   * of the deployment.
+   */
+  SHUTTLE_CONTROL_KEY_PREFIX: z.string().default('shuttle'),
+  /**
+   * The prefix of the keys of the decisions of the access service.
+   *
+   * It is the prefix the gateway uses for its cached decisions.
+   */
+  SHUTTLE_CONTROL_SHARED_STATE_KEY_PREFIX: z.string().default('shuttle'),
+
+  /**
+   * The routes a write may not remove and may not change.
+   *
+   * A protected route is a route the deployment cannot afford to lose.
+   */
+  SHUTTLE_PROTECTED_ROUTES: listEnv(),
+
+  // The defaults of the deployment. The control plane compiles the tables
+  // it validates with the same defaults as the gateway, so the table it
+  // accepts is the table the gateway runs.
+  SHUTTLE_MAX_BODY_BYTES: intEnv(10_485_760, { min: 0 }),
+  SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS: intEnv(2_000, { min: 0 }),
+  SHUTTLE_REPLAY_MAX_BYTES: intEnv(65_536, { min: 0 }),
+  SHUTTLE_ACCESS_STALE_GRACE_MS: intEnv(0, { min: 0, max: 3_600_000 }),
+  SHUTTLE_TRUSTED_PROXIES: listEnv(),
+})
+
+/**
+ * Reads the environment of the control plane.
+ *
+ * The environment is validated as a whole: a value that cannot be
+ * understood stops the process. The control plane has no token map, or a
+ * state that is not a server, and it stops: a control plane that nobody
+ * controls is worse than no control plane at all.
+ */
+export function readControlEnv(env: Env = process.env): ControlSettings {
+  const result = ControlEnvSchema.safeParse(env)
+  if (!result.success) {
+    const problems = result.error.issues
+      .map((issue) => `${issue.path.join('.') || 'the environment'}: ${issue.message}`)
+      .join('; ')
+    throw new Error(`the environment of the control plane is invalid: ${problems}`)
+  }
+  const parsed = result.data
+  const production = parsed.NODE_ENV === 'production'
+
+  if (!parsed.SHUTTLE_CONTROL_TOKENS && !parsed.SHUTTLE_CONTROL_TOKENS_FILE) {
+    throw new Error(
+      'SHUTTLE_CONTROL_TOKENS or SHUTTLE_CONTROL_TOKENS_FILE must be set: the control plane accepts no request without a token, and it stops when it has none'
+    )
+  }
+  if (parsed.SHUTTLE_CONTROL_TOKENS && parsed.SHUTTLE_CONTROL_TOKENS_FILE) {
+    throw new Error(
+      'SHUTTLE_CONTROL_TOKENS and SHUTTLE_CONTROL_TOKENS_FILE must not be set at the same time: the map of the tokens is read once, and two sources of it are two maps'
+    )
+  }
+  if (!isSharedStateUrl(parsed.SHUTTLE_CONTROL_STATE_URL)) {
+    throw new Error(
+      'SHUTTLE_CONTROL_STATE_URL must name a Redis or a Postgres server: the control plane acts on the shared state, and the state of the process of a control plane is not the state of the deployment'
+    )
+  }
+
+  return {
+    production,
+    host: parsed.SHUTTLE_CONTROL_HOST,
+    port: parsed.SHUTTLE_CONTROL_PORT,
+    tokens: parsed.SHUTTLE_CONTROL_TOKENS,
+    tokensFile: parsed.SHUTTLE_CONTROL_TOKENS_FILE,
+    stateUrl: parsed.SHUTTLE_CONTROL_STATE_URL,
+    stateTlsCa: parsed.SHUTTLE_CONTROL_STATE_TLS_CA ?? parsed.SHUTTLE_CONTROL_STATE_TLS_CA_BASE64,
+    keyPrefix: parsed.SHUTTLE_CONTROL_KEY_PREFIX,
+    sharedStateKeyPrefix: parsed.SHUTTLE_CONTROL_SHARED_STATE_KEY_PREFIX,
+    protectedRoutes: parsed.SHUTTLE_PROTECTED_ROUTES,
+    defaults: {
+      defaultMaxBodyBytes: parsed.SHUTTLE_MAX_BODY_BYTES,
+      defaultUpstreamAttemptMs: parsed.SHUTTLE_UPSTREAM_ATTEMPT_TIMEOUT_MS,
+      defaultReplayMaxBytes: parsed.SHUTTLE_REPLAY_MAX_BYTES,
+      defaultAccessStaleGraceMs: parsed.SHUTTLE_ACCESS_STALE_GRACE_MS,
+    },
+    trustedProxies: parsed.SHUTTLE_TRUSTED_PROXIES,
+    postgres: {
+      poolMax: 10,
+      connectionTimeoutMs: 5_000,
+      statementTimeoutMs: 5_000,
+      synchronousCommit: 'off',
+      autoMigrate: false,
+    },
   }
 }

@@ -105,6 +105,11 @@ jobs:
           bun build src/main.ts --compile \
             --target=${{ matrix.target }} \
             --outfile "dist/shuttle-${{ needs.version.outputs.version }}-${{ matrix.platform }}"
+          # The control plane is a separate process: it is compiled into a
+          # binary of its own, with the same runtime inside it.
+          bun build src/control-main.ts --compile \
+            --target=${{ matrix.target }} \
+            --outfile "dist/shuttle-control-${{ needs.version.outputs.version }}-${{ matrix.platform }}"
           ls -la dist
 
       - name: the binary is of the expected format

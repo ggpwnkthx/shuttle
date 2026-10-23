@@ -1,9 +1,9 @@
 /**
  * The configuration domain.
  *
- * The domain owns the schema of the configuration file, the effective
- * defaults of the routes, the compiled generations and the publication of
- * the last good one.
+ * The domain owns the schema of the file, the strict validation, the
+ * effective defaults, the immutable compiled snapshots and the atomic
+ * last-good publication.
  */
 
 export {
@@ -14,4 +14,18 @@ export {
 export { ConfigurationStore, isReservedPath } from './store'
 export type { ConfigurationSnapshot } from './store'
 
-export { describeConfiguration } from './describe'
+export { describeConfiguration, describeTable } from './describe'
+
+export { compileTable, diffTables, routeDefinitions } from './compile'
+
+export type {
+  AuditEntry,
+  Page,
+  ReplicaHeartbeat,
+  RouteTablePointer,
+  RouteTableRevision,
+  RouteTableStore,
+  WriteOutcome,
+} from './revisions'
+
+export type { EnvironmentDefaults } from './routes'

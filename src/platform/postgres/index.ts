@@ -8,6 +8,12 @@
 
 export { createPostgresClient, isConnectionError, isPostgresUrl, PostgresClient } from './client'
 
-export { ensureSchema } from './schema'
+export {
+  CONTROL_ROLE,
+  ensureSchema,
+  GATEWAY_ROLE,
+  ROLE_GRANTS,
+  ROLE_STATEMENTS,
+} from './schema'
 
 export { withPostgresRetries } from './commands'

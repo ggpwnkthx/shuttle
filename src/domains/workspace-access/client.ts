@@ -11,6 +11,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import type { AuditEntry } from '../../observability'
 import { AccessBreaker } from './breaker'
 import {
   isAccessReasonCode,
@@ -51,12 +52,47 @@ export interface CachedDecision {
 export interface DecisionCache {
   /** The cached decision of a key, or null. */
   get(key: string): Promise<CachedDecision | null>
-  /** Caches a decision for the given number of milliseconds. */
-  set(key: string, decision: CachedDecision, ttlMs: number): Promise<void>
+  /**
+   * Caches a decision for the given number of milliseconds.
+   *
+   * The metadata names the caller and the workspace the decision is about:
+   * the control plane purges the decisions of a caller, and it cannot do it
+   * without knowing which decision is about whom.
+   */
+  set(key: string, decision: CachedDecision, ttlMs: number, meta?: DecisionMeta): Promise<void>
   /** Removes the cached decision of a key. */
   delete(key: string): Promise<void>
+  /**
+   * Removes the cached decisions of a caller and of a workspace.
+   *
+   * It returns the number of decisions that were removed. A filter that
+   * names nothing removes every decision.
+   */
+  purge(filter: DecisionPurgeFilter, audit?: AuditEntry): Promise<number>
   /** Closes the cache. */
   close(): Promise<void>
+}
+
+/**
+ * What a cached decision is about.
+ *
+ * The subject and the workspace are stored hashed: they come from the
+ * identity provider and from the deployment, and the store of the shared
+ * state is read by the operators of the deployment.
+ */
+export interface DecisionMeta {
+  /** The subject of the caller the decision is about. */
+  subject?: string
+  /** The workspace the decision is about. */
+  workspaceId?: string
+}
+
+/** The decisions a purge removes. */
+export interface DecisionPurgeFilter {
+  /** The subject of the caller. */
+  subject?: string
+  /** The workspace. */
+  workspaceId?: string
 }
 
 /** The settings of the client. */
@@ -373,7 +409,8 @@ export class AccessClient {
           reasonCode: decision.reasonCode,
           decidedAt: decision.decidedAt,
         },
-        lifetime
+        lifetime,
+        { subject: request.subject, workspaceId: request.workspaceId }
       )
     }
     return decision
@@ -400,9 +437,14 @@ export class AccessClient {
   }
 
   /** Caches a decision; a cache that cannot be reached is not an error. */
-  async #writeCache(key: string, decision: CachedDecision, ttlMs: number): Promise<void> {
+  async #writeCache(
+    key: string,
+    decision: CachedDecision,
+    ttlMs: number,
+    meta?: DecisionMeta
+  ): Promise<void> {
     try {
-      await this.#cache.set(key, decision, ttlMs)
+      await this.#cache.set(key, decision, ttlMs, meta)
     } catch (error) {
       this.#onError?.(error)
     }

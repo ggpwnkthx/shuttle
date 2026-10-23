@@ -131,6 +131,22 @@ state against the in-process engine of Postgres:
 bun test test/integration
 ```
 
+### The control plane
+
+The administrative surface of a deployment is a separate process. It
+needs a shared state and a map of tokens:
+
+```bash
+export SHUTTLE_CONTROL_STATE_URL=redis://127.0.0.1:6379/0
+export SHUTTLE_CONTROL_TOKENS='{"a-token-of-at-least-16-characters":{"operator":"me","scope":"config"}}'
+bun run control        # http://127.0.0.1:9090
+```
+
+The scopes are `read` (the endpoints that read), `operate` (`read` and the
+purges of the sessions and of the decisions) and `config` (`read` and the
+writes of the route table). The gateway exposes no administrative
+endpoint: the control plane is never routed through it.
+
 ## The configuration
 
 The route table is a JSON file, validated as a whole and rejected as a whole
@@ -193,6 +209,33 @@ the access service, the shared state and at least one rate limit.
 Every other request is dispatched: the route is matched, the limiters are
 applied, the caller is authenticated, the cross-site guard runs, the access
 service is asked, and the request is forwarded.
+
+## The endpoints of the control plane
+
+The control plane is the administrative surface of a deployment. It is a
+**separate process** (`shuttle-control`, the same image as the gateway),
+it listens on its own socket, on the internal network of the deployment,
+and it acts on the shared state directly. The gateway exposes **no**
+administrative endpoint and accepts **no** administrative token.
+
+| Endpoint | Scope | Behaviour |
+| --- | --- | --- |
+| `GET /healthz` | — | Always `200`. |
+| `GET /readyz` | — | `200` when the shared state answers, `503` otherwise. |
+| `GET /v1/config` | `read` | The active revision of the route table, the table it holds and the warnings of the configuration. |
+| `POST /v1/config/validate` | `read` | The errors, the ambiguities, the warnings and the difference with the active table. It writes nothing. |
+| `PUT /v1/config` | `config` | Writes the whole table as a new revision. The `If-Match` header carries the revision it replaces: a mismatch is `409`. |
+| `GET /v1/config/history` | `read` | The revisions of the table, paginated. |
+| `POST /v1/config/rollback` | `config` | Writes the table of an older revision again, as a new revision. |
+| `GET /v1/replicas` | `read` | The replicas that serve the route table. |
+| `DELETE /v1/sessions` | `operate` | Revokes the sessions of a subject. |
+| `DELETE /v1/decisions` | `operate` | Purges the cached decisions of a subject and of a workspace. |
+| `GET /v1/audit` | `read` | The trail of the writes, paginated. |
+
+The scopes are not a hierarchy: `operate` does not write the route table
+and `config` does not revoke a session. A missing or a wrong token is
+`401`, a token of the wrong scope is `403`, and every write of the control
+plane leaves an entry in the trail.
 
 ## The binaries
 

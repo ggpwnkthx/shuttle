@@ -147,6 +147,34 @@ services:
     expose:
       - "3000"
 
+  # The control plane is the administrative surface of the deployment. It is
+  # internal: the port is not published. It needs a shared state, so it is
+  # started with the `--profile sessions` profile, next to the redis server.
+  control:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["bun", "run", "src/control-main.ts"]
+    profiles: ["sessions"]
+    environment:
+      SHUTTLE_CONTROL_HOST: 0.0.0.0
+      SHUTTLE_CONTROL_PORT: "9090"
+      SHUTTLE_CONTROL_TOKENS_FILE: /etc/shuttle/control-tokens.json
+      # The state of the sessions of the gateway (the database 0): the
+      # control plane revokes the sessions, purges the decisions and
+      # writes the route table of the deployment.
+      SHUTTLE_CONTROL_STATE_URL: redis://redis:6379/0
+      SHUTTLE_CONTROL_KEY_PREFIX: shuttle
+      SHUTTLE_CONTROL_SHARED_STATE_KEY_PREFIX: shuttle
+      SHUTTLE_LOG_LEVEL: info
+    volumes:
+      - ./control-tokens.example.json:/etc/shuttle/control-tokens.json:ro
+    expose:
+      - "9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+
   # The shared session store. Start it with `docker compose --profile
   # sessions up` and set SHUTTLE_SESSION_URL=redis://redis:6379/0.
   redis:

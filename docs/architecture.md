@@ -44,6 +44,7 @@ CI workflow as well.
 | `forwarding` | `authentication` |
 | `proxying` | `forwarding` |
 | `websockets` | `forwarding` |
+| `control` | `configuration`, `authentication`, `workspace-access` |
 
 ```
                     ┌──────────────┐
@@ -178,6 +179,11 @@ writes the headers and the cookies of the answers.
 | `configuration` | `schema.ts` | The schema of the file, the strict validation, the effective defaults. |
 | | `store.ts` | The generation of the configuration: the immutable snapshot, the atomic publication, the last good state, the status of the reload. |
 | | `describe.ts` | The description of the policy that is running, and the settings that are permissive. |
+| | `compile.ts` | The compilation of a table and the difference between two tables. |
+| | `routes.ts` | The effective routes of a table and the defaults of the deployment. |
+| | `revisions.ts` | The shape of the revisions of the route table and the contract of the store of the shared state. |
+| | `adapters/redis-route-table.ts` | The route table in Redis. The write of a revision and the entry of the trail are one script. |
+| | `adapters/postgres-route-table.ts` | The route table in Postgres. The write of a revision and the entry of the trail are one transaction. |
 | `authentication` | `policy.ts` | The schema of the modes and of the workspace policy. |
 | | `principal.ts` | The selection of the credential, per mode. The rule that an invalid credential is rejected and never replaced. |
 | | `oidc.ts` | The relying party: the discovery, the PKCE, the exchange of the code, the validation of the bearer tokens. |
@@ -216,6 +222,10 @@ writes the headers and the cookies of the answers.
 | | `reservation.ts` | The slots of the connections, the handshakes in flight included. |
 | | `bridge.ts` | The relay between the two legs, the buffers, the backpressure, the keepalive, the revalidation. |
 | | `service.ts` | The order of the handshake: the origin, the slot, the upstream, the caller, the bridge. |
+| `control` | `policy.ts` | The scopes of the tokens, the reading of the map of the tokens, the routes a write may not change. |
+| | `service.ts` | The rules of the administrative writes: the compare and swap, the validation, the protected routes and the trail of the writes. |
+| | `adapters/redis-failures.ts` | The counter of the failed authentications in Redis. |
+| | `adapters/postgres-failures.ts` | The counter of the failed authentications in Postgres. |
 
 ### `src/platform/` — the adapters of the runtime
 

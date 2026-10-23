@@ -19,6 +19,7 @@
  * way a script of Redis does.
  */
 
+import type { AuditEntry } from '../../../observability'
 import {
   isPastIdleLifetime,
   isPastMaximumAge,
@@ -39,6 +40,17 @@ import {
  */
 export interface PostgresSessionCommands {
   query<T>(text: string, params?: readonly unknown[]): Promise<{ rows: T[] }>
+  /**
+   * Runs the body in a transaction.
+   *
+   * The revocation of the control plane needs it: the removal of the
+   * sessions and the entry of the audit trail are one transaction.
+   */
+  transaction<T>(
+    body: (client: {
+      query<T>(text: string, params?: readonly unknown[]): Promise<{ rows: T[] }>
+    }) => Promise<T>
+  ): Promise<T>
 }
 
 export interface PostgresSessionStoreOptions extends Partial<SessionLifetime> {
@@ -142,17 +154,37 @@ export class PostgresSessionStore implements SessionStore {
     await this.#client.query(`DELETE FROM shuttle.sessions WHERE id = $1`, [this.#sessionKey(id)])
   }
 
-  async destroyBySubject(subject: string): Promise<number> {
+  async destroyBySubject(subject: string, audit?: AuditEntry): Promise<number> {
     // The prefix is part of the condition: several deployments may share
     // one database, and the sessions of one of them are not the sessions
     // of the others.
-    const result = await this.#client.query<{ id: string }>(
-      `DELETE FROM shuttle.sessions
-        WHERE subject = $1 AND starts_with(id, $2)
-        RETURNING id`,
-      [subject, `${this.#prefix}:`]
-    )
-    return result.rows.length
+    //
+    // The revocation and the entry of the audit trail are one transaction:
+    // a revocation that left no trace cannot exist.
+    return await this.#client.transaction(async (tx) => {
+      const result = await tx.query<{ id: string }>(
+        `DELETE FROM shuttle.sessions
+          WHERE subject = $1 AND starts_with(id, $2)
+          RETURNING id`,
+        [subject, `${this.#prefix}:`]
+      )
+      if (audit) {
+        await tx.query(
+          `INSERT INTO shuttle.audit (action, target, operator, scope, address, request, at)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, to_timestamp(($7 / 1000.0)::double precision))`,
+          [
+            audit.action,
+            audit.target,
+            audit.operator,
+            audit.scope,
+            audit.address,
+            JSON.stringify(audit.request ?? null),
+            audit.at,
+          ]
+        )
+      }
+      return result.rows.length
+    })
   }
 
   async ping(): Promise<boolean> {

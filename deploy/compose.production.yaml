@@ -78,6 +78,58 @@ services:
       retries: 3
       start_period: 10s
 
+  # The control plane is the administrative surface of the deployment. It is
+  # a separate process, it listens on its own socket and it acts on the
+  # shared state directly. The gateway exposes no administrative endpoint.
+  #
+  # It is internal: the port is not published, and the service is reached
+  # over the network of the deployment. The map of the tokens is a secret:
+  # it is mounted from a file that only the control plane reads.
+  control:
+    image: ghcr.io/ggpwnkthx/shuttle:1.2.0
+    restart: unless-stopped
+    command: ["bun", "run", "src/control-main.ts"]
+    environment:
+      # The control plane binds the loopback address by default. It is
+      # reached over the network of the deployment: the address is the one
+      # of the service.
+      SHUTTLE_CONTROL_HOST: 0.0.0.0
+      SHUTTLE_CONTROL_PORT: "9090"
+      # The map of the tokens: {token: {operator, scope}}. The scopes are
+      # read, operate and config. The map is mounted as a file, and it is
+      # never the secret of something else.
+      SHUTTLE_CONTROL_TOKENS_FILE: /etc/shuttle/control-tokens.json
+      # The shared state the control plane acts on: the sessions, the
+      # cached decisions and the route table. It is the state of the
+      # sessions of the gateway (the database 0), and it is reached with
+      # the credentials of the control plane, which may write the route
+      # table and the trail of the writes.
+      SHUTTLE_CONTROL_STATE_URL: ${SHUTTLE_CONTROL_STATE_URL:-redis://redis:6379/0}
+      SHUTTLE_CONTROL_KEY_PREFIX: shuttle
+      SHUTTLE_CONTROL_SHARED_STATE_KEY_PREFIX: shuttle
+      SHUTTLE_LOG_LEVEL: ${SHUTTLE_LOG_LEVEL:-info}
+    volumes:
+      # The example of the map. A deployment replaces it with its own map,
+      # and the map of the tokens is a secret.
+      - ./control-tokens.example.json:/etc/shuttle/control-tokens.json:ro
+    expose:
+      - "9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://127.0.0.1:9090/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped

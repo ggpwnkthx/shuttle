@@ -7,6 +7,7 @@
  * Everything else receives its dependencies.
  */
 
+import { hostname } from 'node:os'
 import { createGatewayApp, createGatewayHandler } from '../app/app'
 import { AdmissionController } from '../app/admission'
 import type { GatewayDependencies } from '../app/dependencies'
@@ -19,6 +20,8 @@ import {
 } from '../domains/authentication/adapters'
 import { OidcClient } from '../domains/authentication'
 import { ConfigurationStore } from '../domains/configuration'
+import type { RouteTableStore } from '../domains/configuration'
+import { PostgresRouteTableStore, RedisRouteTableStore } from '../domains/configuration/adapters'
 import { asymmetricIdentityKey, ephemeralIdentityKey } from '../domains/forwarding'
 import { HttpExchangeService, UpstreamBreaker } from '../domains/proxying'
 import { MemoryRateLimiter, type RequestLimiter } from '../domains/rate-limiting'
@@ -63,6 +66,15 @@ export interface GatewayRuntime {
   observer: Observer
   /** The running configuration. */
   config: ConfigurationStore
+  /**
+   * The store of the route table in the shared state.
+   *
+   * It is there when the source of the route table is the shared state
+   * (§3.4 of the specification), and it is undefined otherwise.
+   */
+  routeTable?: RouteTableStore
+  /** The id of the replica, the one of its heartbeat. */
+  replicaId: string
   /** The authentication of the callers. */
   auth: AuthenticationService
   /**
@@ -103,12 +115,12 @@ export interface GatewayRuntime {
  * server hold the same three things, and a deployment measures them side by
  * side (see `docs/capacity.md`).
  */
-type SharedStateConnection =
+export type SharedStateConnection =
   | { kind: 'redis'; client: SharedStateClient }
   | { kind: 'postgres'; client: PostgresClient }
 
 /** The options of a connection to the server whose state the replicas share. */
-interface SharedStateConnectionOptions {
+export interface SharedStateConnectionOptions {
   /** The url of the server; undefined when the state stays in the process. */
   url?: string
   /** The authority that signs the certificate of the server. */
@@ -128,7 +140,7 @@ interface SharedStateConnectionOptions {
  * returns nothing: the state stays in the memory of the process, which a
  * production deployment refuses.
  */
-async function connectSharedState(
+export async function connectSharedState(
   options: SharedStateConnectionOptions
 ): Promise<SharedStateConnection | undefined> {
   const { url } = options
@@ -332,6 +344,20 @@ export async function createRuntime(
         postgres: settings.sharedState.postgres,
         onError: onSharedStateError,
       })
+  // The route table in the shared state. The gateway reads it and it never
+  // writes a revision: the control plane is the only writer of the table
+  // (§12.7 of the specification).
+  const routeTable: RouteTableStore | undefined =
+    settings.configSource === 'store' && sessionConnection
+      ? sessionConnection.kind === 'redis'
+        ? new RedisRouteTableStore({
+            client: sessionConnection.client,
+            keyPrefix: settings.session.keyPrefix,
+            auditKey: `${settings.session.keyPrefix}:audit`,
+          })
+        : new PostgresRouteTableStore({ client: sessionConnection.client })
+      : undefined
+
   const sessions: SessionStore =
     sessionConnection?.kind === 'redis'
       ? new RedisSessionStore({
@@ -593,6 +619,9 @@ export async function createRuntime(
   const peer = { address: (_request: Request) => '0.0.0.0' }
   // The gateway stops accepting new work when it drains.
   const state = { draining: false }
+  // The id of the replica. It names the heartbeat of the replica in the
+  // shared state, so an operator sees which replicas are there.
+  const replicaId = `${hostname()}-${process.pid}`
 
   const dependencies: GatewayDependencies = {
     version: VERSION,
@@ -655,6 +684,8 @@ export async function createRuntime(
     logger,
     observer,
     config,
+    routeTable,
+    replicaId,
     auth,
     exchanges,
     /**

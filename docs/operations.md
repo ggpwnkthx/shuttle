@@ -72,10 +72,129 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_ACCESS_BREAKER_COOLDOWN_MS` | `5000` | How long the access service is not called after it failed, in milliseconds. The service is tried again when the cooldown is over. |
 | `SHUTTLE_RATE_LIMIT_TOTAL_MAX` | A value | The budget of the deployment. At least one limit has to be set. |
 | `SHUTTLE_RATE_LIMIT_FALLBACK` | `local` | What happens to a request while the shared state cannot be reached: the request is counted in the window of the process (`local`), every request is allowed (`open`), or every request is refused (`closed`). The windows of the limits are not readable while the server is down, and the limiter is the only protection of the gateway against a flood. |
+| `SHUTTLE_CONFIG_SOURCE` | `file` | Where the route table comes from: the file of `SHUTTLE_CONFIG`, or the shared state (`store`), where the control plane writes the revisions of the table. |
+| `SHUTTLE_CONTROL_HOST` | `127.0.0.1` | The listener of the control plane. It binds the loopback address by default: the control plane is internal. |
+| `SHUTTLE_CONTROL_PORT` | `9090` | The port of the control plane. It is never published to the callers. |
+| `SHUTTLE_CONTROL_TOKENS` / `_TOKENS_FILE` | The map of the tokens | The credentials of the control plane, as `{token: {operator, scope}}`. The file is the usual case: the map holds credentials and it belongs in the secret store. |
+| `SHUTTLE_CONTROL_STATE_URL` | `rediss://:<password>@<redis>:6379/0` | The shared state the control plane acts on: the sessions, the cached decisions and the route table. It is reached with the credentials of the control plane. |
+| `SHUTTLE_CONTROL_KEY_PREFIX` | The prefix of the sessions | The prefix of the keys of the state. It has to be the prefix the gateway uses for its sessions: the two processes share the state. |
+| `SHUTTLE_CONTROL_SHARED_STATE_KEY_PREFIX` | The prefix of the decisions | The prefix of the keys of the cached decisions. It has to be the prefix the gateway uses for them. |
+| `SHUTTLE_PROTECTED_ROUTES` | — | The routes a write of the route table may not remove and may not change. A write that touches one of them is refused with a conflict. |
 | `SHUTTLE_SHUTDOWN_TIMEOUT_MS` | `15000` | The deadline of the drain. |
 
 The full list, with the default of every value, is in
 [.env.example](../.env.example).
+
+## The control plane
+
+The control plane is the administrative surface of a deployment. It is a
+**separate process** (`shuttle-control`, the same image as the gateway),
+it listens on its own socket and it acts on the shared state directly. The
+gateway exposes no administrative endpoint and accepts no administrative
+token: a gateway that answers an administrative request is a request an
+attacker reaches.
+
+```
+                    ┌───────────────────┐
+   the operator ───▶│  shuttle-control  │  the internal network only
+                    └─────────┬─────────┘
+                              │ the shared state, with the credentials
+                              │ of the control plane
+                    ┌─────────▼─────────┐
+                    │      redis        │  the sessions, the decisions,
+                    │   (or postgres)   │  the revisions of the route table
+                    └─────────┬─────────┘
+                              │
+                    ┌─────────▼─────────┐
+                    │     shuttle       │  × N replicas, read only
+                    └───────────────────┘
+```
+
+The deployment of the control plane needs three things:
+
+1. **A socket that the callers cannot reach.** The listener binds the
+   loopback address by default (`SHUTTLE_CONTROL_HOST`). The service is
+   internal: it is reached over the network of the deployment, and never
+   through the ingress.
+2. **A map of tokens.** `SHUTTLE_CONTROL_TOKENS_FILE` points at a file
+   that holds a JSON map of `{token: {operator, scope}}`. The scopes are
+   `read` (the endpoints that read), `operate` (`read` and the purges of
+   the sessions and of the decisions) and `config` (`read` and the writes
+   of the route table). A token is at least 16 characters long. A map that
+   cannot be read stops the process: a control plane that starts with a map
+   it does not understand is a control plane that nobody controls. The map
+   is a **secret**: it is in the secret store of the platform, and it is
+   never the secret of something else. A token that is the password of the
+   shared state stops the process as well: a credential that is used twice
+   is used twice.
+3. **Its own credentials on the shared state.** The control plane writes
+   the route table, the history of the table and the trail of the writes;
+   the gateway reads them and writes nothing in them.
+
+### The roles of the shared state
+
+The boundary of the control plane is the credential of the shared state and
+not the token of the caller. A token that is stolen gives the holder the
+scope of the token; the credentials of the gateway give it nothing it may
+not do.
+
+**Postgres.** The migration script creates the two roles and grants them:
+
+```sh
+bun run postgres:migrate -- --roles postgres://admin:<password>@host:5432/shuttle
+```
+
+| The role | What it may do |
+| --- | --- |
+| `shuttle_gateway` | It reads the route table (`shuttle.config_revisions`, `shuttle.config_active`) and it writes nothing in it. It still writes the sessions, the limits, the cached decisions and the heartbeats. |
+| `shuttle_control` | It writes the route table, the history and the trail (`shuttle.audit`), and it may revoke the sessions and purge the cached decisions. |
+
+The gateway runs with `shuttle_gateway` and the control plane runs with
+`shuttle_control`. The passwords of the two roles are set by the
+deployment (`POSTGRES_GATEWAY_PASSWORD` and `POSTGRES_CONTROL_PASSWORD` of
+the migration script, or an `ALTER ROLE` of the deployment).
+
+**Redis.** The same split is made with the ACL users of the server. The
+users are declared in the configuration of the server (`aclfile`); the
+project ships them in
+[`deploy/redis/shuttle.acl`](../deploy/redis/shuttle.acl):
+
+```
+user shuttle-gateway on >~shuttle:s:* >~shuttle:u:* >~shuttle:cfg:hb:* ~shuttle:cfg:active ~shuttle:cfg:rev:* ~shuttle:cfg:revs -@all +@read +set +del +sadd +srem +pexpire +incr +hincrby +hdel +eval
+user shuttle-control on >~shuttle:* -@all +@read +@write
+```
+
+The rules are applied in the order they are written: everything is refused
+first, and the commands of each user are granted afterwards.
+
+The user of the gateway may **read** the route table (`shuttle:cfg:active`,
+`shuttle:cfg:rev:*`, `shuttle:cfg:revs`) and it writes the sessions, the
+limits and the heartbeats. It does not hold the commands that write the
+route table: the revisions and the pointer are hashes and the history is a
+list, and the user of the gateway may neither write a hash nor push a
+value. The user of the control plane writes everything.
+
+The keys of the trail of the writes (`<prefix>:audit`) belong to the
+control plane: the gateway never writes it.
+
+### The route table in the shared state
+
+With `SHUTTLE_CONFIG_SOURCE=store` the route table is not a file any more:
+it is a list of **immutable revisions** in the shared state, and a pointer
+names the revision that is active. Every replica watches the pointer and
+converges on the same table.
+
+- An **empty** store falls back to the file of `SHUTTLE_CONFIG`: the
+  deployment starts with it.
+- An **unreachable** store keeps the last valid table. The failure is
+  reported in `config.lastError` of `/readyz` and in
+  `shuttle_config_reloads_total{result="failed"}`.
+- Every replica writes a **heartbeat** with a time to live, so
+  `GET /v1/replicas` shows the replicas that are really there.
+
+A write of the table is a compare and swap: the caller sends the revision
+it replaces in the `If-Match` header, and the pointer moves only when it
+still names that revision.
 
 ## The shape of the shared state
 

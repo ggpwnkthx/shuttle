@@ -25,6 +25,18 @@ export interface RedisCommands {
   srem(key: string, member: string): Promise<number>
   smembers(key: string): Promise<string[]>
   pexpire(key: string, ms: number): Promise<number>
+  /** The value of a field of a hash. */
+  hget(key: string, field: string): Promise<string | null>
+  /** The fields of a hash. */
+  hgetall(key: string): Promise<Record<string, string>>
+  /** Appends a value at the end of a list. */
+  rpush(key: string, ...values: string[]): Promise<number>
+  /** The values of a list, between two indexes. */
+  lrange(key: string, start: number, stop: number): Promise<string[]>
+  /** The number of values of a list. */
+  llen(key: string): Promise<number>
+  /** Grows a counter by one and returns its value. */
+  incr(key: string): Promise<number>
 }
 
 /**
@@ -84,6 +96,33 @@ export function withRetries<T extends RedisCommands>(client: T, attempts = 3): T
       }
       if (property === 'pexpire') {
         return (key: string, ms: number) => run(() => target.pexpire(key, ms))
+      }
+      if (property === 'hget') {
+        return (key: string, field: string) => run(() => target.hget(key, field))
+      }
+      if (property === 'hgetall') {
+        return (key: string) => run(() => target.hgetall(key))
+      }
+      if (property === 'rpush') {
+        return (key: string, ...values: string[]) => run(() => target.rpush(key, ...values))
+      }
+      if (property === 'lrange') {
+        return (key: string, start: number, stop: number) =>
+          run(() => target.lrange(key, start, stop))
+      }
+      if (property === 'llen') {
+        return (key: string) => run(() => target.llen(key))
+      }
+      if (property === 'incr') {
+        return (key: string) => run(() => target.incr(key))
+      }
+      if (property === 'sendCommand') {
+        return (args: string[]) =>
+          run(() =>
+            (target as unknown as { sendCommand(args: string[]): Promise<unknown> }).sendCommand(
+              args
+            )
+          )
       }
       const value = Reflect.get(target, property, receiver)
       return typeof value === 'function' ? value.bind(target) : value

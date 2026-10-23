@@ -19,6 +19,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { serializeAudit, type AuditEntry } from '../../../observability'
 import {
   isPastIdleLifetime,
   isPastMaximumAge,
@@ -51,6 +52,8 @@ export interface RedisSessionCommands {
   smembers(key: string): Promise<string[]>
   /** The lifetime of a key, in milliseconds. */
   pexpire(key: string, ms: number): Promise<number>
+  /** Appends a value at the end of a list. */
+  rpush(key: string, ...values: string[]): Promise<number>
 }
 
 /**
@@ -96,11 +99,38 @@ end
 return raw
 `
 
+/**
+ * The script that revokes the sessions of a subject.
+ *
+ * It removes the sessions, forgets the index of the subject and writes the
+ * entry of the audit trail: a script is a transaction of the server, so
+ * the revocation and its trace cannot exist without each other.
+ */
+export const REVOKE_SCRIPT = `
+local ids = redis.call('SMEMBERS', KEYS[1])
+local removed = 0
+for index = 1, #ids do
+  removed = removed + redis.call('DEL', ARGV[1] .. ids[index])
+end
+redis.call('DEL', KEYS[1])
+if ARGV[2] ~= '' then
+  redis.call('RPUSH', KEYS[2], ARGV[2])
+end
+return removed
+`
+
 export interface RedisSessionStoreOptions extends Partial<SessionLifetime> {
   /** The client of the server. */
   client: RedisSessionCommands
   /** Prefix of every key, so several environments can share one server. */
   keyPrefix?: string
+  /**
+   * The key of the audit trail of the state.
+   *
+   * It is empty when the store does not write the trail: the gateway never
+   * revokes a session by itself, and only the control plane does.
+   */
+  auditKey?: string
 }
 
 /**
@@ -114,10 +144,12 @@ export class RedisSessionStore implements SessionStore {
   #client: RedisSessionCommands
   #prefix: string
   #lifetime: SessionLifetime
+  #auditKey: string
 
   constructor(options: RedisSessionStoreOptions) {
     this.#client = options.client
     this.#prefix = options.keyPrefix ?? 'shuttle'
+    this.#auditKey = options.auditKey ?? ''
     this.#lifetime = {
       ttlMs: options.ttlMs ?? 8 * 60 * 60_000,
       maxAgeMs: options.maxAgeMs ?? 24 * 60 * 60_000,
@@ -189,16 +221,36 @@ export class RedisSessionStore implements SessionStore {
     await this.#client.del(this.#sessionKey(id))
   }
 
-  async destroyBySubject(subject: string): Promise<number> {
+  async destroyBySubject(subject: string, audit?: AuditEntry): Promise<number> {
     const key = this.#subjectKey(subject)
-    const ids = await this.#client.smembers(key)
-    if (ids.length === 0) return 0
-    let removed = 0
-    for (const id of ids) {
-      removed += await this.#client.del(this.#sessionKey(id))
+    const entry = audit ? serializeAudit(audit) : ''
+    try {
+      // The revocation and its trace are one script: the server runs them
+      // without another client in between.
+      const removed = await this.#client.eval(
+        REVOKE_SCRIPT,
+        2,
+        key,
+        this.#auditKey,
+        `${this.#prefix}:s:`,
+        entry
+      )
+      return Number(removed)
+    } catch {
+      // A cluster that does not accept a script over several keys: the
+      // sessions are removed one by one and the entry of the trail follows
+      // the revocation.
+      const ids = await this.#client.smembers(key)
+      let removed = 0
+      for (const id of ids) {
+        removed += await this.#client.del(this.#sessionKey(id))
+      }
+      await this.#client.del(key)
+      if (entry !== '' && this.#auditKey !== '') {
+        await this.#client.rpush(this.#auditKey, entry)
+      }
+      return removed
     }
-    await this.#client.del(key)
-    return removed
   }
 
   async ping(): Promise<boolean> {

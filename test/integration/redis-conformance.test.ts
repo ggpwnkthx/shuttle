@@ -13,10 +13,12 @@ import { describe as describeOnly } from 'bun:test'
 import { RedisSessionStore } from '../../src/domains/authentication/adapters'
 import { RedisRateLimiter } from '../../src/domains/rate-limiting/adapters'
 import { RedisDecisionCache } from '../../src/domains/workspace-access/adapters'
+import { RedisRouteTableStore } from '../../src/domains/configuration/adapters'
 import { createRedisClient, withRetries } from '../../src/platform/redis'
 import {
   describeDecisionCache,
   describeRateLimiter,
+  describeRouteTableStore,
   describeSessionStore,
 } from './shared-state-conformance'
 
@@ -54,5 +56,19 @@ describeRedis('the shared state in a Redis server', () => {
         client: withRetries(createRedisClient({ url: url! })),
         keyPrefix: `${prefix}:dec`,
       })
+  )
+
+  describeRouteTableStore(
+    'a Redis server',
+    // The prefix is unique to the store: the tests of the suite do not
+    // share the route table of each other.
+    () => {
+      const unique = `${prefix}:${Math.floor(Math.random() * 1_000_000).toString(36)}`
+      return new RedisRouteTableStore({
+        client: withRetries(createRedisClient({ url: url! })),
+        keyPrefix: `${unique}:cfg`,
+        auditKey: `${unique}:audit`,
+      })
+    }
   )
 })

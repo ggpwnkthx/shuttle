@@ -65,6 +65,7 @@ export const DOMAIN_DEPENDENCIES: Record<string, readonly string[]> = {
   'rate-limiting': [],
   proxying: ['forwarding'],
   websockets: ['forwarding'],
+  control: ['configuration', 'authentication', 'workspace-access'],
 }
 
 /** The packages a core domain file may not import. */
@@ -112,7 +113,9 @@ interface Location {
 export function locate(path: string): Location {
   const normalized = path.replace(/\\/g, '/')
   const isTest = normalized.endsWith('.test.ts')
-  if (normalized === 'src/main.ts') return { layer: 'entry', adapter: false, test: isTest }
+  if (normalized === 'src/main.ts' || normalized === 'src/control-main.ts') {
+    return { layer: 'entry', adapter: false, test: isTest }
+  }
   if (normalized.startsWith('src/app/')) return { layer: 'app', adapter: false, test: isTest }
   if (normalized.startsWith('src/platform/')) {
     return { layer: 'platform', adapter: false, test: isTest }

@@ -34,10 +34,15 @@ async function documents(): Promise<
   return parsed
 }
 
-/** The document of a kind. */
-async function ofKind(kind: string): Promise<Record<string, unknown>> {
+/** The document of a kind, of a component of the deployment. */
+async function ofKind(kind: string, component?: string): Promise<Record<string, unknown>> {
   const all = await documents()
-  const found = all.find((entry) => entry.body.kind === kind)
+  const found = all.find((entry) => {
+    if (entry.body.kind !== kind) return false
+    if (!component) return true
+    const labels = (entry.body.metadata as { labels?: Record<string, string> })?.labels ?? {}
+    return labels['app.kubernetes.io/component'] === component
+  })
   if (!found) throw new Error(`no document of the kind "${kind}"`)
   return found.body
 }
@@ -49,7 +54,7 @@ describe('the manifests of the deployment', () => {
   })
 
   test('the deployment has the probes of the specification', async () => {
-    const deployment = await ofKind('Deployment')
+    const deployment = await ofKind('Deployment', 'gateway')
     const spec = deployment.spec as Record<string, unknown>
     const template = spec.template as Record<string, unknown>
     const pod = template.spec as Record<string, unknown>
@@ -144,13 +149,16 @@ describe('the manifests of the deployment', () => {
     const docs = parseAllDocuments(text)
     expect(docs[0]?.errors).toEqual([])
     const stack = docs[0]!.toJS() as {
-      services: Record<string, { image: string; environment: Record<string, string> }>
+      services: Record<
+        string,
+        { image: string; environment: Record<string, string>; ports?: unknown }
+      >
     }
     // The stack of a deployment holds the gateway and the shared state, and
     // nothing else: the fixtures are not part of a deployment. The shared
     // state is a Redis server or a Postgres server; the Postgres one is
     // behind a profile, so it is not started by default.
-    expect(Object.keys(stack.services).sort()).toEqual(['gateway', 'postgres', 'redis'])
+    expect(Object.keys(stack.services).sort()).toEqual(['control', 'gateway', 'postgres', 'redis'])
     expect(stack.services.postgres!.image).toContain('postgres')
     // The Postgres service is not part of the default stack: a deployment
     // brings its own database.
@@ -165,12 +173,47 @@ describe('the manifests of the deployment', () => {
     expect(gateway.environment.SHUTTLE_METRICS_TOKEN).toContain('?')
     // The gateway refuses to start in production without a rate limit.
     expect(gateway.environment.SHUTTLE_RATE_LIMIT_TOTAL_MAX).toBeTruthy()
+
+    // The control plane is the administrative surface of the deployment.
+    // It is internal: the port is not published, and the map of its tokens
+    // is a file that only it reads.
+    const control = stack.services.control!
+    expect(control.image).toContain('ghcr.io/ggpwnkthx/shuttle')
+    expect(control.environment.SHUTTLE_CONTROL_TOKENS_FILE).toBeTruthy()
+    expect(control.environment.SHUTTLE_CONTROL_STATE_URL).toBeTruthy()
+    expect(control.ports).toBeUndefined()
+  })
+
+  test('the control plane is internal', async () => {
+    const service = await ofKind('Service', 'control')
+    expect(service.spec).toMatchObject({ type: 'ClusterIP' })
+
+    const deployment = await ofKind('Deployment', 'control')
+    const spec = deployment.spec as Record<string, unknown>
+    const template = spec.template as Record<string, unknown>
+    const pod = template.spec as Record<string, unknown>
+    const container = (pod.containers as Record<string, unknown>[])[0]!
+    // The probes of the control plane are its own: the readiness of the
+    // gateway says nothing about the state of the control plane.
+    expect((container.readinessProbe as Record<string, unknown>).httpGet).toEqual({
+      path: '/readyz',
+      port: 'control',
+    })
+    expect((container.livenessProbe as Record<string, unknown>).httpGet).toEqual({
+      path: '/healthz',
+      port: 'control',
+    })
+    // The map of the tokens is a secret of the platform.
+    const env = container.env as { name: string; value?: string }[]
+    expect(env.find((entry) => entry.name === 'SHUTTLE_CONTROL_TOKENS_FILE')?.value).toBe(
+      '/etc/shuttle/control-tokens.json'
+    )
   })
 
   test('the deployment sets at least one rate limit', async () => {
     // The gateway refuses to start in production without a rate limit: a
     // manifest that does not set one would not start.
-    const deployment = await ofKind('Deployment')
+    const deployment = await ofKind('Deployment', 'gateway')
     const spec = deployment.spec as Record<string, unknown>
     const template = spec.template as Record<string, unknown>
     const pod = template.spec as Record<string, unknown>

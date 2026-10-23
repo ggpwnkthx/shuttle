@@ -60,6 +60,73 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
    )`,
   `CREATE INDEX IF NOT EXISTS ${SCHEMA_NAME}_access_decisions_expires_at_idx
      ON ${SCHEMA_NAME}.access_decisions (expires_at)`,
+  // The caller and the workspace a decision is about, hashed: the control
+  // plane purges the decisions of a caller, and it cannot do it without
+  // knowing which decision is about whom. The values are hashes, because
+  // the subject comes from the identity provider.
+  `ALTER TABLE ${SCHEMA_NAME}.access_decisions ADD COLUMN IF NOT EXISTS subject_hash text`,
+  `ALTER TABLE ${SCHEMA_NAME}.access_decisions ADD COLUMN IF NOT EXISTS workspace_hash text`,
+  `CREATE INDEX IF NOT EXISTS ${SCHEMA_NAME}_access_decisions_subject_hash_idx
+     ON ${SCHEMA_NAME}.access_decisions (subject_hash)`,
+
+  // The revisions of the route table and the pointer that names the
+  // active one. A revision is immutable: only the pointer moves.
+  //
+  // The gateway reads them and writes nothing in them; the control plane
+  // writes them (see the grants of the roles).
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA_NAME}.config_revisions (
+     namespace  text NOT NULL,
+     revision   bigint NOT NULL,
+     body       jsonb NOT NULL,
+     author     text NOT NULL,
+     created_at timestamptz NOT NULL,
+     PRIMARY KEY (namespace, revision)
+   )`,
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA_NAME}.config_active (
+     namespace  text PRIMARY KEY,
+     revision   bigint NOT NULL,
+     updated_at timestamptz NOT NULL
+   )`,
+  // The heartbeats of the replicas that serve the route table. A heartbeat
+  // has a lifetime: a replica that is gone disappears on its own.
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA_NAME}.config_heartbeats (
+     namespace  text NOT NULL,
+     replica_id text NOT NULL,
+     revision   bigint,
+     last_error text,
+     at         timestamptz NOT NULL,
+     expires_at timestamptz NOT NULL,
+     PRIMARY KEY (namespace, replica_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS ${SCHEMA_NAME}_config_heartbeats_expires_at_idx
+     ON ${SCHEMA_NAME}.config_heartbeats (expires_at)`,
+
+  // The trail of the writes of the control plane. An entry is written with
+  // the change it records, in the same transaction.
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA_NAME}.audit (
+     id       bigserial PRIMARY KEY,
+     action   text NOT NULL,
+     target   text NOT NULL,
+     operator text NOT NULL,
+     scope    text NOT NULL,
+     address  text NOT NULL,
+     request  jsonb,
+     at       timestamptz NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS ${SCHEMA_NAME}_audit_at_idx ON ${SCHEMA_NAME}.audit (at DESC)`,
+
+  // The failures of the authentication of the control plane. The counter
+  // lives in the shared state, so the limit holds across the replicas of
+  // the control plane.
+  `CREATE TABLE IF NOT EXISTS ${SCHEMA_NAME}.control_failures (
+     key        text NOT NULL,
+     bucket     bigint NOT NULL,
+     failures   bigint NOT NULL DEFAULT 0,
+     expires_at timestamptz NOT NULL,
+     PRIMARY KEY (key, bucket)
+   )`,
+  `CREATE INDEX IF NOT EXISTS ${SCHEMA_NAME}_control_failures_expires_at_idx
+     ON ${SCHEMA_NAME}.control_failures (expires_at)`,
 
   // The buckets of the windows of the limiters. A window holds at most
   // sixty buckets, so the state of a caller does not grow with its
@@ -256,6 +323,68 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
  * build the schema while the others wait for it.
  */
 export const BOOTSTRAP_LOCK_KEY = 'shuttle_schema_bootstrap'
+
+/** The name of the role of the gateway. */
+export const GATEWAY_ROLE = 'shuttle_gateway'
+
+/** The name of the role of the control plane. */
+export const CONTROL_ROLE = 'shuttle_control'
+
+/**
+ * The statements that create the two roles of the shared state.
+ *
+ * The roles are created without a password: the deployment sets it, and a
+ * password that travels in a repository is a password that is not a secret.
+ * The statements are idempotent.
+ */
+export const ROLE_STATEMENTS: readonly string[] = [
+  `DO $$
+   BEGIN
+     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${GATEWAY_ROLE}') THEN
+       CREATE ROLE ${GATEWAY_ROLE} LOGIN;
+     END IF;
+     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${CONTROL_ROLE}') THEN
+       CREATE ROLE ${CONTROL_ROLE} LOGIN;
+     END IF;
+   END $$`,
+]
+
+/**
+ * The grants of the two roles.
+ *
+ * The boundary of the control plane is the credential of the shared state
+ * and not the token of the caller:
+ *
+ * - the role of the gateway **reads** the route table and writes nothing
+ *   in it; it still writes the sessions, the limits, the cached decisions
+ *   and the heartbeats, which are its own state;
+ * - the role of the control plane **writes** the route table, the history
+ *   and the trail of the writes, and it may revoke the sessions and purge
+ *   the cached decisions.
+ *
+ * The statements are idempotent.
+ */
+export const ROLE_GRANTS: readonly string[] = [
+  `GRANT USAGE ON SCHEMA ${SCHEMA_NAME} TO ${GATEWAY_ROLE}, ${CONTROL_ROLE}`,
+
+  // The gateway reads the route table and writes nothing in it.
+  `GRANT SELECT ON ${SCHEMA_NAME}.config_revisions, ${SCHEMA_NAME}.config_active TO ${GATEWAY_ROLE}`,
+  `GRANT SELECT, INSERT, UPDATE ON ${SCHEMA_NAME}.config_heartbeats TO ${GATEWAY_ROLE}`,
+  `GRANT SELECT, INSERT, UPDATE, DELETE ON ${SCHEMA_NAME}.sessions TO ${GATEWAY_ROLE}`,
+  `GRANT SELECT, INSERT, UPDATE, DELETE ON ${SCHEMA_NAME}.rate_limit_buckets TO ${GATEWAY_ROLE}`,
+  `GRANT SELECT, INSERT, UPDATE, DELETE ON ${SCHEMA_NAME}.access_decisions TO ${GATEWAY_ROLE}`,
+
+  // The control plane writes the route table, the history and the trail.
+  `GRANT SELECT, INSERT, UPDATE, DELETE
+     ON ${SCHEMA_NAME}.config_revisions, ${SCHEMA_NAME}.config_active TO ${CONTROL_ROLE}`,
+  `GRANT SELECT, INSERT, UPDATE, DELETE ON ${SCHEMA_NAME}.config_heartbeats TO ${CONTROL_ROLE}`,
+  `GRANT SELECT, INSERT, UPDATE, DELETE ON ${SCHEMA_NAME}.audit TO ${CONTROL_ROLE}`,
+  `GRANT SELECT, INSERT, UPDATE, DELETE ON ${SCHEMA_NAME}.control_failures TO ${CONTROL_ROLE}`,
+  `GRANT SELECT, INSERT, UPDATE, DELETE
+     ON ${SCHEMA_NAME}.sessions, ${SCHEMA_NAME}.access_decisions TO ${CONTROL_ROLE}`,
+
+  `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${SCHEMA_NAME} TO ${GATEWAY_ROLE}, ${CONTROL_ROLE}`,
+]
 
 /** The part of the client the bootstrap needs. */
 export interface SchemaClient {

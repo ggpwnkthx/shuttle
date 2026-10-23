@@ -3,12 +3,12 @@
  * The entry point of the gateway.
  *
  * The runtime reads the environment, loads the configuration, starts the
- * listener and waits for a termination signal. Everything else lives in the
- * runtime and in the domains.
+ * listener and waits for a termination signal. Everything else lives in
+ * the runtime and in the domains.
  */
 import { readEnv } from './runtime/env'
 import { createRuntime } from './runtime/composition'
-import { watchConfiguration } from './runtime/lifecycle'
+import { loadInitialConfiguration, watchConfiguration, watchRouteTable } from './runtime/lifecycle'
 import { assertRuntimeVersion } from './runtime/version'
 
 async function main(): Promise<void> {
@@ -23,32 +23,64 @@ async function main(): Promise<void> {
 
   // The configuration is loaded before the listener accepts: a gateway
   // without a configuration has no routes to offer.
-  const loaded = runtime.config.apply(JSON.parse(await readConfig(settings.configPath)))
-  if (!loaded.ok) {
-    runtime.logger.error('the initial configuration is invalid', { error: loaded.error })
-    if (!runtime.config.loaded) {
+  //
+  // The source of the table is either the file or the shared state
+  // (§3.4 of the specification). In the store mode the table of the
+  // active revision is loaded, and the file is the fallback of a store
+  // that is empty or that cannot be reached.
+  const source = settings.configSource
+  let watcher: { stop: () => void; ready?: Promise<void> } | null = null
+
+  if (source === 'store') {
+    const routeTable = runtime.routeTable
+    if (!routeTable) {
+      runtime.logger.error('the route table of the shared state is not configured')
+      runtime.logger.error('the gateway cannot start without a route table')
+      await runtime.close()
+      process.exit(1)
+    }
+    // The table of the active revision is loaded, and the file is the
+    // fallback of a store that is empty or that cannot be reached.
+    const loaded = await loadInitialConfiguration({
+      store: runtime.config,
+      path: settings.configPath,
+      routeTable,
+      logger: runtime.logger,
+      observer: runtime.observer,
+    })
+    if (!loaded) {
+      runtime.logger.error('the gateway cannot start without a valid route table')
+      await runtime.close()
+      process.exit(1)
+    }
+    const routeTableWatcher = watchRouteTable({
+      store: runtime.config,
+      routeTable,
+      logger: runtime.logger,
+      observer: runtime.observer,
+      replicaId: runtime.replicaId,
+    })
+    watcher = routeTableWatcher
+  } else {
+    const loaded = await loadInitialConfiguration({
+      store: runtime.config,
+      path: settings.configPath,
+      logger: runtime.logger,
+      observer: runtime.observer,
+    })
+    if (!loaded) {
       runtime.logger.error('the gateway cannot start without a valid configuration')
       await runtime.close()
       process.exit(1)
     }
-  } else {
-    runtime.logger.info('the configuration was loaded', {
-      revision: loaded.revision,
-      routes: loaded.routes,
-      source: runtime.config.source,
+    watcher = watchConfiguration({
+      store: runtime.config,
+      logger: runtime.logger,
+      observer: runtime.observer,
+      path: settings.configPath,
     })
-    // The policy that is running is written in the log by the store, when
-    // it publishes the generation.
-    runtime.observer.recordConfigReload(true)
+    await watcher.ready
   }
-
-  const watcher = watchConfiguration({
-    store: runtime.config,
-    logger: runtime.logger,
-    observer: runtime.observer,
-    path: settings.configPath,
-  })
-  await watcher.ready
 
   // The session store is shared by every replica: report right away when it
   // cannot be reached, the readiness probe takes the task out of the
@@ -61,6 +93,7 @@ async function main(): Promise<void> {
 
   runtime.logger.info('the listener started', {
     gateway: `http://${settings.network.host}:${runtime.listener.port}`,
+    configSource: source,
   })
 
   let stopping = false
@@ -68,7 +101,7 @@ async function main(): Promise<void> {
     if (stopping) return
     stopping = true
     void runtime.drain(signal).then(async () => {
-      watcher.stop()
+      watcher?.stop()
       await runtime.close()
       process.exit(0)
     })
@@ -76,12 +109,6 @@ async function main(): Promise<void> {
 
   process.on('SIGTERM', () => stop('SIGTERM'))
   process.on('SIGINT', () => stop('SIGINT'))
-}
-
-/** Reads the configuration file of the deployment. */
-async function readConfig(path: string): Promise<string> {
-  const { readFile } = await import('node:fs/promises')
-  return await readFile(path, 'utf8')
 }
 
 main().catch((error) => {

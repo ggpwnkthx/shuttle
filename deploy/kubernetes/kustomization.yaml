@@ -5,6 +5,10 @@ resources:
   - configmap.yaml
   - deployment.yaml
   - service.yaml
+  # The control plane is the administrative surface of the deployment. It is
+  # internal: the service is a ClusterIP and it is not routed by the
+  # ingress.
+  - control.yaml
   # The secret is not part of the manifests: it is applied from the secret
   # store of the platform (sealed secrets, the external secrets operator or
   # the equivalent of the platform).

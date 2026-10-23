@@ -2,6 +2,7 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
     "src/main.ts",
+    "src/control-main.ts",
     "src/**/*.test.ts",
     "test/**/*.ts",
     "scripts/*.ts",
@@ -18,10 +19,25 @@
   "ignoreExportsUsedInFile": true,
   "includeEntryExports": true,
   "ignoreIssues": {
-    "test/**": ["exports", "types"],
-    "scripts/**": ["exports", "types"],
-    "services/**": ["exports", "types"],
-    "examples/**": ["exports", "types"],
-    "src/**/*.test.ts": ["exports", "types"]
+    "test/**": [
+      "exports",
+      "types"
+    ],
+    "scripts/**": [
+      "exports",
+      "types"
+    ],
+    "services/**": [
+      "exports",
+      "types"
+    ],
+    "examples/**": [
+      "exports",
+      "types"
+    ],
+    "src/**/*.test.ts": [
+      "exports",
+      "types"
+    ]
   }
 }

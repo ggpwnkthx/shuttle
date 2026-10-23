@@ -5,6 +5,42 @@ decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
 ## Unreleased
 
+### The control plane
+
+The administrative surface of a deployment is a **separate process**,
+`shuttle-control`. It listens on its own socket, on the internal network
+of the deployment, and it acts on the shared state directly. The gateway
+exposes **no** administrative endpoint and accepts **no** administrative
+token: a gateway that answers an administrative request is a request an
+attacker reaches.
+
+The endpoints are `/v1/config`, `/v1/config/validate`, `PUT /v1/config`,
+`/v1/config/history`, `/v1/config/rollback`, `/v1/replicas`,
+`DELETE /v1/sessions`, `DELETE /v1/decisions` and `/v1/audit`. The tokens
+are read from a map of `{token: {operator, scope}}`, and the scopes are
+`read`, `operate` and `config`. A missing or a wrong token is `401`, a
+token of the wrong scope is `403`, and every write of the control plane
+leaves an entry in the audit trail.
+
+The boundary that matters is the credential of the shared state: the
+gateway reads the route table and it may not write it, and only the role
+of the control plane writes it. The roles ship with the project, for
+Postgres and for Redis.
+
+### The route table in the shared state
+
+The route table of a deployment may be a record in the shared state
+instead of a file: `SHUTTLE_CONFIG_SOURCE=store`. The table is then a list
+of **immutable revisions** and a pointer that names the active one. The
+writes are compare and swap (`If-Match`), the pointer is watched at least
+once a second, and every table goes through the same validation as the
+file of a deployment, so a broken table never takes a running deployment
+out of rotation. An empty store falls back to the file, and a store that
+cannot be reached keeps the last valid table.
+
+Every replica writes a heartbeat with a time to live, so the control
+plane shows the replicas that are really there.
+
 ### The version of the Postgres server
 
 The gateway is built, tested and released against **PostgreSQL 18**: the

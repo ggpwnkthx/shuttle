@@ -72,6 +72,7 @@ export interface SharedStateClient {
   ping(): Promise<string>
   eval(script: string, numkeys: number, ...keysAndArgs: (string | number)[]): Promise<unknown>
   keys(pattern: string): Promise<string[]>
+  sendCommand(args: string[]): Promise<unknown>
   ttl(key: string): Promise<number>
   /** Adds a member to a set. */
   sadd(key: string, member: string): Promise<number>
@@ -81,6 +82,18 @@ export interface SharedStateClient {
   smembers(key: string): Promise<string[]>
   /** The lifetime of a key, in milliseconds. */
   pexpire(key: string, ms: number): Promise<number>
+  /** The value of a field of a hash. */
+  hget(key: string, field: string): Promise<string | null>
+  /** The fields of a hash. */
+  hgetall(key: string): Promise<Record<string, string>>
+  /** Appends a value at the end of a list. */
+  rpush(key: string, ...values: string[]): Promise<number>
+  /** The values of a list, between two indexes. */
+  lrange(key: string, start: number, stop: number): Promise<string[]>
+  /** The number of values of a list. */
+  llen(key: string): Promise<number>
+  /** Grows a counter by one and returns its value. */
+  incr(key: string): Promise<number>
   /** Closes the connection. */
   close(): Promise<void>
 }
@@ -99,11 +112,18 @@ interface RawClient {
   ping(): Promise<string>
   eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>
   keys(pattern: string): Promise<string[]>
+  sendCommand(args: string[]): Promise<unknown>
   ttl(key: string): Promise<number>
   sAdd(key: string, member: string): Promise<number>
   sRem(key: string, member: string): Promise<number>
   sMembers(key: string): Promise<string[]>
   pExpire(key: string, ms: number): Promise<number>
+  hGet(key: string, field: string): Promise<string | null>
+  hGetAll(key: string): Promise<Record<string, string>>
+  rPush(key: string, ...values: string[]): Promise<number>
+  lRange(key: string, start: number, stop: number): Promise<string[]>
+  lLen(key: string): Promise<number>
+  incr(key: string): Promise<number>
   on(event: string, listener: (...args: never[]) => void): unknown
   connect(): Promise<void>
   quit(): Promise<string>
@@ -172,6 +192,10 @@ class SharedStateClientImpl implements SharedStateClient {
     return this.#client.keys(pattern)
   }
 
+  async sendCommand(args: string[]): Promise<unknown> {
+    return await this.#client.sendCommand(args)
+  }
+
   async ttl(key: string): Promise<number> {
     return this.#client.ttl(key)
   }
@@ -190,6 +214,30 @@ class SharedStateClientImpl implements SharedStateClient {
 
   async pexpire(key: string, ms: number): Promise<number> {
     return this.#client.pExpire(key, ms)
+  }
+
+  async hget(key: string, field: string): Promise<string | null> {
+    return await this.#client.hGet(key, field)
+  }
+
+  async hgetall(key: string): Promise<Record<string, string>> {
+    return await this.#client.hGetAll(key)
+  }
+
+  async rpush(key: string, ...values: string[]): Promise<number> {
+    return this.#client.rPush(key, ...values)
+  }
+
+  async lrange(key: string, start: number, stop: number): Promise<string[]> {
+    return this.#client.lRange(key, start, stop)
+  }
+
+  async llen(key: string): Promise<number> {
+    return this.#client.lLen(key)
+  }
+
+  async incr(key: string): Promise<number> {
+    return this.#client.incr(key)
   }
 
   async close(): Promise<void> {

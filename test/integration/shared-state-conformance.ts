@@ -11,6 +11,7 @@ import { describe, expect, test } from 'bun:test'
 import type { SessionStore } from '../../src/domains/authentication'
 import type { RequestLimiter } from '../../src/domains/rate-limiting'
 import type { DecisionCache } from '../../src/domains/workspace-access'
+import type { AuditEntry, RouteTableStore } from '../../src/domains/configuration'
 
 /** The options of the lifetime of the sessions of the suite. */
 export interface SessionStoreOptions {
@@ -289,6 +290,204 @@ export function describeDecisionCache(label: string, factory: () => DecisionCach
       const cache = factory()
       await cache.set('key-6', { allow: true, kind: 'allowed', reason: '', decidedAt: 1 }, 0)
       expect(await cache.get('key-6')).toBeNull()
+    })
+  })
+}
+
+/**
+ * The behaviour every store of the route table has to show.
+ *
+ * The route table of the shared state is a list of immutable revisions and
+ * a pointer that names the active one (§3.4 of the specification). The
+ * suite proves that the two servers hold the same thing with the same
+ * contract: the revisions, the compare and swap, the history, the
+ * heartbeats of the replicas and the trail of the writes.
+ */
+export function describeRouteTableStore(label: string, factory: () => RouteTableStore): void {
+  describe(`the route table in ${label}`, () => {
+    /** An entry of the audit trail of a write. */
+    const audit = (action: string): AuditEntry => ({
+      action,
+      target: 'route-table',
+      operator: 'the-operator',
+      scope: 'config',
+      address: '127.0.0.1',
+      request: { action },
+      at: Date.now(),
+    })
+
+    test('an empty store has no active revision', async () => {
+      const store = factory()
+      expect(await store.activePointer()).toBeNull()
+    })
+
+    test('a written revision becomes the active one', async () => {
+      const store = factory()
+      const outcome = await store.writeRevision({
+        table: { routes: [{ id: 'a', path: '/a' }] },
+        author: 'the-operator',
+        expectedRevision: null,
+        audit: audit('config.write'),
+      })
+      expect(outcome.ok).toBe(true)
+      if (!outcome.ok) return
+
+      const pointer = await store.activePointer()
+      expect(pointer?.revision).toBe(outcome.revision)
+
+      const revision = await store.readRevision(outcome.revision)
+      expect(revision?.author).toBe('the-operator')
+      expect(revision?.table).toEqual({ routes: [{ id: 'a', path: '/a' }] })
+    })
+
+    test('a revision is never changed', async () => {
+      const store = factory()
+      const first = await store.writeRevision({
+        table: { routes: [{ id: 'a', path: '/a' }] },
+        author: 'the-operator',
+        expectedRevision: null,
+        audit: audit('config.write'),
+      })
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+      const second = await store.writeRevision({
+        table: { routes: [{ id: 'b', path: '/b' }] },
+        author: 'the-operator',
+        expectedRevision: first.revision,
+        audit: audit('config.write'),
+      })
+      expect(second.ok).toBe(true)
+
+      // The first revision still holds the table it was written with.
+      const revision = await store.readRevision(first.revision)
+      expect(revision?.table).toEqual({ routes: [{ id: 'a', path: '/a' }] })
+    })
+
+    test('a write that lost the race writes nothing', async () => {
+      const store = factory()
+      const first = await store.writeRevision({
+        table: { routes: [{ id: 'a', path: '/a' }] },
+        author: 'the-operator',
+        expectedRevision: null,
+        audit: audit('config.write'),
+      })
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+
+      // The writer believes that the store is empty: it lost the race.
+      const second = await store.writeRevision({
+        table: { routes: [{ id: 'b', path: '/b' }] },
+        author: 'the-operator',
+        expectedRevision: null,
+        audit: audit('config.write'),
+      })
+      expect(second.ok).toBe(false)
+      if (second.ok) return
+      expect(second.reason).toBe('conflict')
+      expect(second.active).toBe(first.revision)
+
+      // The pointer did not move and the table was not written.
+      const pointer = await store.activePointer()
+      expect(pointer?.revision).toBe(first.revision)
+      expect(await store.readRevision(first.revision + 1)).toBeNull()
+    })
+
+    test('the history holds the revisions, the newest first', async () => {
+      const store = factory()
+      const first = await store.writeRevision({
+        table: { routes: [{ id: 'a', path: '/a' }] },
+        author: 'the-operator',
+        expectedRevision: null,
+        audit: audit('config.write'),
+      })
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+      const second = await store.writeRevision({
+        table: { routes: [{ id: 'b', path: '/b' }] },
+        author: 'the-operator',
+        expectedRevision: first.revision,
+        audit: audit('config.write'),
+      })
+      expect(second.ok).toBe(true)
+
+      const page = await store.listRevisions({ limit: 10, offset: 0 })
+      expect(page.total).toBe(2)
+      expect(page.entries[0]?.revision).toBe(second.ok ? second.revision : 0)
+      expect(page.entries[1]?.revision).toBe(first.revision)
+
+      const secondPage = await store.listRevisions({ limit: 1, offset: 1 })
+      expect(secondPage.entries.length).toBe(1)
+      expect(secondPage.entries[0]?.revision).toBe(first.revision)
+    })
+
+    test('the entry of the trail is written with the revision', async () => {
+      const store = factory()
+      const outcome = await store.writeRevision({
+        table: { routes: [{ id: 'a', path: '/a' }] },
+        author: 'the-operator',
+        expectedRevision: null,
+        audit: audit('config.write'),
+      })
+      expect(outcome.ok).toBe(true)
+
+      const trail = await store.listAudit({ limit: 10, offset: 0 })
+      expect(trail.total).toBeGreaterThan(0)
+      const entry = trail.entries[0]
+      expect(entry?.action).toBe('config.write')
+      expect(entry?.operator).toBe('the-operator')
+      expect(entry?.scope).toBe('config')
+      expect(entry?.address).toBe('127.0.0.1')
+    })
+
+    test('a write that lost the race leaves no entry in the trail', async () => {
+      const store = factory()
+      const first = await store.writeRevision({
+        table: { routes: [{ id: 'a', path: '/a' }] },
+        author: 'the-operator',
+        expectedRevision: null,
+        audit: audit('config.write'),
+      })
+      expect(first.ok).toBe(true)
+      const before = await store.listAudit({ limit: 100, offset: 0 })
+
+      await store.writeRevision({
+        table: { routes: [{ id: 'b', path: '/b' }] },
+        author: 'the-operator',
+        expectedRevision: null,
+        audit: audit('config.write'),
+      })
+      const after = await store.listAudit({ limit: 100, offset: 0 })
+      // The change and its trace exist without each other: a write that
+      // did not happen left no trace.
+      expect(after.total).toBe(before.total)
+    })
+
+    test('the heartbeats of the replicas are listed', async () => {
+      const store = factory()
+      await store.writeHeartbeat(
+        { replicaId: 'replica-1', revision: 7, lastError: null, at: Date.now() },
+        60_000
+      )
+      const heartbeats = await store.listHeartbeats()
+      const heartbeat = heartbeats.find((entry) => entry.replicaId === 'replica-1')
+      expect(heartbeat?.revision).toBe(7)
+      expect(heartbeat?.lastError).toBeNull()
+    })
+
+    test('a heartbeat that is over its lifetime disappears', async () => {
+      const store = factory()
+      await store.writeHeartbeat(
+        {
+          replicaId: 'replica-gone',
+          revision: null,
+          lastError: 'the store is down',
+          at: Date.now(),
+        },
+        1
+      )
+      await Bun.sleep(30)
+      const heartbeats = await store.listHeartbeats()
+      expect(heartbeats.find((entry) => entry.replicaId === 'replica-gone')).toBeUndefined()
     })
   })
 }

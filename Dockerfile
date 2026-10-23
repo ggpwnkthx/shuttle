@@ -58,6 +58,27 @@ EXPOSE 8090
 ENTRYPOINT ["bun", "run"]
 CMD ["services/access-service.ts"]
 
+# ---------------------------------------------------------- control binary
+#
+# The control plane is a separate process. It is the same code and the same
+# dependencies, and it is compiled into a binary of its own for the
+# deployments that run a binary and not the sources.
+FROM oven/bun:${BUN_VERSION}-alpine AS control-binary
+WORKDIR /app
+ENV NODE_ENV=production
+
+COPY --from=runtime-deps /app/node_modules ./node_modules
+COPY src ./src
+COPY package.json ./
+
+# The binary of the control plane: `shuttle-control`. It listens on its own
+# socket and it acts on the shared state directly.
+RUN bun build --compile --minify --outfile /app/bin/shuttle-control src/control-main.ts
+
+USER bun
+EXPOSE 9090
+ENTRYPOINT ["/app/bin/shuttle-control"]
+
 # ------------------------------------------------------------------- runtime
 #
 # The production image contains the gateway and nothing else. The fixtures
@@ -76,7 +97,8 @@ LABEL org.opencontainers.image.title="shuttle" \
 
 ENV NODE_ENV=production \
     SHUTTLE_CONFIG=/etc/shuttle/routes.json \
-    SHUTTLE_GATEWAY_PORT=8080
+    SHUTTLE_GATEWAY_PORT=8080 \
+    SHUTTLE_CONTROL_PORT=9090
 
 COPY --from=runtime-deps /app/node_modules ./node_modules
 COPY src ./src
@@ -92,5 +114,11 @@ EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
   CMD bun -e "fetch('http://127.0.0.1:8080/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
+# The control plane is the same image with another command:
+#
+#   docker run --rm -p 9090:9090 ghcr.io/ggpwnkthx/shuttle:1.2.0 \
+#     bun run src/control-main.ts
+#
+# It is never published to the callers: it is internal.
 ENTRYPOINT ["bun", "run"]
 CMD ["src/main.ts"]

@@ -11,8 +11,9 @@
  */
 
 import { createHash } from 'node:crypto'
+import type { AuditEntry } from '../../../observability'
 import { isAccessReasonCode } from '../decision'
-import type { CachedDecision, DecisionCache } from '../client'
+import type { CachedDecision, DecisionCache, DecisionMeta, DecisionPurgeFilter } from '../client'
 
 /**
  * The part of a Postgres client the cache needs.
@@ -22,6 +23,17 @@ import type { CachedDecision, DecisionCache } from '../client'
  */
 export interface PostgresCacheCommands {
   query<T>(text: string, params?: readonly unknown[]): Promise<{ rows: T[] }>
+  /**
+   * Runs the body in a transaction.
+   *
+   * The purge of the control plane needs it: the removal of the decisions
+   * and the entry of the audit trail are one transaction.
+   */
+  transaction<T>(
+    body: (client: {
+      query<T>(text: string, params?: readonly unknown[]): Promise<{ rows: T[] }>
+    }) => Promise<T>
+  ): Promise<T>
 }
 
 export interface PostgresDecisionCacheOptions {
@@ -87,15 +99,29 @@ export class PostgresDecisionCache implements DecisionCache {
     }
   }
 
-  async set(key: string, decision: CachedDecision, ttlMs: number): Promise<void> {
+  async set(
+    key: string,
+    decision: CachedDecision,
+    ttlMs: number,
+    meta?: DecisionMeta
+  ): Promise<void> {
     if (ttlMs <= 0) return
     try {
       await this.#client.query(
-        `INSERT INTO shuttle.access_decisions (key, decision, expires_at)
-         VALUES ($1, $2::jsonb, now() + ($3::bigint * interval '1 millisecond'))
+        `INSERT INTO shuttle.access_decisions (key, decision, subject_hash, workspace_hash, expires_at)
+         VALUES ($1, $2::jsonb, $3, $4, now() + ($5::bigint * interval '1 millisecond'))
          ON CONFLICT (key) DO UPDATE
-            SET decision = EXCLUDED.decision, expires_at = EXCLUDED.expires_at`,
-        [this.#key(key), JSON.stringify(decision), Math.ceil(ttlMs)]
+            SET decision = EXCLUDED.decision,
+                subject_hash = EXCLUDED.subject_hash,
+                workspace_hash = EXCLUDED.workspace_hash,
+                expires_at = EXCLUDED.expires_at`,
+        [
+          this.#key(key),
+          JSON.stringify(decision),
+          hashOf(meta?.subject),
+          hashOf(meta?.workspaceId),
+          Math.ceil(ttlMs),
+        ]
       )
       await this.#sweep()
     } catch (error) {
@@ -110,6 +136,42 @@ export class PostgresDecisionCache implements DecisionCache {
       ])
     } catch (error) {
       this.#onError?.(error)
+    }
+  }
+
+  async purge(filter: DecisionPurgeFilter, audit?: AuditEntry): Promise<number> {
+    try {
+      // The purge and the entry of the audit trail are one transaction: a
+      // purge that left no trace cannot exist.
+      return await this.#client.transaction(async (tx) => {
+        const result = await tx.query<{ key: string }>(
+          `DELETE FROM shuttle.access_decisions
+            WHERE ($1::text IS NULL OR subject_hash = $1)
+              AND ($2::text IS NULL OR workspace_hash = $2)
+              AND starts_with(key, $3)
+            RETURNING key`,
+          [hashOf(filter.subject), hashOf(filter.workspaceId), `${this.#prefix}:dec:`]
+        )
+        if (audit) {
+          await tx.query(
+            `INSERT INTO shuttle.audit (action, target, operator, scope, address, request, at)
+             VALUES ($1, $2, $3, $4, $5, $6::jsonb, to_timestamp(($7 / 1000.0)::double precision))`,
+            [
+              audit.action,
+              audit.target,
+              audit.operator,
+              audit.scope,
+              audit.address,
+              JSON.stringify(audit.request ?? null),
+              audit.at,
+            ]
+          )
+        }
+        return result.rows.length
+      })
+    } catch (error) {
+      this.#onError?.(error)
+      return 0
     }
   }
 
@@ -139,4 +201,17 @@ export class PostgresDecisionCache implements DecisionCache {
   #key(key: string): string {
     return `${this.#prefix}:dec:${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
   }
+}
+
+/**
+ * The hash of a value of the filter.
+ *
+ * The subject and the workspace are hashed: they come from the identity
+ * provider and from the deployment, and the rows of the table are read by
+ * the operators of the deployment. The hash is the one of the key, so the
+ * values that are compared are the same ones.
+ */
+function hashOf(value: string | undefined): string | null {
+  if (value === undefined) return null
+  return createHash('sha256').update(value).digest('hex')
 }

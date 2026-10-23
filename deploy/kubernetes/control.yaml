@@ -1,0 +1,173 @@
+# The control plane of the deployment.
+#
+# It is the administrative surface of Shuttle: a separate process that acts
+# on the shared state directly. The gateway exposes no administrative
+# endpoint and accepts no administrative token.
+#
+# The service is internal: it is a ClusterIP and it is not exposed through
+# the ingress. The network policy below only lets the pods of the platform
+# reach it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shuttle-control
+  labels:
+    app.kubernetes.io/name: shuttle
+    app.kubernetes.io/component: control
+spec:
+  # One replica is enough: the state of the control plane is shared, and
+  # the writes of the route table are compare and swap.
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: shuttle
+      app.kubernetes.io/component: control
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: shuttle
+        app.kubernetes.io/component: control
+      annotations:
+        # The map of the tokens changes with the rotation of the secrets:
+        # the pods are replaced when it changes.
+        checksum/secrets: "replaced-by-the-pipeline"
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: control
+          image: ghcr.io/ggpwnkthx/shuttle:1.2.0
+          imagePullPolicy: IfNotPresent
+          command: ["bun", "run", "src/control-main.ts"]
+          ports:
+            - name: control
+              containerPort: 9090
+          env:
+            # The listener of the control plane. It binds the loopback
+            # address by default; a pod is reached over the network of the
+            # platform, and the service is not published to the callers.
+            - name: SHUTTLE_CONTROL_HOST
+              value: 0.0.0.0
+            - name: SHUTTLE_CONTROL_PORT
+              value: "9090"
+            # The map of the tokens: {token: {operator, scope}}. The scopes
+            # are read, operate and config. The map is a secret, and it is
+            # in the secret of the platform.
+            - name: SHUTTLE_CONTROL_TOKENS_FILE
+              value: /etc/shuttle/control-tokens.json
+            # The shared state the control plane acts on: the sessions, the
+            # cached decisions and the route table. The url carries the
+            # credentials of the control plane, which may write the route
+            # table and the trail of the writes, and which the gateway may
+            # not.
+            - name: SHUTTLE_CONTROL_STATE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: shuttle-secrets
+                  key: SHUTTLE_CONTROL_STATE_URL
+            # The prefixes of the keys of the state. They are the prefixes
+            # the gateway uses for its sessions and for its decisions: the
+            # two processes share the state.
+            - name: SHUTTLE_CONTROL_KEY_PREFIX
+              value: shuttle
+            - name: SHUTTLE_CONTROL_SHARED_STATE_KEY_PREFIX
+              value: shuttle
+            # The routes a write of the route table may not remove and may
+            # not change.
+            # - name: SHUTTLE_PROTECTED_ROUTES
+            #   value: admin,login
+            - name: SHUTTLE_LOG_LEVEL
+              value: info
+          # The control plane answers /healthz while it starts and /readyz
+          # when the shared state it acts on answers.
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: control
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: control
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: control
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: control-tokens
+              mountPath: /etc/shuttle
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # The map of the tokens is a secret of the platform: it is applied
+        # from the secret store (sealed secrets, the external secrets
+        # operator or the equivalent of the platform).
+        - name: control-tokens
+          secret:
+            secretName: shuttle-control-tokens
+        - name: tmp
+          emptyDir: {}
+---
+# The service of the control plane. It is internal: the type is a
+# ClusterIP and the ingress does not route to it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: shuttle-control
+  labels:
+    app.kubernetes.io/name: shuttle
+    app.kubernetes.io/component: control
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: shuttle
+    app.kubernetes.io/component: control
+  ports:
+    - name: control
+      port: 9090
+      targetPort: control
+---
+# Only the pods of the platform reach the control plane: the administrative
+# surface of the deployment is not reachable from anywhere else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shuttle-control
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: shuttle
+      app.kubernetes.io/component: control
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform
+      ports:
+        - protocol: TCP
+          port: 9090

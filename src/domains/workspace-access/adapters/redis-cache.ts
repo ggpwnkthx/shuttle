@@ -11,8 +11,9 @@
  */
 
 import { createHash } from 'node:crypto'
+import type { AuditEntry } from '../../../observability'
 import { isAccessReasonCode } from '../decision'
-import type { CachedDecision, DecisionCache } from '../client'
+import type { CachedDecision, DecisionCache, DecisionMeta, DecisionPurgeFilter } from '../client'
 
 /**
  * The part of a Redis client the cache needs.
@@ -24,6 +25,10 @@ export interface RedisCacheCommands {
   get(key: string): Promise<string | null>
   set(key: string, value: string, ...args: (string | number)[]): Promise<unknown>
   del(key: string): Promise<number>
+  /** The keys that match a pattern. */
+  keys(pattern: string): Promise<string[]>
+  /** Appends a value at the end of a list, when the state has one. */
+  rpush?(key: string, ...values: string[]): Promise<number>
 }
 
 export interface RedisDecisionCacheOptions {
@@ -31,6 +36,13 @@ export interface RedisDecisionCacheOptions {
   client: RedisCacheCommands
   /** Prefix of every key, so several environments can share one server. */
   keyPrefix?: string
+  /**
+   * The key of the audit trail of the state.
+   *
+   * It is empty when the cache does not write the trail: the gateway never
+   * purges a decision by itself, and only the control plane does.
+   */
+  auditKey?: string
   /** Called when the server cannot be reached. */
   onError?: (error: unknown) => void
 }
@@ -38,11 +50,13 @@ export interface RedisDecisionCacheOptions {
 export class RedisDecisionCache implements DecisionCache {
   #client: RedisCacheCommands
   #prefix: string
+  #auditKey: string
   #onError?: (error: unknown) => void
 
   constructor(options: RedisDecisionCacheOptions) {
     this.#client = options.client
     this.#prefix = options.keyPrefix ?? 'shuttle'
+    this.#auditKey = options.auditKey ?? ''
     this.#onError = options.onError
   }
 
@@ -50,7 +64,13 @@ export class RedisDecisionCache implements DecisionCache {
     try {
       const raw = await this.#client.get(this.#key(key))
       if (!raw) return null
-      const parsed = JSON.parse(raw) as Partial<CachedDecision>
+      const stored = JSON.parse(raw) as Partial<CachedDecision> & { decision?: unknown }
+      // A decision that was written before the metadata existed is the
+      // record itself; the one that carries it holds the decision inside.
+      const parsed =
+        stored !== null && typeof stored === 'object' && stored.decision !== undefined
+          ? (stored.decision as Partial<CachedDecision>)
+          : stored
       if (typeof parsed.allow !== 'boolean') return null
       return {
         allow: parsed.allow,
@@ -72,12 +92,21 @@ export class RedisDecisionCache implements DecisionCache {
     }
   }
 
-  async set(key: string, decision: CachedDecision, ttlMs: number): Promise<void> {
+  async set(
+    key: string,
+    decision: CachedDecision,
+    ttlMs: number,
+    meta?: DecisionMeta
+  ): Promise<void> {
     if (ttlMs <= 0) return
     try {
       await this.#client.set(
         this.#key(key),
-        JSON.stringify(decision),
+        JSON.stringify({
+          decision,
+          subjectHash: hashOf(meta?.subject),
+          workspaceHash: hashOf(meta?.workspaceId),
+        }),
         'PX',
         Math.max(1, Math.ceil(ttlMs))
       )
@@ -94,12 +123,71 @@ export class RedisDecisionCache implements DecisionCache {
     }
   }
 
+  async purge(filter: DecisionPurgeFilter, audit?: AuditEntry): Promise<number> {
+    try {
+      const subject = hashOf(filter.subject)
+      const workspace = hashOf(filter.workspaceId)
+      const keys = await this.#client.keys(`${this.#prefix}:dec:*`)
+      let removed = 0
+      for (const key of keys) {
+        const raw = await this.#client.get(key)
+        if (!raw) continue
+        if (!matches(raw, subject, workspace)) continue
+        removed += await this.#client.del(key)
+      }
+      if (audit) await this.#appendAudit(audit)
+      return removed
+    } catch (error) {
+      this.#onError?.(error)
+      return 0
+    }
+  }
+
   async close(): Promise<void> {
     // The client is owned by the runtime.
+  }
+
+  /** Writes the entry of the audit trail, when the store has one. */
+  async #appendAudit(audit: AuditEntry): Promise<void> {
+    if (!this.#auditKey) return
+    await this.#client.rpush?.(this.#auditKey, JSON.stringify(audit))
   }
 
   /** The key of a decision in the server. */
   #key(key: string): string {
     return `${this.#prefix}:dec:${createHash('sha256').update(key).digest('hex').slice(0, 32)}`
   }
+}
+
+/**
+ * The hash of a value of the filter.
+ *
+ * The subject and the workspace are hashed: they come from the identity
+ * provider and from the deployment, and the keys of the server are read by
+ * the operators of the deployment.
+ */
+function hashOf(value: string | undefined): string | null {
+  if (value === undefined) return null
+  return createHash('sha256').update(value).digest('hex')
+}
+
+/**
+ * Reports whether a stored decision is about the caller and the workspace
+ * of a filter.
+ *
+ * A decision that was written before the metadata existed carries none, and
+ * it is not about anybody: it is not purged.
+ */
+function matches(raw: string, subject: string | null, workspace: string | null): boolean {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return false
+  }
+  if (parsed === null || typeof parsed !== 'object') return false
+  const record = parsed as { subjectHash?: unknown; workspaceHash?: unknown }
+  if (subject !== null && record.subjectHash !== subject) return false
+  if (workspace !== null && record.workspaceHash !== workspace) return false
+  return true
 }

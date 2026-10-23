@@ -13,3 +13,7 @@ export { MetricsStore, UNMATCHED_ROUTE } from './metrics'
 export type { Logger } from './logging'
 
 export { createLogger, redactFields, redactUrl } from './logging'
+
+export type { AuditEntry } from './audit'
+
+export { parseAudit, serializeAudit } from './audit'

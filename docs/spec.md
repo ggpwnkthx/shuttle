@@ -256,6 +256,47 @@ Two routes that name the same methods and match the same host and the same
 path are ambiguous and are refused (§3.2). Two routes that name different
 methods are not: they are two halves of one route.
 
+### 3.4 The source of the route table
+
+The route table is a file, or it is a record in the shared state.
+`SHUTTLE_CONFIG_SOURCE` chooses: `file` (the default) or `store`.
+
+In the `store` mode the route table lives in the shared state the gateway
+already uses for the sessions (§4), and it is a list of **revisions**:
+
+| Field | Meaning |
+| --- | --- |
+| `revision` | The number of the revision. It grows with every write and never changes. |
+| `table` | The route table, as the file of §3. |
+| `author` | The operator who wrote it. |
+| `createdAt` | The moment it was written. |
+
+A revision is **immutable**: a revision that is written is never changed. A
+separate **pointer** names the revision that is active, and only the pointer
+moves. The history of the table is the list of the revisions.
+
+The gateway reads the pointer and the table of the revision it names, and it
+**watches** the pointer: it polls it at least once a second. A new revision
+is applied through the **same path as the file**: the whole table is
+validated and checked for ambiguity before it replaces the running one
+(§3.2), so a broken table never takes a running deployment out of
+rotation.
+
+Two rules hold at the start:
+
+- an **empty** store falls back to `SHUTTLE_CONFIG`: the file is read, and
+  the deployment starts with it.
+- an **unreachable** store keeps the last valid table: the deployment goes
+  on serving the table it has, and the failure is reported like a failed
+  reload of the file (§12.3): in `config.lastError` of `/readyz` and in
+  `shuttle_config_reloads_total{result="failed"}`.
+
+Every replica writes a **heartbeat** in the shared state: the id of the
+replica, the revision it is serving, its last error and the moment. The
+heartbeat has a **time to live**, so a replica that is gone disappears on
+its own. The heartbeats are what `/v1/replicas` of the control plane
+(§12.7) shows.
+
 ---
 
 ## 4. The environment
@@ -291,6 +332,14 @@ The full list, with the default of every value, is in
 | `SHUTTLE_ACCESS_TOKEN` | The token the gateway authenticates with. `SHUTTLE_ACCESS_ALLOW_ANONYMOUS=true` replaces it when the service authenticates the gateway by other means. |
 | One rate limit | At least one of `SHUTTLE_RATE_LIMIT_MAX`, `SHUTTLE_RATE_LIMIT_GLOBAL_MAX`, `SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX` and `SHUTTLE_RATE_LIMIT_TOTAL_MAX` must be non-zero. `SHUTTLE_ALLOW_NO_RATE_LIMITS=true` replaces them when another layer protects the deployment. |
 | The shared state | `SHUTTLE_SESSION_URL` and `SHUTTLE_SHARED_STATE_URL` must name a Redis server or a Postgres server: a session that lives in the memory of one replica is unknown to the others, and a limit that lives in the memory of one replica is the limit of that replica. `SHUTTLE_ALLOW_MEMORY_STATE=true` replaces them when the deployment is a single node that accepts it. |
+
+The control plane is a separate process and it has its own environment
+(§12.7): `SHUTTLE_CONTROL_HOST`, `SHUTTLE_CONTROL_PORT`,
+`SHUTTLE_CONTROL_TOKENS` or `SHUTTLE_CONTROL_TOKENS_FILE`,
+`SHUTTLE_CONTROL_STATE_URL`, `SHUTTLE_CONTROL_KEY_PREFIX`,
+`SHUTTLE_CONTROL_SHARED_STATE_KEY_PREFIX` and `SHUTTLE_PROTECTED_ROUTES`.
+The gateway reads `SHUTTLE_CONFIG_SOURCE`, which chooses where its route
+table comes from (§3.4).
 
 The url of the shared state names the shape of the server:
 
@@ -1672,6 +1721,134 @@ A deployment that runs on a managed Redis pays less latency and operates
 less. A deployment that runs on a database it already has pays one more
 service to operate and one more connection to plan.
 
+### 12.7 The control plane
+
+The gateway exposes **no administrative endpoint** and accepts **no
+administrative token** (§15, decision 55): a gateway that answers an
+administrative request is a request an attacker reaches, and the
+administrative surface of a gateway is the surface that decides who reaches
+the applications.
+
+The administrative work is done by a **separate process**, `shuttle-control`,
+that acts on the shared state the gateway reads. It is never routed through
+Shuttle: it listens on its own socket, on the internal network of the
+deployment.
+
+| | |
+| --- | --- |
+| The listener | `SHUTTLE_CONTROL_HOST` and `SHUTTLE_CONTROL_PORT`. It binds the loopback address by default: the control plane is internal. |
+| The credentials | `SHUTTLE_CONTROL_TOKENS`, a JSON map of `{token: {operator, scope}}`. `SHUTTLE_CONTROL_TOKENS_FILE` points at a file that holds the same map. |
+| The state | `SHUTTLE_CONTROL_STATE_URL` names the shared state the control plane acts on. It is the same state as `SHUTTLE_SESSION_URL` of the gateway, reached with **other credentials** (§12.8). |
+
+A token is at least 16 characters long. A malformed map stops the process:
+a control plane that starts with a map it does not understand is a control
+plane that nobody controls. A token that is also the secret of something
+else is refused: a token that is the password of the shared state stops
+the process, because a credential that is used twice is used twice.
+
+**The scopes.** A token carries exactly one scope, and the scope decides
+what the token may do:
+
+| Scope | What it may do |
+| --- | --- |
+| `read` | The endpoints that read. |
+| `operate` | `read`, and the purges of the sessions and of the cached decisions. |
+| `config` | `read`, and the writes of the route table. |
+
+The scopes are **not** a hierarchy: `operate` does not write the route
+table, and `config` does not purge a session. A token of the wrong scope is
+refused with `403`, a missing or a wrong token with `401`.
+
+A failed authentication is **counted per socket address**: five failures in
+sixty seconds refuse the sixth. The counter lives in the shared state, so
+the limit holds across the replicas of the control plane. When the shared
+state cannot be reached, the control plane **refuses** the request: a limit
+that cannot be counted is not a limit.
+
+**The endpoints.** Every answer is JSON, and every answer carries the
+`x-request-id` of the request.
+
+| Endpoint | Scope | What it does |
+| --- | --- | --- |
+| `GET /healthz` | — | Always `200`. It says that the process answers. |
+| `GET /readyz` | — | `200` when the shared state answers, `503` otherwise. |
+| `GET /v1/config` | `read` | The active revision, the table it holds, the source, and the warnings of the configuration (§12.2). |
+| `POST /v1/config/validate` | `read` | The errors, the conflicts, the warnings and the **diff** against the active table. It writes nothing. |
+| `PUT /v1/config` | `config` | Writes the whole table as a new revision. |
+| `GET /v1/config/history` | `read` | The revisions, paginated. |
+| `POST /v1/config/rollback` | `config` | Writes the table of an older revision again, as a new revision. |
+| `GET /v1/replicas` | `read` | The heartbeats of the replicas (§3.4). |
+| `DELETE /v1/sessions` | `operate` | Revokes the sessions of a subject, like `bun run sessions` does. |
+| `DELETE /v1/decisions` | `operate` | Purges the cached decisions of a subject and a workspace. |
+| `GET /v1/audit` | `read` | The audit trail, paginated. |
+
+**`PUT /v1/config`** takes the whole table in the body and the revision the
+caller believes is active in the `If-Match` header. The write is a
+**compare and swap**: the pointer moves only when it still names the
+revision of the header, and a mismatch is `409`. A write without the header
+is refused: a write that does not say which revision it replaces is a write
+that may replace a revision nobody read.
+
+**`POST /v1/config/rollback`** takes `{"revision": <number>}` and writes the
+table of that revision again, as a **new** revision: the revisions are
+immutable, and a rollback that rewrote an old revision would erase the
+history of what happened in between.
+
+**The protected routes.** `SHUTTLE_PROTECTED_ROUTES` names the routes that
+may not change: a write that removes one of them, or that changes one of
+them, is refused with `409`. A protected route is a route the deployment
+cannot afford to lose, and the refusal is the same one a stale
+`If-Match` gets.
+
+**The audit trail.** Every write stores an entry: the action, the target,
+the operator, the scope, the address of the caller, the request and the
+moment. The entry is written by the store that performs the change, in the
+**same transaction as the change**, so the trail and the change cannot
+exist without each other: a change that left no trace is a change nobody
+can account for. A transaction of Postgres is a transaction of the server,
+and a script of Redis is a script of the server: the two hold the promise
+the same way. A Redis cluster that does not accept a script over several
+keys falls back to the sequential path, and the entry of the trail follows
+the change.
+
+**The statuses.** A request without a token, or with a token the control
+plane does not know, is `401`. A token whose scope does not cover the
+endpoint is `403`. A write whose `If-Match` does not name the active
+revision, and a write that changes a protected route, are `409`. A table
+that is not valid is `422`. An address that failed to authenticate too
+many times is `429`. A shared state that cannot be reached is `503`: the
+counter of the failures lives there, and a limit that cannot be counted is
+not a limit.
+
+### 12.8 The roles on the shared state
+
+The real boundary of the control plane is **the credentials of the shared
+state**, not the token of the caller. A token that is stolen gives the
+holder the scope of the token; the credentials of the gateway give it
+nothing it may not do.
+
+The gateway runs with a role that may **read** the tables of the route
+table and write nothing in them. It still writes the sessions, the limits,
+the cached decisions and the heartbeats: they are its own state.
+
+`shuttle-control` runs with a role that may **write** the route table, the
+history and the audit trail, and read everything else it needs.
+
+The roles and their grants ship with the project, and the deployment
+creates the two users and grants the roles to them. Redis gets the same
+split with ACL users: the user of the gateway may read the keys of the
+route table, the user of the control plane may write them.
+
+The two servers carry the route table the same way: the revisions and the
+pointer are **hashes** and the history is a **list** in Redis, and the
+user of the gateway holds neither the command that writes a hash nor the
+one that pushes a value. The read of the table and the write of it are
+therefore separated by the credentials on the two servers alike.
+
+The least privilege is **tested**: a deployment that runs the gateway with
+the role of the gateway cannot write the route table, and the test proves
+it.
+
 ---
 
 ## 13. What Shuttle does not do
@@ -1707,12 +1884,14 @@ Shuttle does not:
 | `src/domains/rate-limiting/` | The sliding windows, the scopes, the `retry-after`, the bounded memory and the counters of the shared state. |
 | `src/domains/proxying/` | The state of the exchange, the limits of the body, the phase and idle budgets, the cancellation, the commitment outcomes and the registry of the active exchanges. |
 | `src/domains/websockets/` | The reservations of the slots, the handshake with the upstream first, the state of the bridge, the buffers, the keepalive, the revalidation and the registry of the pairs. |
+| `src/domains/control/` | The scopes of the tokens of the control plane, the routes a write may not change, the rules of the administrative writes and the counter of the failed authentications. |
 
 ### 14.2 The layers
 
 | Path | Owns |
 | --- | --- |
-| `src/main.ts` | The entry point of the process. It starts the runtime and nothing else. |
+| `src/main.ts` | The entry point of the process of the gateway. It starts the runtime and nothing else. |
+| `src/control-main.ts` | The entry point of the process of the control plane. It starts the runtime of the control plane and nothing else. |
 | `src/app/` | The Hono application: the thin handlers, the middleware, the order of the pipeline and the mapping of the failures to the answers of the protocol. |
 | `src/platform/bun/` | The listener, the actual peer address, the outbound HTTP transport, the upgrade and the socket primitives. |
 | `src/platform/redis/` | The construction, the TLS settings and the disposal of the shared Redis clients. |
@@ -1732,7 +1911,10 @@ Shuttle does not:
    Workspace access may use the principal of authentication and the
    identifier types of routing. Forwarding may use the principal type of
    authentication. Proxying and the websockets may use the plans of
-   forwarding. The application orchestrates the combinations; the domains
+   forwarding. The control plane may use the public entry points of the
+   configuration, of the authentication and of the workspace access: it
+   writes the route table, it revokes the sessions and it purges the
+   decisions. The application orchestrates the combinations; the domains
    do not import it.
 3. The core code of a domain imports no framework, no Bun API, no
    concrete adapter, no application, no platform and no runtime. It
@@ -1825,6 +2007,8 @@ lists are numbered independently.
 | 49 | The lifetime of a bearer token | It is bounded by `SHUTTLE_OIDC_MAX_TOKEN_AGE_MS`, and a bearer token has to carry an expiry whatever the bound is. The bound turns the removal of a caller from the provider into a delay that the deployment chooses (§5.4). |
 | 50 | The limits while the shared state is down | The deployment chooses: the request is counted in the window of the process (`local`, the default), every request is allowed (`open`), or every request is refused (`closed`). The degradation is published (§9). |
 | 51 | The caller in the log | The log of a request carries the subject of the caller and the workspace of the request: a gateway that decides who reaches what has to be able to say who reached what (§12.2). |
+| 52 | The administrative surface | It is a **separate process**, `shuttle-control`, that acts on the shared state directly. The gateway exposes no administrative endpoint and accepts no administrative token: a gateway that answers an administrative request is a request an attacker reaches (§12.7). |
+| 53 | The source of the route table | The route table is a file, or it is a list of **immutable revisions** in the shared state with a pointer that names the active one. The writes are compare and swap, the pointer is watched at least once a second, and every table goes through the same validation as the file of a deployment (§3.4). |
 
 ---
 

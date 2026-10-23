@@ -99,6 +99,14 @@ replica sees the same state. Both backends pass the same tests. A single
 node may keep them in memory instead, if it opts in with
 `SHUTTLE_ALLOW_MEMORY_STATE=true`. → [operations.md](operations.md#the-shape-of-the-shared-state)
 
+**The control plane.** The administrative surface of a deployment is a
+separate process, `shuttle-control`. It listens on its own socket, on the
+internal network, and it acts on the shared state directly: the gateway
+exposes no administrative endpoint and accepts no administrative token.
+The route table may live in the shared state too, as a list of immutable
+revisions that the control plane writes and that every replica watches. →
+[operations.md](operations.md#the-control-plane)
+
 **Several upstreams.** When a route lists more than one upstream, a request
 that is safe to send twice moves on to the next upstream if the first one
 fails. A request that could change data (a `POST`, for example) is only ever

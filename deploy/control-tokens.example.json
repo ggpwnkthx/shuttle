@@ -1,0 +1,6 @@
+{
+  "replace-this-with-a-token-of-at-least-16-characters": {
+    "operator": "the-operator-of-the-deployment",
+    "scope": "read"
+  }
+}

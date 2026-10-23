@@ -18,7 +18,9 @@
 import type { AuthMode } from '../authentication'
 import type { CompiledRoute } from '../routing'
 import type { CrossSitePolicy, Timeouts } from './schema'
-import type { ConfigurationSnapshot, EffectiveRoute } from './store'
+import type { ConfigurationSnapshot } from './store'
+import type { CompiledTable } from './compile'
+import type { EffectiveRoute } from './routes'
 
 /** The codes of the warnings of a configuration. */
 export type ConfigurationWarningCode =
@@ -200,4 +202,22 @@ export function describeConfiguration(snapshot: ConfigurationSnapshot): Configur
     routes,
     warnings,
   }
+}
+
+/**
+ * Describes a table that is not running.
+ *
+ * The control plane validates a table it never publishes (§12.7 of the
+ * specification), and it reports the warnings of the table the same way the
+ * gateway reports the warnings of the table that is running: the operator
+ * reads one description, not two.
+ */
+export function describeTable(table: CompiledTable): {
+  routeCount: number
+  routes: RouteDescription[]
+  warnings: ConfigurationWarning[]
+} {
+  const routes = table.routes.map((route) => describeRoute(route))
+  const warnings = table.routes.flatMap((route) => warningsOf(route))
+  return { routeCount: routes.length, routes, warnings }
 }

@@ -10,66 +10,12 @@
  * broken on disk never takes a running deployment out of rotation.
  */
 
-import type { AuthPolicy } from '../authentication'
-import { claimsReservedPath, compileRoute, detectConflicts, sortRoutes } from '../routing'
 import type { CompiledRoute } from '../routing'
-import {
-  ConfigValidationError,
-  GATEWAY_RESERVED_PATHS,
-  effectivePolicy,
-  parseConfig,
-  type CrossSitePolicy,
-  type RouteFile,
-  type Timeouts,
-} from './schema'
+import { GATEWAY_RESERVED_PATHS } from './schema'
+import { compileTable } from './compile'
+import type { EffectiveRoute, EnvironmentDefaults } from './routes'
 
-/** The policy that applies to a route. */
-export interface EffectiveRoute {
-  id: string
-  /**
-   * The base urls of the upstreams, in the order they are tried.
-   *
-   * A route may name one upstream or several.
-   */
-  upstreams: string[]
-  auth: AuthPolicy
-  timeouts: Timeouts
-  /** The limit of the body of a request, 0 disables it. */
-  maxBodyBytes: number
-  /**
-   * The size of a body that may be sent again to a second upstream, in
-   * bytes. 0 disables the replay: every body is streamed and every request
-   * is sent once.
-   */
-  replayMaxBytes: number
-  websocket: boolean
-  /**
-   * The policy of the cross site requests of the route.
-   *
-   * `strict` refuses a navigation from another site as well.
-   */
-  crossSite: CrossSitePolicy
-  /**
-   * Whether the `Authorization` header of the caller is forwarded to the
-   * upstream of the route.
-   */
-  forwardAuthorization: boolean
-  /**
-   * The lifetime of a cached decision of the access service for the route,
-   * in milliseconds. Undefined means the lifetime of the environment.
-   */
-  accessCacheTtlMs?: number
-  /**
-   * How long a decision of the access service may be served after the
-   * service became unreachable, in milliseconds. Zero disables it.
-   */
-  accessStaleGraceMs: number
-  /**
-   * Whether the access service is asked about the route when it names no
-   * workspace.
-   */
-  accessCheck: boolean
-}
+export type { EffectiveRoute }
 
 /**
  * A published generation of the configuration.
@@ -173,19 +119,18 @@ export class ConfigurationStore {
   #error: ConfigErrorState | null = null
   #revision = 0
   #source: string
-  #defaultMaxBodyBytes: number
-  #defaultUpstreamAttemptMs: number
-  #defaultReplayMaxBytes: number
-  #defaultAccessStaleGraceMs: number
+  #defaults: EnvironmentDefaults
   #trustedProxies: string[]
   #onPublished?: (snapshot: ConfigurationSnapshot) => void
 
   constructor(options: ConfigurationStoreOptions) {
     this.#source = options.source
-    this.#defaultMaxBodyBytes = options.defaultMaxBodyBytes
-    this.#defaultUpstreamAttemptMs = options.defaultUpstreamAttemptMs ?? 0
-    this.#defaultReplayMaxBytes = options.defaultReplayMaxBytes ?? 0
-    this.#defaultAccessStaleGraceMs = options.defaultAccessStaleGraceMs ?? 0
+    this.#defaults = {
+      defaultMaxBodyBytes: options.defaultMaxBodyBytes,
+      defaultUpstreamAttemptMs: options.defaultUpstreamAttemptMs,
+      defaultReplayMaxBytes: options.defaultReplayMaxBytes,
+      defaultAccessStaleGraceMs: options.defaultAccessStaleGraceMs,
+    }
     this.#trustedProxies = options.trustedProxies ?? []
     this.#onPublished = options.onPublished
   }
@@ -222,43 +167,31 @@ export class ConfigurationStore {
    * valid leaves the running one untouched.
    */
   apply(raw: unknown): ReloadResult {
-    try {
-      const config = parseConfig(raw)
-      const routes = this.#compile(config.routes, config.defaults)
-      const conflicts = detectConflicts(routes)
-      for (const route of routes) {
-        if (claimsReservedPath(route, [...GATEWAY_RESERVED_PATHS, ...config.reservedPaths])) {
-          conflicts.push(
-            `the route "${route.id}" claims the reserved path "${route.definition.path}", which the gateway serves itself`
-          )
-        }
-      }
-      if (conflicts.length > 0) {
-        throw new ConfigValidationError(conflicts)
-      }
-      this.#revision += 1
-      this.#snapshot = Object.freeze({
-        revision: this.#revision,
-        loadedAt: Date.now(),
-        source: this.#source,
-        reservedPaths: Object.freeze([...config.reservedPaths]),
-        trustedProxies: Object.freeze([...this.#trustedProxies, ...config.trustedProxies]),
-        routes: Object.freeze(routes),
-      })
-      this.#error = null
-      // The policy that is running is published: the runtime writes it in
-      // the log, so an operator sees what the gateway does.
-      this.#onPublished?.(this.#snapshot)
-      return { ok: true, revision: this.#revision, routes: routes.length }
-    } catch (error) {
-      const details = error instanceof ConfigValidationError ? error.details : []
+    const result = compileTable(raw, this.#defaults, this.#trustedProxies)
+    if (!result.ok) {
+      const details = [...result.errors, ...result.conflicts]
       this.#error = {
-        message: error instanceof Error ? error.message : String(error),
+        message: `invalid configuration: ${details.join('; ')}`,
         details,
         at: Date.now(),
       }
       return { ok: false, error: this.#error }
     }
+    const { table } = result
+    this.#revision += 1
+    this.#snapshot = Object.freeze({
+      revision: this.#revision,
+      loadedAt: Date.now(),
+      source: this.#source,
+      reservedPaths: Object.freeze([...table.reservedPaths]),
+      trustedProxies: Object.freeze([...table.trustedProxies]),
+      routes: Object.freeze(table.routes),
+    })
+    this.#error = null
+    // The policy that is running is published: the runtime writes it in
+    // the log, so an operator sees what the gateway does.
+    this.#onPublished?.(this.#snapshot)
+    return { ok: true, revision: this.#revision, routes: table.routes.length }
   }
 
   /**
@@ -286,6 +219,19 @@ export class ConfigurationStore {
     return this.apply(parsed)
   }
 
+  /**
+   * Records a failure that happened outside of the store.
+   *
+   * The source of the table may be the shared state (§3.4): a store that
+   * cannot be reached is a failure of the load, and it is recorded next to
+   * the last good generation, so the readiness probe reports it.
+   */
+  fail(message: string, details: string[] = []): ConfigErrorState {
+    const state: ConfigErrorState = { message, details, at: Date.now() }
+    this.#error = state
+    return state
+  }
+
   /** The state of the configuration, as the readiness probe reports it. */
   status(): ConfigStatus {
     return {
@@ -297,53 +243,9 @@ export class ConfigurationStore {
       routeCount: this.#snapshot?.routes.length ?? 0,
     }
   }
-
-  /** Prepares the routes of a configuration, with the policy that applies. */
-  #compile(routes: RouteFile[], defaults: RouteFileDefaults): CompiledRoute<EffectiveRoute>[] {
-    const compiled = routes.map((route) => {
-      const policy = effectivePolicy(route, defaults, {
-        maxBodyBytes: this.#defaultMaxBodyBytes,
-        upstreamAttemptMs: this.#defaultUpstreamAttemptMs,
-        replayMaxBytes: this.#defaultReplayMaxBytes,
-        accessStaleGraceMs: this.#defaultAccessStaleGraceMs,
-      })
-      return compileRoute(
-        {
-          id: route.id,
-          host: route.match.host,
-          path: route.match.path,
-          rewrite: route.rewrite,
-          methods: route.match.methods,
-        },
-        {
-          id: route.id,
-          upstreams: policy.upstreams,
-          auth: policy.auth,
-          timeouts: policy.timeouts,
-          maxBodyBytes: policy.maxBodyBytes,
-          replayMaxBytes: policy.replayMaxBytes,
-          websocket: route.websocket,
-          crossSite: policy.crossSite,
-          forwardAuthorization: policy.forwardAuthorization,
-          accessCacheTtlMs: policy.accessCacheTtlMs,
-          accessStaleGraceMs: policy.accessStaleGraceMs,
-          accessCheck: policy.accessCheck,
-        }
-      )
-    })
-    return sortRoutes(compiled)
-  }
 }
 
-/** The defaults of a configuration, as the compiler needs them. */
-type RouteFileDefaults = {
-  auth: AuthPolicy
-  timeouts: Timeouts
-  maxBodyBytes?: number
-  crossSite: CrossSitePolicy
-  forwardAuthorization: boolean
-  accessCacheTtlMs?: number
-}
+/**
 
 /**
  * Reports whether a path is reserved for the gateway.
