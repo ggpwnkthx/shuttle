@@ -21,6 +21,8 @@ function recorder(options: {
   const ended: string[] = []
   const make = (name: string, result: RateLimitDecision): RequestLimiter => ({
     disabled: false,
+    max: result.limit,
+    windowMs: 60_000,
     async check() {
       started.push(name)
       await options.gate

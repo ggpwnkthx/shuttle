@@ -129,9 +129,18 @@ export class PostgresRateLimiter implements RequestLimiter {
       }
     } catch (error) {
       // The limiter fails open: the protection against a flood is worth
-      // less than the availability of the gateway.
+      // less than the availability of the gateway. The decision is marked
+      // as degraded, so the wrapper of the limiter knows that the windows
+      // of the shared state could not be read and that it may count the
+      // request in the process.
       this.#onError?.(error)
-      return { allowed: true, limit: this.max, remaining: this.max, retryAfterMs: 0 }
+      return {
+        allowed: true,
+        limit: this.max,
+        remaining: this.max,
+        retryAfterMs: 0,
+        degraded: true,
+      }
     }
   }
 

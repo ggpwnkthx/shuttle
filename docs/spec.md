@@ -390,6 +390,28 @@ The bearer token is validated against the same provider: the signature
 accepted algorithms are `RS256`, `ES256`, `RS384`, `RS512`, `ES384` and
 `PS256`. The tolerance of the clock is five seconds.
 
+A bearer token has to carry an **expiry**. The library checks the expiry
+**when the token carries one**: a token without an `exp` claim passes the
+validation of the signature, of the issuer and of the audience, and it is
+valid forever. A credential that nobody can spend is a credential that
+nobody can revoke, so the token is refused.
+
+The **lifetime** of a bearer token is bounded by
+`SHUTTLE_OIDC_MAX_TOKEN_AGE_MS` (a day by default, zero turns the bound
+off). The lifetime is the time between the moment the token was issued and
+the moment it expires, and the bound is on the lifetime and not on the
+validity that is left: a long-lived token does not become acceptable again
+when it is close to its expiry. A bearer token has to carry the moment it
+was issued while the bound is on, because the length of the lifetime cannot
+be known without it. Every provider publishes it: RFC 9068 makes it
+mandatory for an access token.
+
+The bound is what turns the removal of a caller from the identity provider
+into a delay that is **bounded by the deployment**: the token of a caller
+that was removed keeps working for at most the bound, and not for the
+lifetime the provider gave it. The browser flow is bounded by the maximum
+age of the session instead (§5.3).
+
 A bearer token has to be an **access token**, and not the id token of the
 gateway. Many providers publish an id token and an access token for the same
 client and the same audience, and an id token travels through the browser: it
@@ -1091,9 +1113,30 @@ Two of these scopes exist because the others cannot do their job:
 The refusal is `429 too_many_requests` with a `retry-after`, and it is
 counted in `shuttle_rate_limited_total`.
 
-The Redis limiter fails **open**: a cache hiccup is not an outage. The
-Postgres limiter fails **open** as well, for the same reason. The
-in-process limiter is bounded by a table of 10 000 keys. A key leaves the
+**When the shared state cannot be reached.** The windows of a scope that
+lives in the shared state are not readable while the server is down, and
+the limiter has no window to count the request in. The deployment decides
+what happens then, with `SHUTTLE_RATE_LIMIT_FALLBACK`:
+
+| Mode | What happens while the shared state cannot be reached |
+| --- | --- |
+| `local` | The request is counted in the window of the **process**. The flood is bounded by the number of the replicas instead of being unbounded. |
+| `open` | Every request is allowed. The behaviour of the releases before `1.2.0`. |
+| `closed` | Every request is refused, with a `retry-after`. |
+
+The mode `local` is the default. The window of the process is the window of
+the configuration, so a replica enforces the budget of the deployment for
+the callers it sees. The budget of a caller is spent a little faster than
+it should be — the window of the process does not know about the requests
+the other replicas counted — and the direction of the error is the safe
+one: the caller is refused a little early.
+
+The degradation is **visible**: it is counted in
+`shuttle_rate_limit_fallback_total` and it is written in the log, so an
+operator sees that the limits of the deployment are not the limits that are
+running.
+
+The in-process limiter is bounded by a table of 10 000 keys. A key leaves the
 table when its window is over, never because another key needed its place:
 a limiter that evicts a live window hands the evicted caller a fresh
 budget, so a caller that sprays addresses resets its own counter at will.
@@ -1474,6 +1517,7 @@ The metrics:
 | `shuttle_active_requests` | — | The requests that are in flight. |
 | `shuttle_config_reloads_total` | `result` | The reloads of the configuration. |
 | `shuttle_rate_limited_total` | — | The requests the limiter refused. |
+| `shuttle_rate_limit_fallback_total` | `scope` | The requests that were counted in the process because the windows of the shared state could not be read (§9). |
 | `shuttle_shared_state_errors_total` | — | The times the shared state was not reachable. |
 
 **The labels are bounded**, so the number of series cannot grow without
@@ -1498,6 +1542,12 @@ JSON (pino). `Authorization`, `Cookie`, `Set-Cookie`, `x-api-key` and the
 query parameters `access_token`, `code`, `code_verifier`, `id_token`,
 `refresh_token` (and the like) are redacted before anything is written.
 Every request or connection log line carries its request id.
+
+The log of a request carries the **caller** and the **workspace**: the
+gateway decides who reaches what, so a log line that cannot name the
+caller cannot answer "who used this workspace". The subject is the
+identifier of the caller at the identity provider; it is not a credential
+and it is not redacted.
 
 The credentials of a url are removed as well: an upstream that is named
 with a password in its url does not put that password in the log.
@@ -1766,6 +1816,9 @@ lists are numbered independently.
 | 46 | The health of the access service | The service is not called while it is failing: after `SHUTTLE_ACCESS_BREAKER_FAILURES` failures the requests are answered at once with the unavailability of the service, instead of waiting for a call that is going to fail. The breaker only refuses (§6.4). |
 | 47 | The reason of a denial in the metrics | The **code** of the reason is counted when the service sends one. A service that sends no code is counted with the legacy rule, so a deployment written against the `1.0` keeps working (§6.5). |
 | 48 | The schedule of the revalidation of a WebSocket | It is jittered: the first check of a connection is spread over the interval and its period is drawn around it, so the connections of the deployment do not ask the access service at the same instant (§10). |
+| 49 | The lifetime of a bearer token | It is bounded by `SHUTTLE_OIDC_MAX_TOKEN_AGE_MS`, and a bearer token has to carry an expiry whatever the bound is. The bound turns the removal of a caller from the provider into a delay that the deployment chooses (§5.4). |
+| 50 | The limits while the shared state is down | The deployment chooses: the request is counted in the window of the process (`local`, the default), every request is allowed (`open`), or every request is refused (`closed`). The degradation is published (§9). |
+| 51 | The caller in the log | The log of a request carries the subject of the caller and the workspace of the request: a gateway that decides who reaches what has to be able to say who reached what (§12.2). |
 
 ---
 

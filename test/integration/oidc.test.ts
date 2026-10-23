@@ -28,15 +28,22 @@ describe('the identity provider', () => {
   }
 
   /** Signs a token with the key of the provider. */
-  const sign = async (claims: Record<string, unknown>, options: { expiresIn?: string } = {}) => {
+  const sign = async (
+    claims: Record<string, unknown>,
+    options: { expiresIn?: string | null } = {}
+  ) => {
     const key = await importJWK(provider.privateJwk, 'RS256')
-    return await new SignJWT(claims)
+    const builder = new SignJWT(claims)
       .setProtectedHeader({ alg: 'RS256', kid: provider.privateJwk.kid })
       .setIssuedAt()
       .setIssuer(provider.issuer)
       .setAudience(provider.clientId)
-      .setExpirationTime(options.expiresIn ?? '5m')
-      .sign(key)
+    // A token without an expiry is signed as it is: the claim is not set
+    // at all, so the token carries no `exp`.
+    if (options.expiresIn !== null) {
+      builder.setExpirationTime(options.expiresIn ?? '5m')
+    }
+    return await builder.sign(key)
   }
 
   test('the metadata of the provider is discovered', async () => {
@@ -165,6 +172,105 @@ describe('the identity provider', () => {
       .setExpirationTime('5m')
       .sign(key)
     await expect(client.verifyToken(token)).rejects.toThrow(OidcError)
+    await provider.stop()
+  })
+
+  test('a token without an expiry is refused', async () => {
+    await start()
+    // The library checks the expiry **when the token carries one**: a
+    // token without an `exp` claim passes the validation of the signature
+    // and of the issuer, and it is valid forever. A credential that
+    // nobody can revoke is not a credential.
+    const token = await sign({ sub: 'user-1' }, { expiresIn: null })
+    await expect(client.verifyToken(token)).rejects.toThrow(OidcError)
+    await expect(client.verifyToken(token)).rejects.toThrow(/expiry/)
+    await provider.stop()
+  })
+
+  test('a token that is valid for longer than the bound is refused', async () => {
+    await start()
+    const bounded = new OidcClient({
+      issuer: provider.issuer,
+      clientId: provider.clientId,
+      clientSecret: provider.clientSecret,
+      redirectUri: 'http://localhost:8080/auth/callback',
+      allowInsecureIssuer: true,
+      // The bound of the lifetime of a token: it is what turns the removal
+      // of a caller from the provider into a bounded delay.
+      maxTokenAgeMs: 600_000,
+    })
+    const long = await sign({ sub: 'user-1' }, { expiresIn: '30d' })
+    await expect(bounded.verifyToken(long)).rejects.toThrow(OidcError)
+    await expect(bounded.verifyToken(long)).rejects.toThrow(/maximum/)
+    // A token that fits in the bound is accepted.
+    const short = await sign({ sub: 'user-1' }, { expiresIn: '5m' })
+    expect((await bounded.verifyToken(short)).subject).toBe('user-1')
+    await provider.stop()
+  })
+
+  test('a token that was issued long ago is refused even when it is close to its expiry', async () => {
+    await start()
+    const bounded = new OidcClient({
+      issuer: provider.issuer,
+      clientId: provider.clientId,
+      clientSecret: provider.clientSecret,
+      redirectUri: 'http://localhost:8080/auth/callback',
+      allowInsecureIssuer: true,
+      maxTokenAgeMs: 600_000,
+    })
+    // The token was issued a day ago and it is valid for another minute:
+    // the validity that is left fits in the bound, and the lifetime does
+    // not. The bound is on the lifetime.
+    const key = await importJWK(provider.privateJwk, 'RS256')
+    const issuedAt = Math.floor(Date.now() / 1000) - 86_400
+    const token = await new SignJWT({ sub: 'user-1' })
+      .setProtectedHeader({ alg: 'RS256', kid: provider.privateJwk.kid })
+      .setIssuedAt(issuedAt)
+      .setIssuer(provider.issuer)
+      .setAudience(provider.clientId)
+      .setExpirationTime(issuedAt + 60)
+      .sign(key)
+    await expect(bounded.verifyToken(token)).rejects.toThrow(OidcError)
+    await provider.stop()
+  })
+
+  test('a token that does not carry the moment it was issued is refused when the bound is on', async () => {
+    await start()
+    const bounded = new OidcClient({
+      issuer: provider.issuer,
+      clientId: provider.clientId,
+      clientSecret: provider.clientSecret,
+      redirectUri: 'http://localhost:8080/auth/callback',
+      allowInsecureIssuer: true,
+      maxTokenAgeMs: 600_000,
+    })
+    const key = await importJWK(provider.privateJwk, 'RS256')
+    const token = await new SignJWT({ sub: 'user-1' })
+      .setProtectedHeader({ alg: 'RS256', kid: provider.privateJwk.kid })
+      .setIssuer(provider.issuer)
+      .setAudience(provider.clientId)
+      .setExpirationTime('5m')
+      .sign(key)
+    await expect(bounded.verifyToken(token)).rejects.toThrow(OidcError)
+    await provider.stop()
+  })
+
+  test('the bound of the lifetime of a token can be turned off', async () => {
+    await start()
+    const unbounded = new OidcClient({
+      issuer: provider.issuer,
+      clientId: provider.clientId,
+      clientSecret: provider.clientSecret,
+      redirectUri: 'http://localhost:8080/auth/callback',
+      allowInsecureIssuer: true,
+      maxTokenAgeMs: 0,
+    })
+    const long = await sign({ sub: 'user-1' }, { expiresIn: '30d' })
+    expect((await unbounded.verifyToken(long)).subject).toBe('user-1')
+    // The bound is off, and the expiry is still required: a token that
+    // never expires is refused whatever the bound is.
+    const withoutExpiry = await sign({ sub: 'user-1' }, { expiresIn: null })
+    await expect(unbounded.verifyToken(withoutExpiry)).rejects.toThrow(OidcError)
     await provider.stop()
   })
 

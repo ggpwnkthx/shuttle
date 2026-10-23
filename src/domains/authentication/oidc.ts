@@ -76,6 +76,27 @@ export interface OidcClientOptions {
    */
   requiredTokenClaims?: string[]
   /**
+   * The longest validity a bearer token may have, in milliseconds.
+   *
+   * The gateway refuses a bearer token whose **lifetime** is longer than
+   * this: the moment it was issued and the moment it expires. The bound is
+   * what turns the removal of a caller from the identity provider into a
+   * bounded delay: the token of a caller that was removed is refused after
+   * at most this long, and not after the lifetime the provider gave it.
+   *
+   * The bound is applied to the lifetime and not to the validity that is
+   * left, so a long-lived token does not become acceptable again when it
+   * is close to its expiry.
+   *
+   * A bearer token has to carry the moment it was issued while the bound
+   * is on: without it the length of the lifetime cannot be known.
+   *
+   * Zero disables the bound. The bound is not the only rule: a bearer token
+   * has to carry an expiry whatever the bound is, so a token that never
+   * expires is always refused.
+   */
+  maxTokenAgeMs?: number
+  /**
    * Refuses a bearer token that carries a nonce.
    *
    * The browser flow of the gateway always asks for a nonce, so an id token
@@ -189,6 +210,7 @@ export class OidcClient implements OidcPort {
   #allowInsecureIssuer: boolean
   #requiredTokenClaims: string[]
   #rejectNonceTokens: boolean
+  #maxTokenAgeMs: number
   #metadata: Configuration | null = null
   #metadataFetchedAt = 0
   #metadataPromise: Promise<Configuration> | null = null
@@ -210,6 +232,7 @@ export class OidcClient implements OidcPort {
     this.rolesClaim = options.rolesClaim ?? 'roles'
     this.#requiredTokenClaims = options.requiredTokenClaims ?? []
     this.#rejectNonceTokens = options.rejectNonceTokens ?? true
+    this.#maxTokenAgeMs = options.maxTokenAgeMs ?? 0
     this.#fetch = options.fetchImpl ?? (fetch as unknown as CustomFetch)
     this.#discoveryTtlMs = options.discoveryTtlMs ?? 10 * 60_000
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 5_000
@@ -430,6 +453,49 @@ export class OidcClient implements OidcPort {
           throw new OidcError(
             'token_invalid',
             `the token does not carry the claim "${claim}" the deployment requires`
+          )
+        }
+      }
+      // A bearer token has to expire.
+      //
+      // The expiry is checked by the library **when the token carries
+      // one**: a token without an `exp` claim passes the validation of the
+      // signature and of the issuer, and it is valid forever. The gateway
+      // refuses it: a credential that a caller cannot spend is a
+      // credential that nobody can revoke.
+      if (payload.exp === undefined) {
+        throw new OidcError('token_invalid', 'the token does not carry an expiry')
+      }
+      // The lifetime of the token is bounded.
+      //
+      // The rule is applied to the **lifetime** of the token: the moment
+      // it was issued and the moment it expires. A token that was issued
+      // with a long lifetime is refused from the moment it is presented,
+      // and it does not become acceptable again when it is close to its
+      // expiry: the bound is on the lifetime, and not on the validity that
+      // is left.
+      //
+      // The moment the token was issued is required for that: without it
+      // the length of the lifetime cannot be known, and a credential whose
+      // length cannot be bounded is a credential that cannot be revoked.
+      // Every provider publishes it: RFC 9068 makes it mandatory for an
+      // access token.
+      //
+      // The bound is what turns the removal of a caller from the identity
+      // provider into a delay that is bounded by the deployment: the token
+      // of a caller that was removed keeps working for at most this long.
+      if (this.#maxTokenAgeMs > 0) {
+        if (payload.iat === undefined) {
+          throw new OidcError(
+            'token_invalid',
+            'the token does not carry the moment it was issued, so the length of its lifetime cannot be bounded'
+          )
+        }
+        const lifetimeMs = payload.exp * 1000 - payload.iat * 1000
+        if (lifetimeMs > this.#maxTokenAgeMs) {
+          throw new OidcError(
+            'token_invalid',
+            `the token is valid for longer than the maximum the deployment allows (${this.#maxTokenAgeMs} ms)`
           )
         }
       }

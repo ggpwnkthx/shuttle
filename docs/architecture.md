@@ -181,6 +181,7 @@ writes the headers and the cookies of the answers.
 | `rate-limiting` | `policy.ts` | The scopes and the keys of the windows. |
 | | `window.ts` | The sliding window: the size of a bucket, the index of a bucket and the evaluation of the window. |
 | | `limiter.ts` | The limiter of the memory: the bounded table, the shared window of the overflow. |
+| | `fallback.ts` | What happens to a request while the state the replicas share cannot be reached: the request is counted in the process, allowed, or refused. |
 | | `adapters/redis-limiter.ts` | The limiter of Redis: the counter and the expiry are one script. It fails open. |
 | | `adapters/postgres-limiter.ts` | The limiter of Postgres: the counter and the expiry are one function. It fails open. |
 | `proxying` | `transport.ts` | The ports of the transport: the request and the answer. |

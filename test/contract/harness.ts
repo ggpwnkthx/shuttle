@@ -127,6 +127,14 @@ export interface HarnessOptions {
   maxBodyBytes?: number
   /** The environment of the gateway. */
   env?: Record<string, string>
+  /**
+   * The sink of the lines of the log.
+   *
+   * The tests read the lines the gateway writes: the log of a request is
+   * part of the contract of the deployment, and a line that lost a field
+   * is a line an operator cannot use.
+   */
+  logSink?: (line: string) => void
   /** The configuration of the tests is invalid: the gateway starts without one. */
   expectInvalidConfig?: boolean
 }
@@ -335,7 +343,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     ...options.env,
   })
 
-  const runtime = await createRuntime(settings)
+  const runtime = await createRuntime(settings, { logSink: options.logSink })
   const loaded = runtime.config.apply(JSON.parse(await readFile(configPath, 'utf8')))
   if (!loaded.ok && !options.expectInvalidConfig) {
     throw new Error(`the configuration of the test is invalid: ${loaded.error.message}`)

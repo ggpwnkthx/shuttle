@@ -28,6 +28,17 @@ export interface RateLimitDecision {
   remaining: number
   /** How long the caller has to wait, in milliseconds. */
   retryAfterMs: number
+  /**
+   * True when the decision was made without the state the replicas share.
+   *
+   * A decision that is degraded is not a decision of the deployment: the
+   * windows of the callers that live in the shared state could not be
+   * read, so the limiter answered with what it could answer on its own.
+   * The caller of the limiter decides what a degraded decision means: the
+   * wrapper of [fallback.ts](fallback.ts) counts the request in the
+   * process, and the operator sees the degradation in the metrics.
+   */
+  degraded?: boolean
 }
 
 /**
@@ -37,6 +48,10 @@ export interface RateLimitDecision {
  * windows are kept.
  */
 export interface RequestLimiter {
+  /** The number of requests that are allowed in a window. */
+  readonly max: number
+  /** The length of the window, in milliseconds. */
+  readonly windowMs: number
   /** Counts a request and reports whether it is allowed. */
   check(key: string, now?: number): Promise<RateLimitDecision>
   /** Forgets the windows of a key. */

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { RedisRateLimiter, WINDOW_SCRIPT } from './adapters'
 import {
+  FallbackRateLimiter,
   MAX_TRACKED_KEYS,
   MemoryRateLimiter,
   TOTAL_RATE_LIMIT_KEY,
@@ -229,6 +230,189 @@ describe('the limiter of the shared state', () => {
       max: 0,
       windowMs: 60_000,
     })
+    expect((await limiter.check('caller:1', 960_000)).allowed).toBe(true)
+  })
+})
+
+describe('the limiter that degrades with the shared state', () => {
+  /** A client that answers like the server of the script does. */
+  function fakeRedis(answer: unknown) {
+    const calls: { key: string; args: (string | number)[] }[] = []
+    return {
+      calls,
+      eval(_script: string, numkeys: number, ...keysAndArgs: (string | number)[]) {
+        if (numkeys !== 1) throw new Error('unexpected script')
+        calls.push({ key: String(keysAndArgs[0]), args: keysAndArgs.slice(1) })
+        return Promise.resolve(answer)
+      },
+    }
+  }
+
+  /** A limiter that answers like the shared state does when it is down. */
+  function degraded(max: number, windowMs: number) {
+    return new FallbackRateLimiter({
+      shared: new RedisRateLimiter({
+        client: {
+          eval() {
+            return Promise.reject(new Error('the connection is closed'))
+          },
+        },
+        max,
+        windowMs,
+      }),
+      mode: 'local',
+      scope: 'route',
+    })
+  }
+
+  test('the window of the shared state is the one that counts', async () => {
+    const client = fakeRedis([1, 1, 0])
+    const limiter = new FallbackRateLimiter({
+      shared: new RedisRateLimiter({ client, max: 2, windowMs: 60_000 }),
+      mode: 'local',
+      scope: 'route',
+    })
+    const decision = await limiter.check('caller:1', 960_000)
+    expect(decision.allowed).toBe(true)
+    // The shared state was asked, and the window of the process was not.
+    expect(client.calls).toHaveLength(1)
+    expect(limiter.degraded).toBe(false)
+  })
+
+  test('the request is counted in the process when the shared state is down', async () => {
+    const limiter = degraded(2, 60_000)
+    const now = 960_000
+    expect((await limiter.check('caller:1', now)).allowed).toBe(true)
+    expect((await limiter.check('caller:1', now)).allowed).toBe(true)
+    // The budget of the process is the budget of the deployment: the third
+    // request is refused, so the flood is bounded.
+    const refused = await limiter.check('caller:1', now)
+    expect(refused.allowed).toBe(false)
+    expect(refused.degraded).toBe(true)
+    expect(limiter.degraded).toBe(true)
+  })
+
+  test('the degradation is reported', async () => {
+    const scopes: string[] = []
+    const limiter = new FallbackRateLimiter({
+      shared: new RedisRateLimiter({
+        client: {
+          eval() {
+            return Promise.reject(new Error('the connection is closed'))
+          },
+        },
+        max: 2,
+        windowMs: 60_000,
+      }),
+      mode: 'local',
+      scope: 'global',
+      onFallback: (scope) => scopes.push(scope),
+    })
+    await limiter.check('caller:1', 960_000)
+    expect(scopes).toEqual(['global'])
+  })
+
+  test('the recovery is reported when the shared state answers again', async () => {
+    let degraded = true
+    const recovered: string[] = []
+    const limiter = new FallbackRateLimiter({
+      shared: {
+        max: 2,
+        windowMs: 60_000,
+        disabled: false,
+        check() {
+          if (degraded) {
+            return Promise.resolve({
+              allowed: true,
+              limit: 2,
+              remaining: 2,
+              retryAfterMs: 0,
+              degraded: true,
+            })
+          }
+          return Promise.resolve({ allowed: true, limit: 2, remaining: 1, retryAfterMs: 0 })
+        },
+        reset: async () => undefined,
+      },
+      mode: 'local',
+      scope: 'route',
+      onRecovered: () => recovered.push('route'),
+    })
+    await limiter.check('caller:1', 960_000)
+    expect(limiter.degraded).toBe(true)
+    expect(recovered).toHaveLength(0)
+    degraded = false
+    await limiter.check('caller:1', 960_000)
+    expect(limiter.degraded).toBe(false)
+    expect(recovered).toEqual(['route'])
+    // The recovery is reported once, and not on every request.
+    await limiter.check('caller:1', 960_000)
+    expect(recovered).toEqual(['route'])
+  })
+
+  test('the mode `open` allows everything, as the earlier releases did', async () => {
+    const limiter = new FallbackRateLimiter({
+      shared: new RedisRateLimiter({
+        client: {
+          eval() {
+            return Promise.reject(new Error('the connection is closed'))
+          },
+        },
+        max: 1,
+        windowMs: 60_000,
+      }),
+      mode: 'open',
+      scope: 'route',
+    })
+    for (let index = 0; index < 10; index++) {
+      expect((await limiter.check('caller:1', 960_000)).allowed).toBe(true)
+    }
+  })
+
+  test('the mode `closed` refuses everything', async () => {
+    const limiter = new FallbackRateLimiter({
+      shared: new RedisRateLimiter({
+        client: {
+          eval() {
+            return Promise.reject(new Error('the connection is closed'))
+          },
+        },
+        max: 1,
+        windowMs: 60_000,
+      }),
+      mode: 'closed',
+      scope: 'route',
+    })
+    const decision = await limiter.check('caller:1', 960_000)
+    expect(decision.allowed).toBe(false)
+    expect(decision.retryAfterMs).toBe(60_000)
+  })
+
+  test('a limiter that throws is a degraded limiter', async () => {
+    const limiter = new FallbackRateLimiter({
+      shared: {
+        max: 1,
+        windowMs: 60_000,
+        disabled: false,
+        check() {
+          return Promise.reject(new Error('the connection is closed'))
+        },
+        reset: async () => undefined,
+      },
+      mode: 'local',
+      scope: 'route',
+    })
+    expect((await limiter.check('caller:1', 960_000)).allowed).toBe(true)
+    expect(limiter.degraded).toBe(true)
+  })
+
+  test('a limiter that does not limit anything does not degrade', async () => {
+    const limiter = new FallbackRateLimiter({
+      shared: new MemoryRateLimiter({ max: 0, windowMs: 60_000 }),
+      mode: 'local',
+      scope: 'route',
+    })
+    expect(limiter.disabled).toBe(true)
     expect((await limiter.check('caller:1', 960_000)).allowed).toBe(true)
   })
 })

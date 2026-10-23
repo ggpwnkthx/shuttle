@@ -308,6 +308,7 @@ async function dispatchRequest(
       logger.warn('a cross site request was refused', {
         requestId,
         routeId: route.id,
+        subject: principal?.subject,
         reason: crossSite.reason,
       })
       observer.recordCrossSiteRefusal(route.id)
@@ -364,6 +365,7 @@ async function dispatchRequest(
       logger.warn('the access decision was stale', {
         requestId,
         routeId: route.id,
+        subject: principal.subject,
         workspaceId,
         decidedAt: decision.decidedAt,
       })
@@ -379,6 +381,7 @@ async function dispatchRequest(
         logger.error('the access service is not available', {
           requestId,
           routeId: route.id,
+          subject: principal.subject,
           workspaceId,
         })
         recordOutcome(dependencies, route.id, method, 503, started)
@@ -394,6 +397,7 @@ async function dispatchRequest(
       logger.warn('workspace access denied', {
         requestId,
         routeId: route.id,
+        subject: principal.subject,
         workspaceId,
         reason: decision.reason,
       })
@@ -582,6 +586,13 @@ async function dispatchRequest(
         routeId: route.id,
         method,
         path: redactUrl(`${path}${url.search}`),
+        // The caller and the workspace: a gateway that decides who reaches
+        // what has to be able to say who reached what. Without them the
+        // log of a request cannot be tied to a caller, and an operator
+        // cannot answer "who used this workspace" with the logs of the
+        // gateway.
+        subject: principal?.subject,
+        workspaceId,
         status: finalized.status,
         durationMs: Date.now() - started,
         bytesIn: finalized.bytesIn,
@@ -597,6 +608,8 @@ async function dispatchRequest(
     logger.warn('the upstream request failed', {
       requestId,
       routeId: route.id,
+      subject: principal?.subject,
+      workspaceId,
       kind: failure?.kind ?? 'unknown',
       error: failure?.message,
     })

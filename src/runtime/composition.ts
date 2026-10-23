@@ -22,6 +22,7 @@ import { ConfigurationStore } from '../domains/configuration'
 import { asymmetricIdentityKey, ephemeralIdentityKey } from '../domains/forwarding'
 import { HttpExchangeService, UpstreamBreaker } from '../domains/proxying'
 import { MemoryRateLimiter, type RequestLimiter } from '../domains/rate-limiting'
+import { FallbackRateLimiter, type RateLimitFallbackMode } from '../domains/rate-limiting'
 import { PostgresRateLimiter, RedisRateLimiter } from '../domains/rate-limiting/adapters'
 import { AccessClient } from '../domains/workspace-access'
 import type { DecisionCache } from '../domains/workspace-access'
@@ -173,30 +174,102 @@ async function connectSharedState(
  *
  * The window lives in the server whose state the replicas share when there
  * is one, and in the memory of the process otherwise.
+ *
+ * A limiter whose windows live in the shared state is wrapped in a
+ * [FallbackRateLimiter](../domains/rate-limiting/fallback.ts): when the
+ * shared state cannot be reached, the deployment decides what happens to
+ * the request — everything is allowed, the request is counted in the
+ * process, or the request is refused. The default is to count it in the
+ * process, so the protection against a flood survives the outage of the
+ * shared state.
  */
 function createLimiter(options: {
   max: number
   windowMs: number
   keyPrefix: string
+  scope: string
   connection: SharedStateConnection | undefined
+  fallback: RateLimitFallbackMode
   onError: (error: unknown) => void
+  onFallback: (scope: string) => void
+  onRecovered: (scope: string) => void
 }): RequestLimiter {
-  const { max, windowMs, keyPrefix, connection, onError } = options
+  const {
+    max,
+    windowMs,
+    keyPrefix,
+    scope,
+    connection,
+    fallback,
+    onError,
+    onFallback,
+    onRecovered,
+  } = options
   if (connection?.kind === 'redis') {
-    return new RedisRateLimiter({ max, windowMs, client: connection.client, keyPrefix, onError })
+    return new FallbackRateLimiter({
+      shared: new RedisRateLimiter({
+        max,
+        windowMs,
+        client: connection.client,
+        keyPrefix,
+        onError,
+      }),
+      mode: fallback,
+      scope,
+      onFallback,
+      onRecovered: () => onRecovered(scope),
+    })
   }
   if (connection?.kind === 'postgres') {
-    return new PostgresRateLimiter({ max, windowMs, client: connection.client, keyPrefix, onError })
+    return new FallbackRateLimiter({
+      shared: new PostgresRateLimiter({
+        max,
+        windowMs,
+        client: connection.client,
+        keyPrefix,
+        onError,
+      }),
+      mode: fallback,
+      scope,
+      onFallback,
+      onRecovered: () => onRecovered(scope),
+    })
   }
   return new MemoryRateLimiter({ max, windowMs })
 }
 
-export async function createRuntime(settings: RuntimeSettings): Promise<GatewayRuntime> {
+/**
+ * The options of the runtime.
+ *
+ * The sink of the log is an option and not a variable of the environment:
+ * the tests read the lines the gateway writes, and a deployment writes
+ * them to the standard output.
+ */
+export interface RuntimeOptions {
+  /** The sink of the lines of the log; overridable for the tests. */
+  logSink?: (line: string) => void
+}
+
+export async function createRuntime(
+  settings: RuntimeSettings,
+  options: RuntimeOptions = {}
+): Promise<GatewayRuntime> {
   const logger = createLogger({
     level: settings.observability.logLevel,
     bindings: { service: 'shuttle' },
+    write: options.logSink,
   })
   const observer = new MetricsStore()
+
+  // The limiter of the shared state fails open when the deployment accepts
+  // it: the protection against a flood is gone for as long as the server
+  // is down. It is a permissive setting, and a permissive setting that
+  // nobody read is a hole nobody knows about.
+  if (settings.limits.fallback === 'open') {
+    logger.warn('the limits are not enforced while the shared state is down', {
+      hint: 'SHUTTLE_RATE_LIMIT_FALLBACK=local counts the requests in the window of the process, so the flood is bounded by the number of the replicas',
+    })
+  }
 
   // The signature of the identity is asymmetric: the gateway holds the
   // private key and the upstreams hold the public one, so an upstream that
@@ -293,6 +366,9 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     rolesClaim: settings.oidc.rolesClaim,
     requiredTokenClaims: settings.oidc.requiredTokenClaims,
     rejectNonceTokens: settings.oidc.rejectNonceTokens,
+    // The bound of the lifetime of a bearer token: it is what turns the
+    // removal of a caller from the provider into a bounded delay.
+    maxTokenAgeMs: settings.oidc.maxTokenAgeMs,
     allowInsecureIssuer: settings.oidc.allowInsecureIssuer,
     // Outside a production deployment a public client is allowed: the
     // development stack uses one. A production deployment has to name the
@@ -363,19 +439,51 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
 
   // The limiters. A deployment with more than one replica shares its
   // windows, so the limit of the deployment is the configured limit.
+  //
+  // The limiter of a scope that lives in the shared state degrades when the
+  // shared state cannot be reached: the request is counted in the process
+  // instead, and the degradation is published. The flood is bounded by the
+  // number of the replicas instead of being unbounded.
+  //
+  // The degradation is written in the log **once**: a line for every
+  // request that was counted in the process would be noise, and the metric
+  // counts them.
+  const degradedScopes = new Set<string>()
+  const onLimiterFallback = (scope: string): void => {
+    observer.recordRateLimitFallback(scope)
+    if (degradedScopes.has(scope)) return
+    degradedScopes.add(scope)
+    logger.warn('the limits are counted in the window of the process', {
+      scope,
+      mode: settings.limits.fallback,
+      hint: 'the shared state of the limits is not reachable: the budget of a caller is spent per replica and not per deployment',
+    })
+  }
+  const onLimiterRecovered = (scope: string): void => {
+    if (!degradedScopes.delete(scope)) return
+    logger.info('the limits are counted in the shared state again', { scope })
+  }
   const rateLimiter = createLimiter({
     max: settings.limits.route.max,
     windowMs: settings.limits.route.windowMs,
     keyPrefix: settings.sharedState.keyPrefix,
+    scope: 'route',
     connection: sharedConnection,
+    fallback: settings.limits.fallback,
     onError: onSharedStateError,
+    onFallback: onLimiterFallback,
+    onRecovered: onLimiterRecovered,
   })
   const globalRateLimiter = createLimiter({
     max: settings.limits.global.max,
     windowMs: settings.limits.global.windowMs,
     keyPrefix: `${settings.sharedState.keyPrefix}:global`,
+    scope: 'global',
     connection: sharedConnection,
+    fallback: settings.limits.fallback,
     onError: onSharedStateError,
+    onFallback: onLimiterFallback,
+    onRecovered: onLimiterRecovered,
   })
   // The budget of an authenticated caller on one route. It is keyed by the
   // subject of the caller, so one tenant cannot spend the budget of the
@@ -384,8 +492,12 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     max: settings.limits.principal.max,
     windowMs: settings.limits.principal.windowMs,
     keyPrefix: `${settings.sharedState.keyPrefix}:principal`,
+    scope: 'principal',
     connection: sharedConnection,
+    fallback: settings.limits.fallback,
     onError: onSharedStateError,
+    onFallback: onLimiterFallback,
+    onRecovered: onLimiterRecovered,
   })
   // The budget of the whole deployment. The scopes that are keyed by an
   // address cannot bound a flood that spreads over many addresses; this one
@@ -394,15 +506,23 @@ export async function createRuntime(settings: RuntimeSettings): Promise<GatewayR
     max: settings.limits.total.max,
     windowMs: settings.limits.total.windowMs,
     keyPrefix: `${settings.sharedState.keyPrefix}:total`,
+    scope: 'total',
     connection: sharedConnection,
+    fallback: settings.limits.fallback,
     onError: onSharedStateError,
+    onFallback: onLimiterFallback,
+    onRecovered: onLimiterRecovered,
   })
   const loginRateLimiter = createLimiter({
     max: settings.limits.login.max,
     windowMs: settings.limits.login.windowMs,
     keyPrefix: `${settings.sharedState.keyPrefix}:login`,
+    scope: 'login',
     connection: sharedConnection,
+    fallback: settings.limits.fallback,
     onError: onSharedStateError,
+    onFallback: onLimiterFallback,
+    onRecovered: onLimiterRecovered,
   })
 
   // The health of the upstreams.

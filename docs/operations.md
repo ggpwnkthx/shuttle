@@ -41,6 +41,7 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_OIDC_REDIRECT_URI` | `https://<the public url of the gateway>/auth/callback` | Where the provider sends the browser back to. |
 | `SHUTTLE_OIDC_REQUIRED_TOKEN_CLAIMS` | — | The claims a bearer token has to carry. A provider that publishes a claim that names the type of the token names it here. |
 | `SHUTTLE_OIDC_REJECT_NONCE_TOKEN` | `true` | Refuses a bearer token that carries a nonce. The id token of the gateway always carries one and an access token never does. A provider whose access tokens carry a nonce turns it off. |
+| `SHUTTLE_OIDC_MAX_TOKEN_AGE_MS` | `86400000` (a day) | The longest lifetime a bearer token may have: the time between the moment it was issued and the moment it expires. It is what turns the removal of a caller from the provider into a delay the deployment chooses — the token of a caller that was removed keeps working for at most this long. A bearer token has to carry an expiry whatever the bound is. `0` turns the bound off. |
 | `SHUTTLE_ACCESS_URL` / `_ACCESS_TOKEN` | `https://access.example.com` | The access service. The token is in the secret store. |
 | `SHUTTLE_SESSION_SECRET` | A random value of at least 32 bytes | It signs the state of the login. It has to be the **same on every replica**. |
 | `SHUTTLE_IDENTITY_SIGNING_KEY` | The private key of the deployment | It signs the identity of the requests. The upstreams are given the public key. It has to be the **same on every replica**. |
@@ -70,6 +71,7 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_ACCESS_BREAKER_FAILURES` | `5` | The number of consecutive failures of the access service before it is not called any more. The breaker only refuses: it answers the unavailability of the service, so it cannot let a caller in that the service would not have allowed. `0` disables it. |
 | `SHUTTLE_ACCESS_BREAKER_COOLDOWN_MS` | `5000` | How long the access service is not called after it failed, in milliseconds. The service is tried again when the cooldown is over. |
 | `SHUTTLE_RATE_LIMIT_TOTAL_MAX` | A value | The budget of the deployment. At least one limit has to be set. |
+| `SHUTTLE_RATE_LIMIT_FALLBACK` | `local` | What happens to a request while the shared state cannot be reached: the request is counted in the window of the process (`local`), every request is allowed (`open`), or every request is refused (`closed`). The windows of the limits are not readable while the server is down, and the limiter is the only protection of the gateway against a flood. |
 | `SHUTTLE_SHUTDOWN_TIMEOUT_MS` | `15000` | The deadline of the drain. |
 
 The full list, with the default of every value, is in
@@ -375,6 +377,7 @@ token does not match.
 | `shuttle_active_requests` | The requests that are in flight. | The drain. |
 | `shuttle_config_reloads_total{result}` | The reloads of the configuration. | A broken file on disk. |
 | `shuttle_rate_limited_total` | The requests that the limiter refused. | A flood. |
+| `shuttle_rate_limit_fallback_total{scope}` | The requests that were counted in the process because the windows of the shared state could not be read. | The limits of the deployment are not the limits that are running: the budget of a caller is spent per replica, not per deployment. |
 | `shuttle_shared_state_errors_total` | The times the shared state was not reachable. | The degradation of the deployment. |
 
 The labels are bounded: `unmatched` for the requests that matched no route,
@@ -410,13 +413,21 @@ The status and the outcome are two different things: an upstream that
 answered `200` and a body that was cut is a `200` with the outcome
 `aborted`.
 
+The line of a request also carries the **caller** and the **workspace**:
+the gateway decides who reaches what, so a log that cannot name the
+caller cannot answer "who used this workspace". The subject is the
+identifier of the caller at the identity provider — it is not a credential,
+and it is not redacted — and the workspace is the identifier of the
+workspace of the route. The lines of the refusals carry them as well, so a
+denial says who was denied.
+
 ## What happens when a dependency fails
 
 | Piece | When it is not reachable |
 | --- | --- |
 | The identity provider | The logins fail with `503`. The callers that have a session keep working. |
 | The access service | The requests that need a decision are refused with `503 access_unavailable`. The other routes are unaffected. A route that has a grace (`accessStaleGraceMs`) goes on with the last decision of the service, and the decisions that were served this way are counted in `shuttle_access_stale_total`. |
-| The shared state (Redis) | The sessions fail closed (`401`/`503`), the limiter fails open, the decisions are asked for again. |
+| The shared state (Redis) | The sessions fail closed (`401`/`503`), the decisions are asked for again, and the limits are counted in the window of the process: the deployment degrades to the budget of one replica per scope (§9 of the specification). The mode is `SHUTTLE_RATE_LIMIT_FALLBACK`. |
 | The upstreams | The requests of the route are answered with `502`. The other routes are unaffected. A route that names several upstreams tries the next one when the request may be sent again, and the breaker moves an upstream that failed recently to the end of the list, so the next request of the route goes to an upstream that answered recently. |
 
 ## The recovery
@@ -427,7 +438,7 @@ answered `200` and a body that was cut is a `200` with the outcome
 | `/readyz` answers `503` with `sessionStore: unavailable` | The shared state is not reachable. | The shared state is restored. The deployment is out of the rotation until then. |
 | Every request answers `404 no_route` | The ingress rewrites the `Host` header and does not report the public host. | The ingress sets `x-forwarded-host`, or the routes match the host the ingress sends. |
 | Every request answers `403 cross_site_request` | The same, with the origin the browser sends. | The ingress sets `x-forwarded-host` and `x-forwarded-proto`. |
-| `shuttle_shared_state_errors_total` grows | The shared state is degraded: the limiter fails open and the decisions are asked for again. | The shared state is restored. |
+| `shuttle_shared_state_errors_total` grows | The shared state is degraded: the decisions are asked for again, and the limits are counted in the window of the process. | The shared state is restored. `shuttle_rate_limit_fallback_total` says how much of the traffic was counted per replica instead of per deployment. |
 | `shuttle_access_unavailable_total` grows | The access service is not reachable, or it answers something the gateway cannot read. | The access service is restored. The gateway fails closed: the callers are refused with `503 access_unavailable` until the service answers again. |
 | `shuttle_access_stale_total` grows | The access service is not reachable, and the routes that have a grace went on with the last decision of the service. | The access service is restored. The revocations of the callers are late by the grace: a route that may not be late sets `accessStaleGraceMs: 0`. |
 | `shuttle_request_errors_total` grows for one route | The upstream of the route is broken. | The upstream is repaired. The other routes are unaffected. |

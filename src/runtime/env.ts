@@ -13,6 +13,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
+import type { RateLimitFallbackMode } from '../domains/rate-limiting'
 import { isSharedStateUrl } from './shared-state'
 
 /** The level of the log. */
@@ -36,6 +37,15 @@ export interface OidcSettings {
    * access tokens carry a nonce anyway turns the check off.
    */
   rejectNonceTokens: boolean
+  /**
+   * The longest lifetime a bearer token may have, in milliseconds.
+   *
+   * The lifetime is the time between the moment the token was issued and
+   * the moment it expires. Zero disables the bound. The bound is what turns
+   * the removal of a caller from the identity provider into a delay that is
+   * bounded by the deployment.
+   */
+  maxTokenAgeMs: number
   audience?: string
   /** Allows a provider that is not served over https. */
   allowInsecureIssuer: boolean
@@ -227,6 +237,21 @@ export interface LimitSettings {
    */
   total: { max: number; windowMs: number }
   login: { max: number; windowMs: number }
+  /**
+   * What happens to a request when the state the replicas share cannot be
+   * reached.
+   *
+   * The limiter of a scope that lives in the shared state cannot count the
+   * request in the window of the deployment while the server is down.
+   *
+   * - `local`: the request is counted in the window of the **process**. The
+   *   flood is bounded by the number of the replicas instead of being
+   *   unbounded.
+   * - `open`: every request is allowed. The behaviour of the releases
+   *   before this one.
+   * - `closed`: every request is refused.
+   */
+  fallback: RateLimitFallbackMode
 }
 
 /**
@@ -413,6 +438,23 @@ const EnvSchema = z.object({
    * the check off explicitly.
    */
   SHUTTLE_OIDC_REJECT_NONCE_TOKEN: boolEnv(),
+  /**
+   * The longest lifetime a bearer token may have, in milliseconds.
+   *
+   * The lifetime is the time between the moment the token was issued and
+   * the moment it expires: the bound is on the lifetime and not on the
+   * validity that is left, so a long-lived token does not become
+   * acceptable again when it is close to its expiry.
+   *
+   * The bound is what turns the removal of a caller from the identity
+   * provider into a delay that is bounded by the deployment: the token of a
+   * caller that was removed keeps working for at most this long.
+   *
+   * The default is a day: it refuses nothing that a provider of access
+   * tokens issues in practice, and it refuses a token that was issued with
+   * a lifetime of weeks. Zero disables the bound.
+   */
+  SHUTTLE_OIDC_MAX_TOKEN_AGE_MS: intEnv(86_400_000, { min: 0 }),
   SHUTTLE_OIDC_AUDIENCE: z.string().optional(),
   SHUTTLE_OIDC_ALLOW_INSECURE: boolEnv(),
   /**
@@ -632,6 +674,29 @@ const EnvSchema = z.object({
   SHUTTLE_RATE_LIMIT_TOTAL_MAX: intEnv(0, { min: 0 }),
   SHUTTLE_RATE_LIMIT_TOTAL_WINDOW_MS: intEnv(1_000, { min: 100 }),
   /**
+   * What happens to a request when the state the replicas share cannot be
+   * reached.
+   *
+   * The limiter of a scope that lives in the shared state has no window to
+   * count the request in while the server is down.
+   *
+   * - `local`: the request is counted in the window of the **process**, so
+   *   the protection against a flood survives the outage of the shared
+   *   state. The budget of a caller is spent a little faster than it
+   *   should be, because the window of the process does not know about the
+   *   requests the other replicas counted.
+   * - `open`: every request is allowed. The behaviour of the releases
+   *   before this one: a hiccup of the server is not an outage of the
+   *   deployment, and the protection against a flood is gone for as long as
+   *   the server is down.
+   * - `closed`: every request is refused, with a `retry-after`.
+   *
+   * The default is `local`: the limiter is the only protection of the
+   * gateway against a flood, and a protection that disappears with the
+   * server is not one the deployment can rely on.
+   */
+  SHUTTLE_RATE_LIMIT_FALLBACK: z.enum(['open', 'local', 'closed']).default('local'),
+  /**
    * Allows a production deployment with every rate limit disabled.
    *
    * The limiter is the only protection of the gateway against a flood, and
@@ -839,6 +904,10 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       // The check is on unless the deployment turns it off: a setting that
       // looks active but is not is a security hole.
       rejectNonceTokens: parsed.SHUTTLE_OIDC_REJECT_NONCE_TOKEN ?? true,
+      // The bound is on by default: a token that outlives the bound keeps
+      // a caller that was removed from the provider working for as long as
+      // the provider gave the token. The default of the variable is a day.
+      maxTokenAgeMs: parsed.SHUTTLE_OIDC_MAX_TOKEN_AGE_MS,
       audience: parsed.SHUTTLE_OIDC_AUDIENCE,
       // A provider that is not served over https is only allowed outside a
       // production environment: a deployment terminates TLS in front of it.
@@ -906,6 +975,9 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       replayMaxBytes: parsed.SHUTTLE_REPLAY_MAX_BYTES,
       upstreamBreakerFailures: parsed.SHUTTLE_UPSTREAM_BREAKER_FAILURES,
       upstreamBreakerCooldownMs: parsed.SHUTTLE_UPSTREAM_BREAKER_COOLDOWN_MS,
+      // What happens to a request while the state the replicas share cannot
+      // be reached.
+      fallback: parsed.SHUTTLE_RATE_LIMIT_FALLBACK as RateLimitFallbackMode,
       route: { max: parsed.SHUTTLE_RATE_LIMIT_MAX, windowMs: parsed.SHUTTLE_RATE_LIMIT_WINDOW_MS },
       global: {
         max: parsed.SHUTTLE_RATE_LIMIT_GLOBAL_MAX,

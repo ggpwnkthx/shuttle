@@ -180,6 +180,14 @@ export interface Observer {
   recordCrossSiteRefusal(routeId: string): void
   /** The state the replicas share was not reachable. */
   recordSharedStateError(): void
+  /**
+   * A budget of the limits was counted in the process.
+   *
+   * The scope of the budget is reported, so the operator sees which limit
+   * is degraded: the windows of the shared state could not be read, and the
+   * request was counted in the window of the process.
+   */
+  recordRateLimitFallback(scope: string): void
   /** The metrics, in the Prometheus text exposition format. */
   render(): Promise<string>
   /** The content type of the exposition format. */
@@ -206,6 +214,7 @@ export class MetricsStore implements Observer {
   #crossSiteRefusals: Counter<'route'>
   #websocketRefusals: Counter<'reason'>
   #sharedStateErrors: Counter
+  #rateLimitFallbacks: Counter<'scope'>
   #upstreamFailures: Counter
   #upstreamsSkipped: Counter
   /** The routes that are tracked individually. */
@@ -319,6 +328,12 @@ export class MetricsStore implements Observer {
       help: 'The times the state the replicas share was not reachable.',
       registers: [this.#registry],
     })
+    this.#rateLimitFallbacks = new Counter({
+      name: 'shuttle_rate_limit_fallback_total',
+      help: 'The requests that were counted in the process because the windows of the shared state could not be read, by scope.',
+      labelNames: ['scope'],
+      registers: [this.#registry],
+    })
     this.#upstreamFailures = new Counter({
       name: 'shuttle_upstream_failures_total',
       help: 'The failures of the upstreams: a connection that was refused, an attempt that ran out of time.',
@@ -413,6 +428,10 @@ export class MetricsStore implements Observer {
     this.#sharedStateErrors.inc()
   }
 
+  recordRateLimitFallback(scope: string): void {
+    this.#rateLimitFallbacks.inc({ scope })
+  }
+
   recordUpstreamFailure(): void {
     this.#upstreamFailures.inc()
   }
@@ -467,6 +486,7 @@ export function createSilentObserver(): Observer {
     recordRateLimit: () => undefined,
     recordCrossSiteRefusal: () => undefined,
     recordSharedStateError: () => undefined,
+    recordRateLimitFallback: () => undefined,
     render: async () => '',
     contentType: 'text/plain; version=0.0.4',
   }
