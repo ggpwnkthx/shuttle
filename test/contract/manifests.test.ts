@@ -18,7 +18,10 @@ const directory = join(import.meta.dir, '..', '..', 'deploy', 'kubernetes')
 async function documents(): Promise<
   { file: string; index: number; body: Record<string, unknown> }[]
 > {
-  const files = (await readdir(directory)).filter((name) => name.endsWith('.yaml'))
+  // The files are read in the order of their names: the order of a
+  // directory is not the order of its names, and a manifest that is read
+  // first is the one a test without a component finds.
+  const files = (await readdir(directory)).filter((name) => name.endsWith('.yaml')).sort()
   const parsed: { file: string; index: number; body: Record<string, unknown> }[] = []
   for (const file of files) {
     const text = await readFile(join(directory, file), 'utf8')
@@ -73,7 +76,7 @@ describe('the manifests of the deployment', () => {
   })
 
   test('the grace period is longer than the deadline of the drain', async () => {
-    const deployment = await ofKind('Deployment')
+    const deployment = await ofKind('Deployment', 'gateway')
     const spec = deployment.spec as Record<string, unknown>
     const template = spec.template as Record<string, unknown>
     const pod = template.spec as Record<string, unknown>
@@ -88,7 +91,7 @@ describe('the manifests of the deployment', () => {
   })
 
   test('the secrets of the deployment come from the secret store', async () => {
-    const deployment = await ofKind('Deployment')
+    const deployment = await ofKind('Deployment', 'gateway')
     const spec = deployment.spec as Record<string, unknown>
     const template = spec.template as Record<string, unknown>
     const pod = template.spec as Record<string, unknown>
@@ -116,7 +119,7 @@ describe('the manifests of the deployment', () => {
   })
 
   test('the container is hardened and it writes nothing', async () => {
-    const deployment = await ofKind('Deployment')
+    const deployment = await ofKind('Deployment', 'gateway')
     const spec = deployment.spec as Record<string, unknown>
     const template = spec.template as Record<string, unknown>
     const pod = template.spec as Record<string, unknown>
