@@ -118,6 +118,13 @@ which is the default outside a production deployment. The statements are
 idempotent and an advisory lock makes one replica build the schema while
 the others wait for it.
 
+**The version of the server is the choice of the deployment.** The gateway
+is built, tested and released against **PostgreSQL 18** — the workflow of
+the CI and the script of the development run that version — and it does
+not refuse an older server: the SQL it uses is portable and nothing in the
+contract of the shared state depends on the version of the server. The
+gateway does not read the version of the server.
+
 A production deployment that applies its own migrations says no and runs
 the script instead:
 
@@ -725,19 +732,19 @@ the knobs an operator turns when a revocation has to be immediate.
 | The comparison of the backends | `bun run benchmark` | no |
 | The image | `docker build` and the smoke tests | yes |
 
-The last full run of the suite: **735 tests passed, 0 failed** over 71 files
+The last full run of the suite: **793 tests passed, 0 failed** over 79 files
 with Bun 1.4.3, including the tests against a real Redis 7.0.15
 (`SHUTTLE_TEST_REDIS_URL=redis://127.0.0.1:6399/0`) and against a real
-Postgres 15.18 (`SHUTTLE_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5432/shuttle`),
+Postgres 18.6 (`SHUTTLE_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5432/shuttle`),
 the 3 tests in Chromium and the 2 soak tests. The four tests of the
 interoperability with a real provider are the ones that are skipped: they
 need a provider, and the CI workflow runs them against a dex of its own.
-The coverage of the source (`src/`) is **94.2 %** of the lines and
-**93.5 %** of the functions (the mean of the files of `src/`); the
-coverage of the whole tree, the tests included, is **92.3 %** of the lines
-and **92.6 %** of the functions.
+The coverage of the source (`src/`) is **93.8 %** of the lines and
+**93.0 %** of the functions (the mean of the files of `src/`); the
+coverage of the whole tree, the tests included, is **91.7 %** of the lines
+and **91.8 %** of the functions.
 
-Without a Redis server and without a Postgres server, the 39 tests of the
+Without a Redis server and without a Postgres server, the 38 tests of the
 shared state are skipped and the rest pass. The tests of the shared state
 of a Postgres server run without a server when none is named: they run
 against the in-process engine of Postgres itself.
@@ -750,7 +757,7 @@ The CI workflow (`.github/workflows/ci.yml`) runs seven jobs:
 | --- | --- |
 | `check` | The types, the lint, the format, the import boundaries, the unit and contract tests, the network tests and the soak. |
 | `redis` | The shared state against a real Redis 7. |
-| `postgres` | The shared state against a real Postgres 16, and the migration of the schema. |
+| `postgres` | The shared state against a real Postgres 18, and the migration of the schema. |
 | `interop` | The flow against a real identity provider (dex): the discovery of the provider, and a caller that signs in against it. |
 | `load` | The capacity: 20 000 requests at 100 in flight, and 500 WebSockets. |
 | `browser` | The cookies and the origins in a real Chromium. |

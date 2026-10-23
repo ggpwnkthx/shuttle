@@ -97,7 +97,10 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        # The version of the server of the tests is the version the gateway
+        # is built and tested against (PostgreSQL 18). A deployment is not
+        # bound to it: the gateway does not refuse an older server.
+        image: postgres:18-alpine
         ports:
           - '5432:5432'
         env:

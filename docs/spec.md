@@ -1601,6 +1601,12 @@ The sessions, the limits and the cached decisions live in a server that the
 replicas share: a Redis server or a Postgres server. The scheme of the url
 picks the backend, and the two hold the same three things.
 
+**The version of a Postgres server is not refused.** The gateway is built,
+tested and released against **PostgreSQL 18** — the workflow of the CI and
+the script of the development run that version — and the SQL it uses is
+portable, so a deployment that runs an older server keeps working: the
+gateway does not read the version of the server and does not refuse it.
+
 **The Redis client** is the one of the `redis` package: the shared state is
 not tied to the runtime of the gateway, and one implementation covers every
 managed cache. **The Postgres client** is the one of the `pg` package, with

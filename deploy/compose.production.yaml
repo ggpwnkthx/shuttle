@@ -107,6 +107,10 @@ services:
   #   SHUTTLE_SESSION_URL=postgres://postgres:postgres@postgres:5432/shuttle
   #   SHUTTLE_SHARED_STATE_URL=postgres://postgres:postgres@postgres:5432/shuttle
   postgres:
+    # The version of the server of a deployment is the choice of the
+    # deployment: the gateway is built and tested against PostgreSQL 18
+    # and does not refuse an older server. This reference stack stays on
+    # the version it was on.
     image: postgres:16-alpine
     profiles: ["postgres"]
     restart: unless-stopped

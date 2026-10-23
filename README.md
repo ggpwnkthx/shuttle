@@ -84,7 +84,9 @@ them.
 The shared state — the sessions, the rate limits and the cached decisions —
 lives in a **Redis server** or in a **Postgres server**. The two hold the
 same state with the same contract, and the gateway measures them side by
-side: see [docs/capacity.md](docs/capacity.md).
+side: see [docs/capacity.md](docs/capacity.md). The gateway is built and
+tested against **PostgreSQL 18** and does not refuse an older server: the
+version of a deployment is the choice of the deployment.
 
 ## Quick start
 
@@ -233,3 +235,7 @@ scripts/postgres-dev.sh start 5432
 SHUTTLE_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5432/shuttle bun test test/integration
 scripts/postgres-dev.sh stop 5432
 ```
+
+The script of the development starts a **PostgreSQL 18** server (the
+packages are downloaded and extracted, nothing is installed), the same
+version the workflow of the CI runs the tests against.

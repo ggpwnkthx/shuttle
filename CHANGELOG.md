@@ -3,6 +3,28 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
+## Unreleased
+
+### The version of the Postgres server
+
+The gateway is built, tested and released against **PostgreSQL 18**: the
+workflow of the CI runs the tests of the shared state against a server of
+that version, the script of the development starts that version, and the
+in-process engine of the tests is that version.
+
+The version is **not enforced**. The contract of the shared state is
+carried by two functions of `plpgsql`, an advisory lock and an `ON
+CONFLICT` — every one of them is older than PostgreSQL 9.6 — so the SQL
+the gateway uses is portable, and a deployment that runs an older server
+is not refused. The gateway does not read the version of the server.
+
+The rule of the runtime — the gateway refuses to start on a runtime older
+than Bun 1.4.3 — applies to the boundaries the specification relies on,
+and no boundary of Postgres is in the contract: a refusal would refuse a
+deployment for nothing, on the server that holds the state of the sessions
+and of the limits. The version of a deployment stays the choice of the
+deployment.
+
 ## 1.2.0
 
 A **MINOR** release: the contracts of §16.1 of the specification are
