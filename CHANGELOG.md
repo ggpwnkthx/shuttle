@@ -3,7 +3,16 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
-## Unreleased
+## 1.3.0
+
+A **MINOR** release: the contracts of §16.1 of the specification are
+**extended**, never changed. A deployment written against the `1.2` keeps
+working without a change.
+
+The release gives the deployment an administrative surface of its own and
+lets the route table live in the shared state: the control plane is a
+separate process, and the table is a list of immutable revisions that
+every replica watches.
 
 ### The control plane
 
