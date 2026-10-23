@@ -10,7 +10,7 @@ which file owns what; [decisions.md](decisions.md) records the decisions
 behind the contract. Recommendations in an implementation guide do not
 become requirements until they are recorded here.
 
-Status: 1.3.0. Runtime: Bun ≥ 1.4.3 (§15, decision 20). The gateway **refuses
+Status: 2.0.0. Runtime: Bun ≥ 1.4.3 (§15, decision 20). The gateway **refuses
 to start** on an older runtime: the boundaries it relies on are not
 observable there. Listener: HTTP and
 WebSocket on `SHUTTLE_GATEWAY_HOST:SHUTTLE_GATEWAY_PORT` (default

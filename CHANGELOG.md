@@ -3,11 +3,17 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
-## Unreleased
+## 2.0.0
 
-The release fixes five defects of the security of a deployment. They are
-numbered as the decisions of [docs/decisions.md](docs/decisions.md) that
-carry them.
+A **MAJOR** release: the contracts of §16.1 of the specification are
+**changed**, and the changes are listed here with the migration of each of
+them. A deployment written against the `1.3` needs the migration below.
+
+The release closes five defects of the security of a deployment: the users
+of the shared state in Redis, the precedence of the routes, the address of
+the caller, the subject of the caller and the ranges of the trusted
+proxies. The decisions that carry them are numbered in
+[docs/decisions.md](docs/decisions.md).
 
 ### The users of the shared state in Redis
 

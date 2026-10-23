@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: gateway
-          image: ghcr.io/ggpwnkthx/shuttle:1.3.0
+          image: ghcr.io/ggpwnkthx/shuttle:2.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

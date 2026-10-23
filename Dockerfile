@@ -3,7 +3,7 @@
 # The version of the runtime and the revision of the build are labels of the
 # image: an operator has to know what is running without reading the logs.
 ARG BUN_VERSION=1.4.3
-ARG VERSION=1.3.0
+ARG VERSION=2.0.0
 ARG REVISION=unknown
 
 # ---------------------------------------------------------------- dependencies
@@ -116,7 +116,7 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
 
 # The control plane is the same image with another command:
 #
-#   docker run --rm -p 9090:9090 ghcr.io/ggpwnkthx/shuttle:1.3.0 \
+#   docker run --rm -p 9090:9090 ghcr.io/ggpwnkthx/shuttle:2.0.0 \
 #     bun run src/control-main.ts
 #
 # It is never published to the callers: it is internal.

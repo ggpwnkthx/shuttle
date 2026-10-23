@@ -18,7 +18,7 @@
  */
 import { runtimeVersion } from '../platform/bun/runtime'
 
-export const VERSION = '1.3.0'
+export const VERSION = '2.0.0'
 
 /**
  * The oldest runtime the gateway is built, tested and released with.
