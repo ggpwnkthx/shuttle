@@ -86,6 +86,31 @@ A domain that is not in a row may not be used at all.
     and the API of the runtime (the listener, the sockets, the client of the
     shared state) is only used by the platform.
 
+## The code that nothing uses
+
+The boundaries above say where a piece of code may live. They do not say
+whether it is used at all. `knip` answers that question, and the answers
+are checked by the build: `bun run dead` fails the build when a file, an
+export, a type or a dependency of the project is used by nothing.
+
+The configuration of the check is `knip.json`. It declares what is an entry
+point of the project — the process, the tests, the scripts, the fixtures and
+the examples — and it reports the exports of the files that are not entries.
+The public entry point of a domain is not an entry point: an export of it
+that no consumer imports is reported, because the consumers of a domain are
+the only judge of what a domain exposes. The `index.ts` of a domain is
+therefore a deliberate list, and the list is kept to what is really used.
+
+An export that is used inside the module that declares it, and nowhere else,
+is not dead code: the code is alive and only the `export` keyword is
+superfluous. The check reports it anyway, because a public entry point that
+offers more than its consumers use is a promise nobody asked for.
+
+The check knows nothing about the runtime, so a few files are declared as
+entries that a tool cannot see: the workers that the integration tests
+start with `Bun.spawn` and the development runner that `package.json` starts
+with `bun --watch`.
+
 ## The lifecycle of the pieces
 
 | Lifetime | Owner |
@@ -276,6 +301,7 @@ so the protocol and its reference do not drift apart.
 | Browser | `test/browser/` | The cookies and the origins in a real browser. |
 | Load | `test/load/` | The soak and the resources that settle after the traffic. |
 | Architecture | `test/architecture/` | The import boundaries. |
+| Dead code | `bun run dead` | That every file, every export and every dependency of the project is used by something. |
 
 A rule that has no test is a rule that is not implemented. The domain owns
 the test of its rule; the contract suite proves that the domains are wired

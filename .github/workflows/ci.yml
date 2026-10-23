@@ -43,6 +43,9 @@ jobs:
       - name: import boundaries
         run: bun test test/architecture
 
+      - name: the dead code
+        run: bun run dead
+
       - name: the versions of the project agree
         run: bun run versions
 

@@ -211,6 +211,7 @@ The checks
 bun run typecheck      # the types
 bun run lint           # the linter
 bun run format:check   # the formatting
+bun run dead           # the code that nothing uses
 bun run versions       # the version of the release is the same everywhere
 bun test               # every test
 bun test src           # the unit tests of the domains
