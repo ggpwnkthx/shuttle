@@ -3,6 +3,104 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
+## 1.2.0
+
+A **MINOR** release: the contracts of §16.1 of the specification are
+**extended**, never changed. A deployment written against the `1.1` keeps
+working without a change.
+
+The release closes three gaps that have nothing to do with each other: the
+lifetime of a bearer token, the limits of a deployment whose shared state
+is down, and the caller in the log.
+
+### The lifetime of a bearer token is bounded
+
+The gateway validated the signature, the issuer, the audience and the
+expiry of a bearer token. The library checks the expiry **when the token
+carries one**, so a token without an `exp` claim passed every check and was
+valid forever. A credential that nobody can spend is a credential that
+nobody can revoke.
+
+A bearer token now has to carry an **expiry**, and its **lifetime** is
+bounded by `SHUTTLE_OIDC_MAX_TOKEN_AGE_MS` (a day by default):
+
+- the lifetime is the time between the moment the token was issued and the
+  moment it expires, and the bound is on the lifetime and not on the
+  validity that is left: a long-lived token does not become acceptable
+  again when it is close to its expiry;
+- a bearer token has to carry the moment it was issued while the bound is
+  on, because the length of the lifetime cannot be known without it. Every
+  provider publishes it — RFC 9068 makes it mandatory for an access token;
+- the bound is what turns the removal of a caller from the identity
+  provider into a delay that the deployment chooses: the token of a caller
+  that was removed keeps working for at most the bound, and not for the
+  lifetime the provider gave it.
+
+The browser flow is bounded by the maximum age of the session instead, and
+that bound is one the gateway controls.
+
+A deployment whose provider issues long-lived access tokens sets the bound
+to what it accepts, or turns it off with `0`. The expiry is required
+whatever the bound is.
+
+### The limits survive the outage of the shared state
+
+The limiter of a scope that lives in the shared state **failed open**: a
+hiccup of the server is not an outage, and a limiter that refuses every
+request when the cache has a hiccup turns the hiccup into an outage. The
+price of that choice is that the protection against a flood is gone for as
+long as the server is down, and the limiter is the only protection of the
+gateway against a flood.
+
+The deployment now chooses what happens instead, with
+`SHUTTLE_RATE_LIMIT_FALLBACK`:
+
+| Mode | What happens while the shared state cannot be reached |
+| --- | --- |
+| `local` | The request is counted in the window of the **process**. The flood is bounded by the number of the replicas instead of being unbounded. |
+| `open` | Every request is allowed. The behaviour of the releases before this one. |
+| `closed` | Every request is refused, with a `retry-after`. |
+
+The default is `local`. The window of the process is the window of the
+configuration, so a replica enforces the budget of the deployment for the
+callers it sees. The budget of a caller is spent a little faster than it
+should be — the window of the process does not know about the requests the
+other replicas counted — and the direction of the error is the safe one:
+the caller is refused a little early.
+
+The degradation is **visible**: it is counted in the new metric
+`shuttle_rate_limit_fallback_total{scope}` and it is written in the log, so
+an operator sees that the limits of the deployment are not the limits that
+are running.
+
+A deployment that depends on the old behaviour sets
+`SHUTTLE_RATE_LIMIT_FALLBACK=open`.
+
+The answers of the gateway keep their status and their shape (§16.2, rule
+6): the refusal of a limit is still a `429` with a `retry-after`, and the
+new modes refuse in the same shape. The scopes of §9 keep their meaning,
+and the failure path of the shared state gains a defined behaviour instead
+of an undefined one — the same shape of change as the admission of the
+requests and the breaker of the access service in the `1.1.0`.
+
+### The log of a request names the caller
+
+The log of a request carried the route, the method, the path, the status
+and the duration — and **not the caller**. A gateway that decides who
+reaches what wrote a log that could not say who reached what, and an
+operator could not answer "who used this workspace" with the logs of the
+gateway.
+
+The subject of the caller and the workspace of the request are now in the
+line of the request and in the lines of the refusals, so a denial says who
+was denied. The subject is the identifier of the caller at the identity
+provider: it is not a credential, and it is not redacted — the redaction is
+for the credentials.
+
+The wording of the log is not a contract of the release (§16.1), and the
+**fields** that carry the identity of the caller are what an operator reads
+the log for.
+
 ## 1.1.0
 
 A **MINOR** release: the contracts of §16.1 of the specification are
