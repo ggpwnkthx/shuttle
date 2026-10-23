@@ -100,11 +100,19 @@ export interface ConfigurationStoreOptions {
   /**
    * The ranges of the environment.
    *
-   * They are added to the ranges of the file: an operator may configure the
-   * ranges of a deployment in the file and the ranges of an installation in
-   * the environment.
+   * They replace the ranges of the file when the environment names them:
+   * an operator may configure the ranges of a deployment in the file and
+   * the ranges of an installation in the environment, and the environment
+   * is the one that wins when it says anything.
    */
   trustedProxies?: string[]
+  /**
+   * True when the environment names the ranges of the trusted proxies.
+   *
+   * When it is false, the ranges of the file are the ones of the
+   * deployment.
+   */
+  trustedProxiesConfigured?: boolean
 }
 
 /**
@@ -121,6 +129,7 @@ export class ConfigurationStore {
   #source: string
   #defaults: EnvironmentDefaults
   #trustedProxies: string[]
+  #trustedProxiesConfigured: boolean
   #onPublished?: (snapshot: ConfigurationSnapshot) => void
 
   constructor(options: ConfigurationStoreOptions) {
@@ -132,6 +141,7 @@ export class ConfigurationStore {
       defaultAccessStaleGraceMs: options.defaultAccessStaleGraceMs,
     }
     this.#trustedProxies = options.trustedProxies ?? []
+    this.#trustedProxiesConfigured = options.trustedProxiesConfigured ?? false
     this.#onPublished = options.onPublished
   }
 
@@ -167,7 +177,12 @@ export class ConfigurationStore {
    * valid leaves the running one untouched.
    */
   apply(raw: unknown): ReloadResult {
-    const result = compileTable(raw, this.#defaults, this.#trustedProxies)
+    const result = compileTable(
+      raw,
+      this.#defaults,
+      this.#trustedProxies,
+      this.#trustedProxiesConfigured
+    )
     if (!result.ok) {
       const details = [...result.errors, ...result.conflicts]
       this.#error = {

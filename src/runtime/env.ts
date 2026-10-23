@@ -173,6 +173,24 @@ export interface NetworkSettings {
   externalProto: 'http' | 'https'
   /** The extra ranges whose forwarding headers are trusted. */
   trustedProxies: string[]
+  /**
+   * True when the environment names the ranges of the trusted proxies.
+   *
+   * The ranges of the environment replace the ones of the configuration
+   * file when it does: an operator that names the proxies of the
+   * deployment in the environment is not surprised by the ranges of the
+   * file.
+   */
+  trustedProxiesConfigured: boolean
+  /**
+   * The number of trusted proxies that are in front of the gateway.
+   *
+   * Every one of them appends the address it observed to the chain of
+   * `x-forwarded-for`, so the chain holds one entry per proxy. The number
+   * is what tells the entries the proxies wrote from the ones a client
+   * injected, and the address of the caller is never one of the latter.
+   */
+  trustedProxyHops: number
 }
 
 /** The settings of the browser. */
@@ -688,6 +706,19 @@ const EnvSchema = z.object({
   SHUTTLE_UPSTREAM_BREAKER_COOLDOWN_MS: intEnv(30_000, { min: 0 }),
 
   SHUTTLE_TRUSTED_PROXIES: listEnv(),
+  /**
+   * The number of trusted proxies that are in front of the gateway.
+   *
+   * Every one of them appends the address it observed to the chain of
+   * `x-forwarded-for`. The number of the proxies is what tells the
+   * entries they wrote from the ones a client injected: the address of the
+   * caller is the entry that is this many positions from the right, and a
+   * client cannot choose it.
+   *
+   * The default is one: a deployment behind a single ingress, which is
+   * the usual one.
+   */
+  SHUTTLE_TRUSTED_PROXY_HOPS: intEnv(1, { min: 1, max: 16 }),
   SHUTTLE_EXTERNAL_PROTO: z.enum(['http', 'https']).default('http'),
   SHUTTLE_ALLOWED_ORIGINS: listEnv(),
   SHUTTLE_CSRF_STRICT: boolEnv(),
@@ -918,6 +949,8 @@ export function readEnv(env: Env = process.env): RuntimeSettings {
       port: parsed.SHUTTLE_GATEWAY_PORT,
       externalProto: parsed.SHUTTLE_EXTERNAL_PROTO,
       trustedProxies: parsed.SHUTTLE_TRUSTED_PROXIES,
+      trustedProxiesConfigured: env.SHUTTLE_TRUSTED_PROXIES !== undefined,
+      trustedProxyHops: parsed.SHUTTLE_TRUSTED_PROXY_HOPS,
     },
     oidc: {
       issuer: parsed.SHUTTLE_OIDC_ISSUER ?? DEVELOPMENT_OIDC_ISSUER,
@@ -1074,6 +1107,13 @@ export interface ControlSettings {
   defaults: EnvironmentDefaults
   /** The ranges whose forwarding headers are trusted. */
   trustedProxies: string[]
+  /**
+   * True when the environment names the ranges of the trusted proxies.
+   *
+   * The ranges of the environment replace the ones of the configuration
+   * file when it does.
+   */
+  trustedProxiesConfigured: boolean
   /** The settings of the pool of the connections of a Postgres server. */
   postgres: PostgresSettings
 }
@@ -1199,6 +1239,7 @@ export function readControlEnv(env: Env = process.env): ControlSettings {
       defaultAccessStaleGraceMs: parsed.SHUTTLE_ACCESS_STALE_GRACE_MS,
     },
     trustedProxies: parsed.SHUTTLE_TRUSTED_PROXIES,
+    trustedProxiesConfigured: env.SHUTTLE_TRUSTED_PROXIES !== undefined,
     postgres: {
       poolMax: 10,
       connectionTimeoutMs: 5_000,

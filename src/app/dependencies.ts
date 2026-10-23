@@ -65,6 +65,13 @@ export interface GatewayDependencies {
   browser: BrowserSettings
   /** The protocol the callers use towards the gateway. */
   externalProto: 'http' | 'https'
+  /**
+   * The number of trusted proxies that are in front of the gateway.
+   *
+   * It is what tells the entries the proxies wrote to the chain of the
+   * forwarded addresses from the ones a client injected.
+   */
+  trustedProxyHops: number
   /** The bearer token that guards the metrics endpoint. */
   metricsToken?: string
   /** The observer of the gateway. */

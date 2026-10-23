@@ -55,6 +55,14 @@ export interface ForwardingContextOptions {
   headers: Headers
   /** The ranges whose forwarding headers are trusted. */
   trustedProxies: readonly string[]
+  /**
+   * The number of trusted proxies that are in front of the gateway.
+   *
+   * Every one of them appends the address it observed to the chain of
+   * `x-forwarded-for`, so the chain holds one entry per proxy, on its
+   * right. The default is one: the deployment behind a single ingress.
+   */
+  trustedProxyHops?: number
   /** The protocol the deployment is reached with, when nothing is reported. */
   externalProto: 'http' | 'https'
 }
@@ -62,15 +70,21 @@ export interface ForwardingContextOptions {
 /**
  * Computes the forwarding context of a request.
  *
- * The chain of the forwarded addresses is read from the right: the entry
- * that was added last is the address of the hop that is closest to the
- * gateway, and the entries on its left were added earlier. A client can
- * only add entries on the left of the chain it sends, so the address of the
- * caller is the *right-most* entry that is not a trusted proxy.
+ * The chain of the forwarded addresses is read from the **right**: the
+ * entries the trusted proxies appended are the ones on the right, and the
+ * entries a client injected are on the left of them. The number of the
+ * proxies is what tells the two apart, so the address of the caller is the
+ * entry that is `trustedProxyHops` positions from the right.
  *
- * Reading the left-most entry instead would let a client that sends its own
- * `x-forwarded-for` header choose the address the gateway attributes to it,
- * and with it the key of the rate limiter.
+ * The address of the caller is therefore never an entry a client chose:
+ * the entries it injected are always on the left of the ones the proxies
+ * wrote. The ranges of the trusted proxies do not decide it — they decide
+ * whether the peer is a proxy at all — so a client whose own address is
+ * inside one of those ranges cannot pick the address the gateway
+ * attributes to it, and with it the key of the rate limiter.
+ *
+ * When the chain is shorter than the number of proxies, the gateway does
+ * not know the caller: the address of the peer is the answer.
  */
 export function resolveForwardingContext(options: ForwardingContextOptions): ForwardingContext {
   const peerTrusted = ipInRanges(options.peerAddress, options.trustedProxies)
@@ -81,12 +95,13 @@ export function resolveForwardingContext(options: ForwardingContextOptions): For
         .map((part) => part.trim())
         .filter(Boolean)
     : []
-  const clientIndex = rightmostUntrustedIndex(received, options.trustedProxies)
-  const clientIp = clientIndex === -1 ? options.peerAddress : received[clientIndex]!
+  const hops = hopsOf(options.trustedProxyHops)
+  const clientIndex = received.length - hops
+  const clientIp = clientIndex < 0 ? options.peerAddress : received[clientIndex]!
   // The chain that is forwarded upstream starts at the caller. The entries
   // on the left of it are the ones a client injected, so they are dropped.
   const chain = [
-    ...(clientIndex === -1 ? [] : received.slice(clientIndex)),
+    ...(clientIndex < 0 ? [] : received.slice(clientIndex)),
     options.peerAddress,
   ].filter(Boolean)
 
@@ -111,6 +126,18 @@ const HOST_PATTERN = /^[A-Za-z0-9._~:[\]-]+$/
 
 /** The maximum length of a host. */
 const MAX_HOST_LENGTH = 255
+
+/**
+ * The number of the trusted proxies, as a whole number of at least one.
+ *
+ * A value that is not a number is one: the deployment behind a single
+ * ingress is the usual one, and a value that cannot be understood is not
+ * a reason to stop answering the requests.
+ */
+function hopsOf(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 1
+  return Math.max(1, Math.trunc(value))
+}
 
 /**
  * Reports whether a value may be used as the host of a request.
@@ -150,15 +177,4 @@ export function resolveEffectiveHost(
   if (candidates.length === 0) return headerHost
   const chosen = candidates[candidates.length - 1]!
   return isPlausibleHost(chosen) ? chosen : headerHost
-}
-
-/**
- * The index of the right-most address of a chain that is not a trusted
- * proxy, or -1 when every entry is a trusted proxy.
- */
-function rightmostUntrustedIndex(entries: string[], trustedProxies: readonly string[]): number {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    if (!ipInRanges(entries[index]!, trustedProxies)) return index
-  }
-  return -1
 }

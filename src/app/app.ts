@@ -71,6 +71,7 @@ function forwardingOf(
     peerAddress: dependencies.peerAddress(context.req.raw),
     headers: context.req.raw.headers,
     trustedProxies: snapshot?.trustedProxies ?? [],
+    trustedProxyHops: dependencies.trustedProxyHops,
     externalProto: dependencies.externalProto,
   })
 }

@@ -302,6 +302,7 @@ export async function createRuntime(
     defaultReplayMaxBytes: settings.limits.replayMaxBytes,
     defaultAccessStaleGraceMs: settings.access.staleGraceMs,
     trustedProxies: settings.network.trustedProxies,
+    trustedProxiesConfigured: settings.network.trustedProxiesConfigured,
     // The policy that is running is written in the log: the route table
     // and the environment are large, and an operator has to be able to see
     // what the gateway does without reading the two.
@@ -650,6 +651,7 @@ export async function createRuntime(
       csrfStrict: settings.browser.csrfStrict,
     },
     externalProto: settings.network.externalProto,
+    trustedProxyHops: settings.network.trustedProxyHops,
     metricsToken: settings.observability.metricsToken,
     observer,
     logger,

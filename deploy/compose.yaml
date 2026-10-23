@@ -39,7 +39,12 @@ services:
       SHUTTLE_COOKIE_SECURE: "false"
       SHUTTLE_EXTERNAL_PROTO: http
       SHUTTLE_LOG_LEVEL: info
-      SHUTTLE_TRUSTED_PROXIES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      # The ranges of the proxies of the stack: the network of docker and
+      # the loopback of the host. The variable replaces the ranges of the
+      # configuration file.
+      SHUTTLE_TRUSTED_PROXIES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32,::1/128
+      # One proxy is in front of the gateway: the port of the host.
+      SHUTTLE_TRUSTED_PROXY_HOPS: 1
     volumes:
       - ../config/routes.json:/etc/shuttle/routes.json:ro
     depends_on:

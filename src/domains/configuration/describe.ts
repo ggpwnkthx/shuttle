@@ -16,7 +16,7 @@
  */
 
 import type { AuthMode } from '../authentication'
-import type { CompiledRoute } from '../routing'
+import { detectShadowedRoutes, type CompiledRoute } from '../routing'
 import type { CrossSitePolicy, Timeouts } from './schema'
 import type { ConfigurationSnapshot } from './store'
 import type { CompiledTable } from './compile'
@@ -36,6 +36,8 @@ export type ConfigurationWarningCode =
   | 'unbounded_body'
   /** The route names several upstreams and the failover is limited. */
   | 'limited_failover'
+  /** Another route handles the requests of this one for some of its hosts. */
+  | 'shadowed_route'
 
 /** A warning about a setting that is permissive. */
 export interface ConfigurationWarning {
@@ -187,6 +189,22 @@ function warningsOf(route: CompiledRoute<EffectiveRoute>): ConfigurationWarning[
 }
 
 /**
+ * Names the routes that another route hides for some of its requests.
+ *
+ * The specificity of the host is decided before the method, so a route of a
+ * more specific host handles the requests of a catch-all that names the
+ * method of the request. The deployment wrote two routes and only one of
+ * them answers: it deserves to know which one.
+ */
+function shadowWarnings(routes: readonly CompiledRoute<EffectiveRoute>[]): ConfigurationWarning[] {
+  return detectShadowedRoutes(routes).map((shadowed) => ({
+    routeId: shadowed.routeId,
+    code: 'shadowed_route' as const,
+    message: `the route "${shadowed.byRouteId}" handles the host "${shadowed.host}" with a more specific host, so the route never handles the method ${shadowed.methods.join(', ')} for it`,
+  }))
+}
+
+/**
  * Describes the configuration that is running.
  *
  * The description is a plain value: it holds nothing of the gateway and it
@@ -194,7 +212,10 @@ function warningsOf(route: CompiledRoute<EffectiveRoute>): ConfigurationWarning[
  */
 export function describeConfiguration(snapshot: ConfigurationSnapshot): ConfigurationDescription {
   const routes = snapshot.routes.map((route) => describeRoute(route))
-  const warnings = snapshot.routes.flatMap((route) => warningsOf(route))
+  const warnings = [
+    ...snapshot.routes.flatMap((route) => warningsOf(route)),
+    ...shadowWarnings(snapshot.routes),
+  ]
   return {
     revision: snapshot.revision,
     source: snapshot.source,
@@ -218,6 +239,9 @@ export function describeTable(table: CompiledTable): {
   warnings: ConfigurationWarning[]
 } {
   const routes = table.routes.map((route) => describeRoute(route))
-  const warnings = table.routes.flatMap((route) => warningsOf(route))
+  const warnings = [
+    ...table.routes.flatMap((route) => warningsOf(route)),
+    ...shadowWarnings(table.routes),
+  ]
   return { routeCount: routes.length, routes, warnings }
 }

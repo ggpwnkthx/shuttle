@@ -155,6 +155,7 @@ async function dispatchRequest(
     peerAddress: dependencies.peerAddress(context.req.raw),
     headers: context.req.raw.headers,
     trustedProxies: snapshot.trustedProxies,
+    trustedProxyHops: dependencies.trustedProxyHops,
     externalProto: dependencies.externalProto,
   })
   context.set('forwarding', forwarding)

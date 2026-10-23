@@ -9,10 +9,19 @@
  *
  * 1. the specificity of the host: an exact host, then a wildcard
  *    (`*.example.com`), then the catch-all (`*`);
- * 2. the length of the literal prefix of the path template (the part in
+ * 2. the method: a route that names the method of the request wins over a
+ *    route that names none;
+ * 3. the length of the literal prefix of the path template (the part in
  *    front of the first placeholder);
- * 3. the number of segments of the template;
- * 4. the id of the route, alphabetically.
+ * 4. the number of segments of the template;
+ * 5. the id of the route, alphabetically.
+ *
+ * The **host comes first**: a route of a more specific host is never
+ * shadowed by a route of a less specific one, not even when the less
+ * specific one names the method of the request. A catch-all that names
+ * `GET` used to handle the `GET` of a host that had a route of its own,
+ * and the policy of that route — its authentication, its limits, its
+ * upstream — was never applied to those requests.
  *
  * Two routes that could match exactly the same request (the same kind of
  * host with the same value and the same template skeleton) are ambiguous and
@@ -368,17 +377,22 @@ function matcherFor(route: CompiledRoute<unknown>): MatchFunction<ParamData> {
 /**
  * Finds the route that handles a request.
  *
- * The routes are expected to be sorted by `sortRoutes`: the first route
- * that matches wins.
+ * The routes are expected to be sorted by `sortRoutes`, but the order of
+ * the list is not what decides: every route that matches the request is
+ * compared with the documented precedence, and the best one wins.
  *
- * The method of the request decides between the routes that match the host
- * and the path:
+ * A route is a candidate when it matches the host of the request, when its
+ * path template matches the path of the request, and when it names the
+ * method of the request or no method at all. A route that names other
+ * methods does not handle the request.
  *
- * - a route that names the methods it accepts handles the request only for
- *   those methods;
- * - among the routes that match, one that names the method of the request
- *   wins over one that names none. A route that names other methods does
- *   not handle the request at all.
+ * The candidates are then compared:
+ *
+ * - the specificity of the host comes first, so a route of a more specific
+ *   host is never shadowed by a route of a less specific one;
+ * - the method comes next: one that names the method of the request wins
+ *   over one that names none;
+ * - the specificity of the path and the id of the route break the ties.
  */
 export function matchRoute<TPayload>(
   routes: readonly CompiledRoute<TPayload>[],
@@ -389,23 +403,66 @@ export function matchRoute<TPayload>(
   const normalizedHost = normalizeHost(host)
   const wanted = method === undefined ? null : method.toUpperCase()
 
-  // The routes that name their methods come first: they are the ones that
-  // were written for this method. The routes that name none come second,
-  // and they are the fallback of a request that no route names.
-  for (const named of [true, false]) {
-    for (const route of routes) {
-      const names = route.methods.length > 0
-      if (names !== named) continue
-      if (names && (wanted === null || !route.methods.includes(wanted))) continue
-      if (!hostMatches(route.host, normalizedHost)) continue
-      const result = matcherFor(route as CompiledRoute<unknown>)(path)
-      if (!result) continue
-      const match = buildMatch(route, path, result)
-      if (match === null) return null
-      return match
+  let winner: CompiledRoute<TPayload> | null = null
+  let winnerResult: { path: string; params: Partial<Record<string, string | string[]>> } | null =
+    null
+  let winnerMethodRank = 0
+
+  for (const route of routes) {
+    const names = route.methods.length > 0
+    // A route that names the methods it accepts handles the request only
+    // for those methods.
+    if (names && (wanted === null || !route.methods.includes(wanted))) continue
+    if (!hostMatches(route.host, normalizedHost)) continue
+    const result = matcherFor(route as CompiledRoute<unknown>)(path)
+    if (!result) continue
+    // The routes that name the method of the request are the ones that
+    // were written for it: they win over the routes that name none.
+    const methodRank = names ? 0 : 1
+    if (winner === null || isBetter(route, methodRank, winner, winnerMethodRank)) {
+      winner = route
+      winnerResult = result
+      winnerMethodRank = methodRank
     }
   }
-  return null
+
+  if (winner === null || winnerResult === null) return null
+  const match = buildMatch(winner, path, winnerResult)
+  if (match === null) return null
+  return match
+}
+
+/**
+ * Reports whether a candidate wins over the route that is already the
+ * winner.
+ *
+ * The comparison follows the documented precedence: the specificity of the
+ * host, then the method, then the specificity of the path and the id.
+ */
+function isBetter<TPayload>(
+  candidate: CompiledRoute<TPayload>,
+  candidateMethodRank: number,
+  incumbent: CompiledRoute<TPayload>,
+  incumbentMethodRank: number
+): boolean {
+  const a = candidate.precedence
+  const b = incumbent.precedence
+  // The host: an exact host wins over a wildcard, and a wildcard wins over
+  // the catch-all.
+  if (a[0] !== b[0]) return a[0] < b[0]
+  // The method: a route that names the method of the request wins over a
+  // route that names none.
+  if (candidateMethodRank !== incumbentMethodRank) {
+    return candidateMethodRank < incumbentMethodRank
+  }
+  // The path and the id.
+  for (let index = 1; index < a.length; index++) {
+    const left = a[index]!
+    const right = b[index]!
+    if (left < right) return true
+    if (left > right) return false
+  }
+  return false
 }
 
 /**
@@ -483,6 +540,73 @@ export function detectConflicts<TPayload>(routes: CompiledRoute<TPayload>[]): st
   }
 
   return conflicts
+}
+
+/**
+ * A route that another route hides for the hosts of the other one.
+ *
+ * The precedence of the matcher decides the host before the method, so a
+ * route of a more specific host handles the requests of a less specific
+ * one — even when the less specific one names the method of the request.
+ * A deployment that wrote the catch-all first and the specific host
+ * afterwards sees a different route answer, and it deserves to know.
+ */
+export interface ShadowedRoute {
+  /** The route that never handles those requests. */
+  routeId: string
+  /** The route that handles them instead. */
+  byRouteId: string
+  /** The host the other route handles. */
+  host: string
+  /** The methods that are handled by the other route. */
+  methods: string[]
+}
+
+/**
+ * Reports the routes that another route hides for some of its requests.
+ *
+ * A route is hidden when a route of a more specific host handles the same
+ * paths and one of the methods it names. The routes that name no method are
+ * not reported: the host decides for them, and that is the documented
+ * precedence.
+ */
+export function detectShadowedRoutes<TPayload>(
+  routes: readonly CompiledRoute<TPayload>[]
+): ShadowedRoute[] {
+  const shadowed: ShadowedRoute[] = []
+  for (const general of routes) {
+    if (general.host.kind === 'exact') continue
+    if (general.methods.length === 0) continue
+    for (const specific of routes) {
+      if (specific === general) continue
+      if (!coversHost(general.host, specific.host)) continue
+      if (general.skeleton !== specific.skeleton) continue
+      const methods =
+        specific.methods.length === 0
+          ? [...general.methods]
+          : general.methods.filter((method) => specific.methods.includes(method))
+      if (methods.length === 0) continue
+      shadowed.push({
+        routeId: general.id,
+        byRouteId: specific.id,
+        host: specific.definition.host,
+        methods,
+      })
+    }
+  }
+  return shadowed
+}
+
+/**
+ * Reports whether the host of a general route covers the host of a more
+ * specific one.
+ */
+function coversHost(general: HostPattern, specific: HostPattern): boolean {
+  if (general.kind === 'any') return true
+  if (general.kind !== 'wildcard') return false
+  // A wildcard covers the exact hosts of its own domain, and nothing else.
+  if (specific.kind === 'wildcard') return specific.value === general.value
+  return specific.value.endsWith(`.${general.value}`)
 }
 
 /**

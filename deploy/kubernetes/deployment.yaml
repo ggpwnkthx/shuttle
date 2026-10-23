@@ -137,9 +137,16 @@ spec:
             - name: SHUTTLE_COOKIE_SECURE
               value: "true"
             # The ranges of the ingress: the forwarding headers of a request
-            # are only trusted from them.
+            # are only trusted from them. The ranges name the proxies of the
+            # deployment, and they should be as narrow as the cluster allows:
+            # a range that covers the addresses of the callers trusts every
+            # one of them to write the headers of the chain.
             - name: SHUTTLE_TRUSTED_PROXIES
               value: 10.0.0.0/8
+            # The number of the proxies that are in front of the gateway: the
+            # ingress of the cluster is one.
+            - name: SHUTTLE_TRUSTED_PROXY_HOPS
+              value: "1"
             # The limits. At least one of them has to be set: the gateway
             # refuses to start in production without one.
             # The scope of the deployment is the only one that bounds a

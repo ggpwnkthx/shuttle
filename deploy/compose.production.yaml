@@ -54,7 +54,13 @@ services:
       SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX: ${SHUTTLE_RATE_LIMIT_PRINCIPAL_MAX:-300}
       SHUTTLE_EXTERNAL_PROTO: https
       SHUTTLE_COOKIE_SECURE: "true"
+      # The ranges of the proxies of the deployment. The variable replaces
+      # the ranges of the configuration file, and an empty value means that
+      # no proxy is trusted: the address of the peer is then the address of
+      # the caller.
       SHUTTLE_TRUSTED_PROXIES: ${SHUTTLE_TRUSTED_PROXIES:-}
+      # The number of the proxies that are in front of the gateway.
+      SHUTTLE_TRUSTED_PROXY_HOPS: ${SHUTTLE_TRUSTED_PROXY_HOPS:-1}
       SHUTTLE_LOG_LEVEL: ${SHUTTLE_LOG_LEVEL:-info}
       SHUTTLE_SHUTDOWN_TIMEOUT_MS: "15000"
     volumes:

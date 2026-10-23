@@ -195,7 +195,7 @@ configuration nobody can reason about.
 | `defaults.accessCacheTtlMs` | The lifetime of a cached decision of the access service for the routes that declare none (§6). The default is the one of the environment. |
 | `defaults.accessStaleGraceMs` | The grace of an outage of the access service for the routes that declare none (§6). The default is the one of the environment. |
 | `defaults.replayMaxBytes` | The size of a body that may be sent again to a second upstream, for the routes that declare none (§11.4). The default is the one of the environment. |
-| `trustedProxies` | The ranges whose forwarding headers are honoured (§7.3). The ranges of the environment are added to them. |
+| `trustedProxies` | The ranges whose forwarding headers are honoured (§7.3). The ranges of the environment replace them when the environment names them. |
 | `reservedPaths` | The paths the gateway keeps for itself, on top of §2.2. |
 | `routes` | At least one route. |
 
@@ -234,17 +234,26 @@ A route that claims a reserved path is refused for the same reason.
 
 ### 3.3 The precedence of the routes
 
-The routes are sorted once, when the configuration is loaded. The first
-route that matches the host and the path of a request handles it.
+The routes are compared once, when a request is matched. The route that
+wins is the one that is the most specific.
 
 1. The specificity of the host: an exact host, then a wildcard
    (`*.example.com`), then the catch-all (`*`).
-2. The length of the literal prefix of the path template.
-3. The number of segments of the template.
-4. The id of the route, alphabetically.
+2. The method of the request: a route that names the method of the request
+   wins over a route that names none.
+3. The length of the literal prefix of the path template.
+4. The number of segments of the template.
+5. The id of the route, alphabetically.
 
-The **method** of the request decides between the routes that match the host
-and the path:
+The **host comes first**. A route of a more specific host is never shadowed
+by a route of a less specific one, not even when the less specific one
+names the method of the request: a catch-all that names `GET` does not
+answer the `GET` of a host that has a route of its own, and the policy of
+that route — its authentication, its limits, its upstream — is the one that
+applies to those requests.
+
+The **method** of the request decides between the routes that match the
+same host:
 
 - a route that names the methods it accepts handles the request only for
   those methods;
@@ -825,10 +834,17 @@ Written by the gateway:
 | `x-shuttle-workspace` | The workspace, when the route has one. |
 | `x-shuttle-signature` | The signature of the identity (§7.4). |
 
-Identity values are stripped of control characters and truncated to 512
-characters. A subject that is empty after that cannot be written into a
-header at all: the request fails with `500 internal_error`, so the upstream
-never receives an identity it cannot trust.
+The **e-mail** and the **workspace** are stripped of control characters and
+truncated to 512 characters.
+
+The **subject is never rewritten**. A subject that carries a control
+character, one that is empty and one that is longer than 512 characters
+cannot be written into a header: the request fails with `500
+internal_error`, so the upstream never receives an identity it cannot
+trust. A subject that was rewritten would turn two callers into one: the
+access service, which decides with the subject it was given, and the
+upstream, which reads the subject of the header, would then speak of two
+different callers.
 
 ### 7.2 Upstream → client
 
@@ -844,13 +860,30 @@ another host is left alone.
 ### 7.3 The forwarding headers and the client address
 
 The forwarding headers are honoured **only** when the immediate peer is in
-`trustedProxies` (the configuration file plus `SHUTTLE_TRUSTED_PROXIES`).
-Otherwise they are ignored and the peer address is the client address.
+`trustedProxies` (the configuration file, or `SHUTTLE_TRUSTED_PROXIES`
+when the environment names it — the environment replaces the ranges of the
+file, it does not add to them). Otherwise they are ignored and the peer
+address is the client address.
 
-The chain of `x-forwarded-for` is read from the **right**: the right-most
-entry that is not a trusted proxy is the client. The entries to its left
-were injected by the client and are dropped. The chain that is forwarded
-upstream starts at the client and ends at the peer of the gateway.
+The chain of `x-forwarded-for` is read from the **right**. Every trusted
+proxy appends the address it observed to the chain, so the chain holds one
+entry per proxy on its right, and the entries a client injected are on the
+left of them. `SHUTTLE_TRUSTED_PROXY_HOPS` (one by default) is the number
+of those proxies, and the address of the caller is the entry that is that
+many positions from the right.
+
+The address of the caller is therefore **never an entry a client chose**:
+the entries it injected are always on the left of the ones the proxies
+wrote. The ranges of the trusted proxies do not decide it — they decide
+whether the peer is a proxy at all — so a caller whose own address is
+inside one of those ranges cannot choose the address the gateway
+attributes to it, and with it the key of the rate limiter.
+
+A chain that is shorter than the number of the proxies is not trusted: the
+address of the peer is the answer.
+
+The chain that is forwarded upstream starts at the caller and ends at the
+peer of the gateway.
 
 Reading the left-most entry instead would let a client that sends its own
 `x-forwarded-for` choose the address the gateway attributes to it, and with
@@ -930,7 +963,7 @@ field into another and no field can be confused with another one:
 | `path` | The path **as the upstream received it**: the base path of the upstream in front of the request path. |
 | `query` | The query string as the upstream received it, with its leading `?`. The empty string when there is none. |
 | `host` | The effective host (§7.3), lower-cased. |
-| `subject` | The subject, sanitized as in §7.1. |
+| `subject` | The subject, as it is. It is never rewritten (§7.1). |
 | `workspaceId` | The workspace, sanitized. The empty string when there is none. |
 | `email` | The e-mail, sanitized. The empty string when it is not known. |
 | `roles` | The roles, sorted ascending. The order is not part of the meaning. |
@@ -940,10 +973,19 @@ payload is one string that every replica and every upstream rebuilds
 byte for byte.
 
 The signature covers exactly the values that are written into the headers:
-the **sanitized** subject, e-mail and workspace, and the **filtered** roles
-(a role that contains a comma or a control character is dropped, because it
-would make the comma separated list of `x-shuttle-roles` ambiguous). The
-roles that are handed to the access service are not filtered.
+the **subject** as it is, the **sanitized** e-mail and workspace, and the
+**filtered** roles (a role that contains a comma or a control character is
+dropped, because it would make the comma separated list of
+`x-shuttle-roles` ambiguous). The roles that are handed to the access
+service are not filtered.
+
+The **subject is never rewritten**. A subject that carries a control
+character, one that is empty and one that is longer than the bound of a
+value of a header are refused: the request fails with `500` and the
+upstream never receives an identity it cannot trust. A sanitization of the
+subject would turn two callers into one — the access service, which decides
+with the subject it was given, and the upstream, which reads the subject of
+the header, would then speak of two different callers.
 
 **The value.** `v5=<the detached compact JWS>`. The version is part of the
 value so the format can change without breaking the verification, and a
@@ -1845,6 +1887,22 @@ user of the gateway holds neither the command that writes a hash nor the
 one that pushes a value. The read of the table and the write of it are
 therefore separated by the credentials on the two servers alike.
 
+The file of the ACL users of Redis ships with the project
+(`deploy/redis/shuttle.acl`). Two rules of its format are worth naming,
+because a file that breaks them is a file that does not do what it says:
+
+- the file holds **one rule per line** and nothing else: the server reads
+  it as a list of rules, and a line that is not a rule — a comment, for
+  example — stops the server from starting;
+- the command that writes a **password** is `>`, and the command that
+  reads a **key pattern** is `~`. A rule that writes `>~shuttle:s:*` does
+  not write a key pattern at all: it publishes a password that is the
+  pattern itself, and the user it defines may not touch a single key.
+
+The passwords are not in the file: the deployment writes them with an `ACL
+SETUSER` after the server started, and it does not save the server with
+`ACL SAVE`, so the file holds no secret.
+
 The least privilege is **tested**: a deployment that runs the gateway with
 the role of the gateway cannot write the route table, and the test proves
 it.
@@ -2009,6 +2067,10 @@ lists are numbered independently.
 | 51 | The caller in the log | The log of a request carries the subject of the caller and the workspace of the request: a gateway that decides who reaches what has to be able to say who reached what (§12.2). |
 | 52 | The administrative surface | It is a **separate process**, `shuttle-control`, that acts on the shared state directly. The gateway exposes no administrative endpoint and accepts no administrative token: a gateway that answers an administrative request is a request an attacker reaches (§12.7). |
 | 53 | The source of the route table | The route table is a file, or it is a list of **immutable revisions** in the shared state with a pointer that names the active one. The writes are compare and swap, the pointer is watched at least once a second, and every table goes through the same validation as the file of a deployment (§3.4). |
+| 54 | The precedence of the routes | The **host** is decided before the method: a route of a more specific host is never shadowed by a route of a less specific one, not even when the less specific one names the method of the request. A catch-all that names `GET` does not answer the `GET` of a host that has a route of its own (§3.3). |
+| 55 | The address of the caller | The chain of `x-forwarded-for` is read from the right, and the number of the proxies (`SHUTTLE_TRUSTED_PROXY_HOPS`) is what tells the entries the proxies wrote from the ones a client injected. The address of the caller is never an entry a client chose (§7.3). |
+| 56 | The subject of the caller | It is written **as it is**. A subject that cannot be written into a header is refused with a `500`, and it is never rewritten: a sanitization of the subject turns two callers into one (§7.1, §7.4). |
+| 57 | The ranges of the trusted proxies | The ranges of the environment **replace** the ones of the configuration file when the environment names them, and the file's ranges apply otherwise. A deployment that cannot narrow the ranges of its file is a deployment that trusts what it did not choose (§3.1, §7.3). |
 
 ---
 

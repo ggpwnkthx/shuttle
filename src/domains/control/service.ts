@@ -72,6 +72,8 @@ export interface ControlServiceOptions {
   defaults: EnvironmentDefaults
   /** The ranges whose forwarding headers are trusted. */
   trustedProxies?: string[]
+  /** True when the environment names the ranges of the trusted proxies. */
+  trustedProxiesConfigured?: boolean
   /** The window of the failures of the authentication, in milliseconds. */
   failureWindowMs?: number
 }
@@ -92,6 +94,7 @@ export class ControlService {
   #protectedRoutes: readonly string[]
   #defaults: EnvironmentDefaults
   #trustedProxies: string[]
+  #trustedProxiesConfigured: boolean
   #failureWindowMs: number
 
   constructor(options: ControlServiceOptions) {
@@ -103,6 +106,7 @@ export class ControlService {
     this.#protectedRoutes = options.protectedRoutes ?? []
     this.#defaults = options.defaults
     this.#trustedProxies = options.trustedProxies ?? []
+    this.#trustedProxiesConfigured = options.trustedProxiesConfigured ?? false
     this.#failureWindowMs = options.failureWindowMs ?? 60_000
   }
 
@@ -157,7 +161,12 @@ export class ControlService {
    * before it writes it.
    */
   async validate(table: unknown): Promise<ConfigValidation> {
-    const result = compileTable(table, this.#defaults, this.#trustedProxies)
+    const result = compileTable(
+      table,
+      this.#defaults,
+      this.#trustedProxies,
+      this.#trustedProxiesConfigured
+    )
     const active = await this.activeConfig()
     const diff = diffTables(active.table, table)
     if (!result.ok) {
@@ -193,7 +202,12 @@ export class ControlService {
     address: string
     request: unknown
   }): Promise<ConfigWriteOutcome> {
-    const compiled = compileTable(input.table, this.#defaults, this.#trustedProxies)
+    const compiled = compileTable(
+      input.table,
+      this.#defaults,
+      this.#trustedProxies,
+      this.#trustedProxiesConfigured
+    )
     if (!compiled.ok) {
       return {
         ok: false,

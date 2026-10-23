@@ -3,6 +3,7 @@ import {
   claimsReservedPath,
   compileRoute,
   detectConflicts,
+  detectShadowedRoutes,
   matchRoute,
   normalizeHost,
   sortRoutes,
@@ -157,6 +158,96 @@ describe('the precedence of the routes', () => {
       { id: 'a-route', host: '*', path: '/{a}' },
     ])
     expect(matchRoute(routes, 'api.example.com', '/one')?.route.id).toBe('a-route')
+  })
+
+  test('a more specific host wins over a less specific one that names the method', () => {
+    const routes = table([
+      { id: 'catch-all', host: '*', path: '/', methods: ['GET'] },
+      { id: 'exact', host: 'api.example.com', path: '/' },
+    ])
+    // The host is decided before the method: the route of the specific
+    // host handles the request, and the catch-all does not shadow it.
+    expect(matchRoute(routes, 'api.example.com', '/', 'GET')?.route.id).toBe('exact')
+    expect(matchRoute(routes, 'other.example.com', '/', 'GET')?.route.id).toBe('catch-all')
+  })
+
+  test('a wildcard does not shadow the exact host of the request', () => {
+    const routes = table([
+      { id: 'wildcard', host: '*.example.com', path: '/', methods: ['GET'] },
+      { id: 'exact', host: 'api.example.com', path: '/' },
+    ])
+    expect(matchRoute(routes, 'api.example.com', '/', 'GET')?.route.id).toBe('exact')
+    expect(matchRoute(routes, 'www.example.com', '/', 'GET')?.route.id).toBe('wildcard')
+  })
+
+  test('a route of another method does not shadow the host of the request', () => {
+    const routes = table([
+      { id: 'catch-all', host: '*', path: '/', methods: ['GET'] },
+      { id: 'exact', host: 'api.example.com', path: '/', methods: ['POST'] },
+    ])
+    // The exact route does not handle the GET, so the catch-all does.
+    expect(matchRoute(routes, 'api.example.com', '/', 'GET')?.route.id).toBe('catch-all')
+    expect(matchRoute(routes, 'api.example.com', '/', 'POST')?.route.id).toBe('exact')
+  })
+
+  test('the order of the list does not decide', () => {
+    const definitions: RouteMatchDefinition[] = [
+      { id: 'catch-all', host: '*', path: '/', methods: ['GET'] },
+      { id: 'exact', host: 'api.example.com', path: '/' },
+    ]
+    const sorted = sortRoutes(definitions.map(route))
+    const reversed = [...sorted].reverse()
+    expect(matchRoute(sorted, 'api.example.com', '/', 'GET')?.route.id).toBe('exact')
+    expect(matchRoute(reversed, 'api.example.com', '/', 'GET')?.route.id).toBe('exact')
+  })
+})
+
+describe('the routes that another route hides', () => {
+  test('a catch-all that names a method is hidden by the route of a host', () => {
+    const routes = table([
+      { id: 'catch-all', host: '*', path: '/', methods: ['GET'] },
+      { id: 'exact', host: 'api.example.com', path: '/' },
+    ])
+    expect(detectShadowedRoutes(routes)).toEqual([
+      {
+        routeId: 'catch-all',
+        byRouteId: 'exact',
+        host: 'api.example.com',
+        methods: ['GET'],
+      },
+    ])
+  })
+
+  test('a route that names no method is not hidden: the host decides for it', () => {
+    const routes = table([
+      { id: 'catch-all', host: '*', path: '/' },
+      { id: 'exact', host: 'api.example.com', path: '/' },
+    ])
+    expect(detectShadowedRoutes(routes)).toEqual([])
+  })
+
+  test('a route that names another method is not hidden', () => {
+    const routes = table([
+      { id: 'catch-all', host: '*', path: '/', methods: ['GET'] },
+      { id: 'exact', host: 'api.example.com', path: '/', methods: ['POST'] },
+    ])
+    expect(detectShadowedRoutes(routes)).toEqual([])
+  })
+
+  test('a route of another path is not hidden', () => {
+    const routes = table([
+      { id: 'catch-all', host: '*', path: '/', methods: ['GET'] },
+      { id: 'exact', host: 'api.example.com', path: '/ws/{id}/' },
+    ])
+    expect(detectShadowedRoutes(routes)).toEqual([])
+  })
+
+  test('a wildcard is not hidden by a host that is not its own', () => {
+    const routes = table([
+      { id: 'wildcard', host: '*.example.com', path: '/', methods: ['GET'] },
+      { id: 'exact', host: 'api.other.test', path: '/' },
+    ])
+    expect(detectShadowedRoutes(routes)).toEqual([])
   })
 })
 

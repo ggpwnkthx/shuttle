@@ -3,6 +3,97 @@
 The behavior of the gateway is described in [docs/spec.md](docs/spec.md). The
 decisions behind it are in [docs/decisions.md](docs/decisions.md).
 
+## Unreleased
+
+The release fixes five defects of the security of a deployment. They are
+numbered as the decisions of [docs/decisions.md](docs/decisions.md) that
+carry them.
+
+### The users of the shared state in Redis
+
+The file of the ACL users of the server, `deploy/redis/shuttle.acl`, could
+not do what it said:
+
+- it held **comments**, and the server reads the file as a list of rules: a
+  line that is not a rule stops the server from starting. A deployment that
+  used the file had no shared state at all;
+- it wrote its key patterns with `>~`, and `>` is the command that writes a
+  **password**: the patterns were never written, the two users could not
+  touch a single key, and the passwords of the deployment were the
+  patterns themselves — they were published in the repository.
+
+The file holds one rule per line now, the patterns of the keys are `~`
+(read and write), `%W~` (write only) and `%R~` (read only), and the
+passwords are not in it. The deployment writes them after the server
+started:
+
+```sh
+redis-cli ACL SETUSER shuttle-gateway resetpass >"$REDIS_GATEWAY_PASSWORD"
+redis-cli ACL SETUSER shuttle-control resetpass >"$REDIS_CONTROL_PASSWORD"
+```
+
+**The migration**: a deployment that used the file has to write the
+passwords of the two users at every start, and it has to name the keys it
+uses. The file describes the keys of the default prefixes; a deployment
+that changed the prefixes of its state (`SHUTTLE_SESSION_KEY_PREFIX`,
+`SHUTTLE_SHARED_STATE_KEY_PREFIX`, `SHUTTLE_CONTROL_KEY_PREFIX`) has to
+write its own rules.
+
+### The precedence of the routes
+
+The **host** is decided before the method now (§3.3). A catch-all that
+names `GET` used to answer the `GET` of a host that had a route of its
+own, and the policy of that route — its authentication, its limits, its
+upstream — was never applied to those requests.
+
+**The migration**: a deployment whose catch-all answered for a host it
+names has to move that host to the catch-all, or to name the methods of
+the catch-all that the host does not answer. A deployment that names no
+method in its catch-all is not affected.
+
+### The address of the caller
+
+The chain of `x-forwarded-for` is read from the right, and the number of
+the proxies in front of the gateway is what tells the entries the proxies
+wrote from the ones a caller injected (§7.3). The right-most entry that is
+not a trusted proxy was used before: a caller whose own address was inside
+a trusted range was skipped, and the entry the caller wrote itself was
+taken for its address — the key of the rate limiter was the one the caller
+chose.
+
+The number of the proxies is the new variable `SHUTTLE_TRUSTED_PROXY_HOPS`
+(one by default).
+
+**The migration**: a deployment with more than one proxy in front of the
+gateway has to name the number of them. A deployment with one proxy — the
+usual one — has nothing to do.
+
+### The subject of the caller
+
+The subject is written **as it is** (§7.1, §7.4). It used to be
+sanitized, and a sanitization that removes a character of it turns two
+callers into one: the access service, which decides with the subject it
+was given, and the upstream, which reads the subject of the header, spoke
+of two different callers. A subject that carries a control character, one
+that is empty and one that is longer than 512 characters are refused with a
+`500` now.
+
+**The migration**: a deployment whose provider issues a subject with a
+control character in it sees a `500` instead of a request. The e-mail and
+the workspace of the caller are still sanitized: they are hints, not the
+identity.
+
+### The ranges of the trusted proxies
+
+The ranges of the environment **replace** the ones of the configuration
+file when the environment names them, and the file's ranges apply otherwise
+(§7.3). They used to be added, and a deployment could not narrow the
+ranges of its file.
+
+**The migration**: a deployment that set `SHUTTLE_TRUSTED_PROXIES` and
+relied on the ranges of its file as well has to name the ranges of the
+file in the variable. The sample of the project trusts no range now.
+
 ## 1.3.0
 
 A **MINOR** release: the contracts of §16.1 of the specification are

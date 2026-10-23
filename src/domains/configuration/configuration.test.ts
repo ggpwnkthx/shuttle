@@ -18,11 +18,12 @@ function baseConfig(overrides: Record<string, unknown> = {}): Record<string, unk
 }
 
 /** A store with the defaults of the tests. */
-function store(): ConfigurationStore {
+function store(options: { trustedProxiesConfigured?: boolean } = {}): ConfigurationStore {
   return new ConfigurationStore({
     source: '/etc/shuttle/routes.json',
     defaultMaxBodyBytes: 1_048_576,
     trustedProxies: ['10.0.0.0/8'],
+    trustedProxiesConfigured: options.trustedProxiesConfigured ?? true,
   })
 }
 
@@ -452,10 +453,16 @@ describe('the publication of a configuration', () => {
     expect(result.ok).toBe(false)
   })
 
-  test('the ranges of the environment are added to the ranges of the file', () => {
+  test('the ranges of the environment replace the ranges of the file', () => {
     const configuration = store()
     configuration.apply(baseConfig({ trustedProxies: ['192.168.0.0/16'] }))
-    expect(configuration.snapshot?.trustedProxies).toEqual(['10.0.0.0/8', '192.168.0.0/16'])
+    expect(configuration.snapshot?.trustedProxies).toEqual(['10.0.0.0/8'])
+  })
+
+  test('the ranges of the file apply when the environment names none', () => {
+    const configuration = store({ trustedProxiesConfigured: false })
+    configuration.apply(baseConfig({ trustedProxies: ['192.168.0.0/16'] }))
+    expect(configuration.snapshot?.trustedProxies).toEqual(['192.168.0.0/16'])
   })
 
   test('the paths of the gateway are reserved', () => {

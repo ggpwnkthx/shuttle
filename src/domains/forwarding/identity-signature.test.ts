@@ -237,6 +237,24 @@ describe('the identity that is written into the headers', () => {
     expect(() => writtenIdentity({ subject: '', roles: [] })).toThrow()
   })
 
+  test('a subject that carries a control character is refused', () => {
+    // The subject is the identity: it is never rewritten, because a
+    // sanitization that removes a character of it turns two callers into
+    // one.
+    expect(() => writtenIdentity({ subject: 'ad\u0001min', roles: [] })).toThrow()
+    expect(() => writtenIdentity({ subject: 'admin\n', roles: [] })).toThrow()
+  })
+
+  test('a subject that is too long is refused', () => {
+    expect(() => writtenIdentity({ subject: 'a'.repeat(513), roles: [] })).toThrow()
+    expect(writtenIdentity({ subject: 'a'.repeat(512), roles: [] }).subject).toHaveLength(512)
+  })
+
+  test('the subject is written as it is', () => {
+    const identity = writtenIdentity({ subject: 'user-1', roles: [] })
+    expect(identity.subject).toBe('user-1')
+  })
+
   test('a role that would make the list ambiguous is dropped', () => {
     const identity = writtenIdentity({
       subject: 'user-1',

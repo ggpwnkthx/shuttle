@@ -24,6 +24,7 @@ export {
   claimsReservedPath,
   compileRoute,
   detectConflicts,
+  detectShadowedRoutes,
   matchRoute,
   placeholderNames,
   sortRoutes,

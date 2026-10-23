@@ -235,6 +235,10 @@ export function ephemeralIdentityKey(): IdentitySigningKey {
  * The control characters are removed: a header cannot carry them, and a
  * value that carries one would be refused by the runtime instead of being
  * forwarded. The length is bounded.
+ *
+ * The function is for the values that are **hints** — the address of the
+ * caller and the workspace of the request. The subject of the caller is
+ * the identity itself, and it is never rewritten: see `writtenIdentity`.
  */
 export function sanitizeIdentityValue(value: string | undefined): string | undefined {
   if (value === undefined) return undefined
@@ -246,6 +250,21 @@ export function sanitizeIdentityValue(value: string | undefined): string | undef
     if (out.length >= MAX_IDENTITY_VALUE_LENGTH) break
   }
   return out.length > 0 ? out : undefined
+}
+
+/**
+ * Reports whether a value may be written into a header as it is.
+ *
+ * A header carries no control character, and the length of a value of an
+ * identity header is bounded.
+ */
+function isWritableIdentityValue(value: string): boolean {
+  if (value.length === 0 || value.length > MAX_IDENTITY_VALUE_LENGTH) return false
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) return false
+  }
+  return true
 }
 
 /**
@@ -293,18 +312,26 @@ export class IdentityNotWritableError extends Error {
 /**
  * The identity that is written into the headers of a request.
  *
- * The subject is required: a caller whose subject is empty after the
- * sanitization cannot be written into a header at all. The request fails
- * with `500 internal_error` in that case: the upstream never receives an
- * identity it cannot trust.
+ * The subject is required and it is written **as it is**: a subject that
+ * cannot be written into a header — one that carries a control character,
+ * one that is empty, one that is longer than the bound — makes the request
+ * fail with `500 internal_error`. The upstream never receives an identity
+ * it cannot trust.
+ *
+ * The subject is never rewritten. A sanitization that removes a character
+ * of a subject turns two callers into one: the access service, which
+ * decides with the subject it was given, and the upstream, which reads the
+ * subject of the header, would then speak of two different callers. The
+ * address of the caller and the workspace of the request are hints, and
+ * they are sanitized; the subject is the identity, and it is refused
+ * rather than rewritten.
  */
 export function writtenIdentity(identity: CallerIdentity): WrittenIdentity {
-  const subject = sanitizeIdentityValue(identity.subject)
-  if (!subject) {
+  if (!isWritableIdentityValue(identity.subject)) {
     throw new IdentityNotWritableError()
   }
   return {
-    subject,
+    subject: identity.subject,
     email: sanitizeIdentityValue(identity.email),
     roles: filterRoles(identity.roles),
     workspaceId: sanitizeIdentityValue(identity.workspaceId),

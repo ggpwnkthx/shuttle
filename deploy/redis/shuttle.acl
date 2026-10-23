@@ -1,25 +1,2 @@
-# The ACL users of the shared state of Shuttle.
-#
-# The file is the `aclfile` of the Redis server of the deployment:
-#
-#   redis-server --aclfile /etc/redis/shuttle.acl
-#
-# The two users are the boundary of the control plane (§12.8 of the
-# specification): the user of the gateway reads the route table and writes
-# nothing in it, and the user of the control plane writes it.
-#
-# The rules are applied in the order they are written: everything is
-# refused first, and the commands of each user are granted afterwards.
-#
-# The passwords are not in this file: the deployment replaces them with the
-# ones of its secret store, with an `ACL SETUSER` of the server.
-
-# The gateway: it writes the sessions, the limits and the heartbeats, and
-# it reads the route table. It does not hold the commands that write the
-# route table: the revisions and the pointer are hashes and the history is
-# a list, and this user may neither write a hash nor push a value.
-user shuttle-gateway on >~shuttle:s:* >~shuttle:u:* >~shuttle:cfg:hb:* ~shuttle:cfg:active ~shuttle:cfg:rev:* ~shuttle:cfg:revs -@all +@read +set +del +sadd +srem +pexpire +incr +hincrby +hdel +eval
-
-# The control plane: it writes the route table, the history and the trail
-# of the writes, and it revokes the sessions and purges the decisions.
-user shuttle-control on >~shuttle:* -@all +@read +@write
+user shuttle-gateway on ~shuttle:s:* ~shuttle:u:* ~shuttle:rl:* ~shuttle:global:rl:* ~shuttle:principal:rl:* ~shuttle:total:rl:* ~shuttle:login:rl:* ~shuttle:dec:* %W~shuttle:cfg:hb:* %R~shuttle:cfg:active %R~shuttle:cfg:rev:* %R~shuttle:cfg:revs -@all +@read +set +del +sadd +srem +pexpire +incr +hincrby +hdel +eval +ping
+user shuttle-control on ~shuttle:* -@all +@read +@write +eval +ping

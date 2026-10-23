@@ -56,7 +56,8 @@ the shared state. A replica can be replaced at any moment.
 | `SHUTTLE_METRICS_TOKEN` | A random value | The metrics are only served with it. |
 | `SHUTTLE_UPSTREAM_TLS_CA` | The authority of the deployment | The certificate of the upstream is verified with it. |
 | `SHUTTLE_UPSTREAM_TLS_CERT` / `_KEY` | The certificate of the gateway and its private key | They are presented to the upstreams that ask for a client certificate. They belong together. |
-| `SHUTTLE_TRUSTED_PROXIES` | The ranges of the ingress | The forwarding headers are only trusted from them. |
+| `SHUTTLE_TRUSTED_PROXIES` | The ranges of the ingress | The forwarding headers are only trusted from them. The variable replaces the `trustedProxies` of the configuration file when it is set. |
+| `SHUTTLE_TRUSTED_PROXY_HOPS` | `1` | The number of proxies that are in front of the gateway. Every one of them appends the address it observed to the chain of `x-forwarded-for`, and the number is what tells the entries they wrote from the ones a client injected. |
 | `SHUTTLE_EXTERNAL_PROTO` | `https` | The protocol the callers use. |
 | `SHUTTLE_COOKIE_SECURE` | `true` | The cookies of the gateway are `Secure`. |
 | `SHUTTLE_MAX_BODY_BYTES` | The limit of the deployment | The limit of the routes wins over it. |
@@ -160,12 +161,39 @@ project ships them in
 [`deploy/redis/shuttle.acl`](../deploy/redis/shuttle.acl):
 
 ```
-user shuttle-gateway on >~shuttle:s:* >~shuttle:u:* >~shuttle:cfg:hb:* ~shuttle:cfg:active ~shuttle:cfg:rev:* ~shuttle:cfg:revs -@all +@read +set +del +sadd +srem +pexpire +incr +hincrby +hdel +eval
-user shuttle-control on >~shuttle:* -@all +@read +@write
+user shuttle-gateway on ~shuttle:s:* ~shuttle:u:* ~shuttle:rl:* ~shuttle:global:rl:* ~shuttle:principal:rl:* ~shuttle:total:rl:* ~shuttle:login:rl:* ~shuttle:dec:* %W~shuttle:cfg:hb:* %R~shuttle:cfg:active %R~shuttle:cfg:rev:* %R~shuttle:cfg:revs -@all +@read +set +del +sadd +srem +pexpire +incr +hincrby +hdel +eval +ping
+user shuttle-control on ~shuttle:* -@all +@read +@write +eval +ping
 ```
 
 The rules are applied in the order they are written: everything is refused
 first, and the commands of each user are granted afterwards.
+
+Three rules of the format of the file are worth naming, because a file
+that breaks them does not do what it says:
+
+- The file holds **one rule per line** and nothing else. The server reads
+  it as a list of rules: a line that is not a rule — a comment, for
+  example — stops the server from starting.
+- The command that writes a **password** is `>`, and the command that
+  reads a **key pattern** is `~`. A rule that writes `>~shuttle:s:*` does
+  not write a key pattern at all: it publishes a password that is the
+  pattern itself, and the user it defines may not touch a single key.
+- The patterns of the keys are `~` (read and write), `%W~` (write only)
+  and `%R~` (read only). The route table is read only for the gateway, and
+  the heartbeat of a replica is the only key it writes there.
+
+The **passwords are not in the file**. The deployment writes them after
+the server started, and it writes them again at every start:
+
+```sh
+redis-cli ACL SETUSER shuttle-gateway resetpass >"$REDIS_GATEWAY_PASSWORD"
+redis-cli ACL SETUSER shuttle-control resetpass >"$REDIS_CONTROL_PASSWORD"
+```
+
+`resetpass` removes the passwords the user had, so the secret of the
+deployment is the only one that authenticates. The server is **not** saved
+with `ACL SAVE`: the file of the deployment holds no secret, and the
+secrets live in the secret store.
 
 The user of the gateway may **read** the route table (`shuttle:cfg:active`,
 `shuttle:cfg:rev:*`, `shuttle:cfg:revs`) and it writes the sessions, the
@@ -443,6 +471,23 @@ has to set them, and the ranges of the ingress have to be in
 `SHUTTLE_TRUSTED_PROXIES` (or in the `trustedProxies` of the configuration
 file): the headers of a client that is not a trusted proxy are ignored.
 
+The ranges name the **proxies** of the deployment, and they should be as
+narrow as the deployment allows: a range that covers the addresses of the
+callers trusts every one of them to write the headers of the chain.
+
+The number of the proxies is `SHUTTLE_TRUSTED_PROXY_HOPS` (one by
+default). Every proxy appends the address it observed to the chain of
+`x-forwarded-for`, so the chain holds one entry per proxy, and the gateway
+reads the chain from the right: the address of the caller is the entry
+that is that many positions from the right. A deployment with two proxies
+in front of the gateway — an ingress and a load balancer, for instance —
+sets it to `2`.
+
+The variable is what makes the address of the caller **unforgeable**: the
+entries a client wrote are on the left of the ones the proxies wrote, and
+they are dropped. A client that sends its own `x-forwarded-for` chooses
+nothing, and the key of the rate limiter is the one of the caller.
+
 **The host needs attention.** The effective host decides the route that
 handles the request, the origin the browser is compared with, and the value
 the signature of the identity covers. An ingress that rewrites the `Host`
@@ -719,13 +764,14 @@ one that authenticates the caller.
 | Question | Where | The answer of the deployment |
 | --- | --- | --- |
 | Which ranges may send the forwarding headers? | `trustedProxies` of the file and `SHUTTLE_TRUSTED_PROXIES` | |
+| How many proxies are in front of the gateway? | `SHUTTLE_TRUSTED_PROXY_HOPS` | |
 | Is the ingress the only one that talks to the gateway? | the network policy | |
 | Is the client address of a caller the one the rate limiter counts? | `x-forwarded-for` and the trusted proxies | |
 
 **The rule**: the forwarding headers of a request that does not come from a
 trusted proxy are ignored, and the address of the peer is the address of the
-caller. A range that is too wide lets a caller choose the key of the rate
-limiter.
+caller. A range that is too wide lets a caller that reaches the gateway
+from it write the whole chain of the request.
 
 ### 4. The access to the upstreams
 

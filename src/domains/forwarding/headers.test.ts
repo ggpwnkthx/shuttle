@@ -13,7 +13,9 @@ import {
 const GATEWAY_COOKIES = ['shuttle_session', 'shuttle_oidc_state']
 
 /** The context of a request that comes from a trusted proxy. */
-function context(options: { forwardedFor?: string; proto?: string; host?: string } = {}) {
+function context(
+  options: { forwardedFor?: string; proto?: string; host?: string; hops?: number } = {}
+) {
   const headers = new Headers()
   if (options.forwardedFor) headers.set('x-forwarded-for', options.forwardedFor)
   if (options.proto) headers.set('x-forwarded-proto', options.proto)
@@ -22,6 +24,7 @@ function context(options: { forwardedFor?: string; proto?: string; host?: string
     peerAddress: '10.0.0.5',
     headers,
     trustedProxies: ['10.0.0.0/8'],
+    trustedProxyHops: options.hops,
     externalProto: 'http',
   })
 }
@@ -49,8 +52,11 @@ describe('the evaluation of the trusted proxies', () => {
   })
 
   test('the chain is read from the right', () => {
-    // The right-most entry that is not a trusted proxy is the caller.
-    const forwarding = context({ forwardedFor: '192.0.2.1, 203.0.113.7, 10.0.0.4' })
+    // Two proxies are in front of the gateway: the one that is closest to
+    // it wrote the address of the other one, and the other one wrote the
+    // address of the caller. The caller is the entry that is two positions
+    // from the right.
+    const forwarding = context({ forwardedFor: '192.0.2.1, 203.0.113.7, 10.0.0.4', hops: 2 })
     expect(forwarding.clientIp).toBe('203.0.113.7')
     // The entries the client injected on the left are dropped.
     expect(forwarding.chain).toEqual(['203.0.113.7', '10.0.0.4', '10.0.0.5'])

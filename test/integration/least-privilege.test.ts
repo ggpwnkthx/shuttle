@@ -14,6 +14,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
+import { join } from 'node:path'
 import { Pool } from 'pg'
 import { createPostgresClient, ensureSchema } from '../../src/platform/postgres'
 import {
@@ -202,12 +203,18 @@ describe('the least privilege of the shared state', () => {
   })
 
   test.skipIf(!redisUrl)('the user of the gateway cannot write the route table', async () => {
-    const admin = withRetries(createRedisClient({ url: redisUrl! }))
+    const admin = withRetries(createRedisClient({ url: redisUrl! }), 10)
     const prefix = `least-privilege-${Date.now()}`
     try {
       // The user of the gateway reads the route table and writes the
       // sessions and the heartbeats. It does not hold the commands that
       // write the revisions, the pointer and the history.
+      //
+      // The command that writes a password is `>`, and the command that
+      // **reads** a key pattern is `~`. The patterns of the keys are
+      // `~` (read and write), `%W~` (write only) and `%R~` (read only):
+      // the route table is read only for the gateway, and the heartbeat of
+      // a replica is the only key it writes there.
       await admin.sendCommand([
         'ACL',
         'SETUSER',
@@ -219,12 +226,14 @@ describe('the least privilege of the shared state', () => {
         // granted afterwards: the order of the rules is the order of the
         // commands.
         '-@all',
-        `>~${prefix}:s:*`,
-        `>~${prefix}:u:*`,
-        `>~${prefix}:cfg:hb:*`,
-        `~${prefix}:cfg:active`,
-        `~${prefix}:cfg:rev:*`,
-        `~${prefix}:cfg:revs`,
+        `~${prefix}:s:*`,
+        `~${prefix}:u:*`,
+        `~${prefix}:rl:*`,
+        `~${prefix}:dec:*`,
+        `%W~${prefix}:cfg:hb:*`,
+        `%R~${prefix}:cfg:active`,
+        `%R~${prefix}:cfg:rev:*`,
+        `%R~${prefix}:cfg:revs`,
         '+@read',
         '+set',
         '+del',
@@ -235,6 +244,7 @@ describe('the least privilege of the shared state', () => {
         '+hincrby',
         '+hdel',
         '+eval',
+        '+ping',
       ])
       await admin.sendCommand([
         'ACL',
@@ -244,9 +254,11 @@ describe('the least privilege of the shared state', () => {
         'on',
         '>the-password-of-the-control',
         '-@all',
-        `>~${prefix}:*`,
+        `~${prefix}:*`,
         '+@read',
         '+@write',
+        '+eval',
+        '+ping',
       ])
     } finally {
       await admin.close()
@@ -255,11 +267,27 @@ describe('the least privilege of the shared state', () => {
     const gatewayUrl = new URL(redisUrl!)
     gatewayUrl.username = 'shuttle-gateway-test'
     gatewayUrl.password = 'the-password-of-the-gateway'
-    const gateway = withRetries(createRedisClient({ url: gatewayUrl.toString() }))
+    const gateway = withRetries(createRedisClient({ url: gatewayUrl.toString() }), 10)
     try {
       // The read works: the gateway needs the table of the deployment.
-      const read = await gateway.hget(`${prefix}:cfg:active`, 'revision')
-      expect(read === null || typeof read === 'string').toBe(true)
+      const pointer = await gateway.hget(`${prefix}:cfg:active`, 'revision')
+      expect(pointer === null || typeof pointer === 'string').toBe(true)
+
+      // The write of the gateway works on the keys it owns: the sessions,
+      // the windows of the limits and the heartbeat of the replica.
+      await gateway.set(`${prefix}:s:a-session`, '{"id":"a-session"}', 'PX', 60_000)
+      expect(await gateway.get(`${prefix}:s:a-session`)).toContain('a-session')
+      // The heartbeat of a replica is written by the gateway and read by
+      // the control plane: the gateway may write it and not read it.
+      await gateway.set(`${prefix}:cfg:hb:a-replica`, '{"replicaId":"a-replica"}', 'PX', 60_000)
+      let read = false
+      try {
+        await gateway.get(`${prefix}:cfg:hb:a-replica`)
+      } catch (error) {
+        read = true
+        expect(String(error)).toContain('NOPERM')
+      }
+      expect(read).toBe(true)
 
       // The write is refused: the user of the gateway does not hold the
       // commands that write the route table.
@@ -278,15 +306,114 @@ describe('the least privilege of the shared state', () => {
         expect(String(error)).toContain('NOPERM')
       }
       expect(refused).toBe(true)
+
+      // The removal of the pointer is refused as well: the route table is
+      // read only for the gateway.
+      let removed = false
+      try {
+        await gateway.del(`${prefix}:cfg:active`)
+      } catch (error) {
+        removed = true
+        expect(String(error)).toContain('NOPERM')
+      }
+      expect(removed).toBe(true)
+
+      // The user of the gateway may not write the history of the
+      // revisions either.
+      let pushed = false
+      try {
+        await gateway.rpush(`${prefix}:cfg:revs`, '{"revision":1}')
+      } catch (error) {
+        pushed = true
+        expect(String(error)).toContain('NOPERM')
+      }
+      expect(pushed).toBe(true)
     } finally {
       await gateway.close()
-      const cleanup = withRetries(createRedisClient({ url: redisUrl! }))
+      const cleanup = withRetries(createRedisClient({ url: redisUrl! }), 10)
       try {
         await cleanup.sendCommand(['ACL', 'DELUSER', 'shuttle-gateway-test'])
         await cleanup.sendCommand(['ACL', 'DELUSER', 'shuttle-control-test'])
       } finally {
         await cleanup.close()
       }
+    }
+  })
+
+  test.skipIf(!redisUrl)('the user of the control plane writes the route table', async () => {
+    const admin = withRetries(createRedisClient({ url: redisUrl! }), 10)
+    const prefix = `least-privilege-${Date.now()}`
+    try {
+      await admin.sendCommand([
+        'ACL',
+        'SETUSER',
+        'shuttle-control-test',
+        'reset',
+        'on',
+        '>the-password-of-the-control',
+        '-@all',
+        `~${prefix}:*`,
+        '+@read',
+        '+@write',
+        '+eval',
+        '+ping',
+      ])
+    } finally {
+      await admin.close()
+    }
+
+    const controlUrl = new URL(redisUrl!)
+    controlUrl.username = 'shuttle-control-test'
+    controlUrl.password = 'the-password-of-the-control'
+    const control = withRetries(createRedisClient({ url: controlUrl.toString() }), 10)
+    try {
+      // The control plane writes the pointer of the active revision, the
+      // revision itself and the history: it is the only writer of the
+      // route table (§12.8 of the specification).
+      const outcome = await control.eval(
+        `local number = redis.call('INCR', KEYS[1])
+         redis.call('HSET', KEYS[2], 'revision', number)
+         redis.call('HSET', KEYS[3], 'revision', number, 'table', '{}')
+         redis.call('RPUSH', KEYS[4], '{"revision":1}')
+         return tostring(number)`,
+        4,
+        `${prefix}:cfg:seq`,
+        `${prefix}:cfg:active`,
+        `${prefix}:cfg:rev:1`,
+        `${prefix}:cfg:revs`
+      )
+      expect(outcome).toBe('1')
+      expect(await control.hget(`${prefix}:cfg:active`, 'revision')).toBe('1')
+    } finally {
+      await control.close()
+      const cleanup = withRetries(createRedisClient({ url: redisUrl! }), 10)
+      try {
+        await cleanup.sendCommand(['ACL', 'DELUSER', 'shuttle-control-test'])
+      } finally {
+        await cleanup.close()
+      }
+    }
+  })
+
+  test('the file of the deployment holds no password', async () => {
+    // The file of the deployment is the `aclfile` of the server, and the
+    // server reads one rule per line: a line that is not a rule stops the
+    // server. The passwords are not in it: they are set with an
+    // `ACL SETUSER` after the server started, and they are not saved in
+    // the file.
+    const file = await Bun.file(
+      join(import.meta.dir, '..', '..', 'deploy', 'redis', 'shuttle.acl')
+    ).text()
+    const lines = file
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+    expect(lines.length).toBeGreaterThan(0)
+    for (const line of lines) {
+      expect(line.startsWith('user ')).toBe(true)
+      // A pattern that is written with `>` is a password, not a pattern.
+      expect(line).not.toContain('>~')
+      expect(line).not.toContain('>')
     }
   })
 })

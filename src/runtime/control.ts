@@ -196,6 +196,7 @@ export async function createControlRuntime(
     protectedRoutes: parseProtectedRoutes(settings.protectedRoutes.join(',')),
     defaults: settings.defaults,
     trustedProxies: settings.trustedProxies,
+    trustedProxiesConfigured: settings.trustedProxiesConfigured,
   })
 
   const state = { draining: false }

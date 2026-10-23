@@ -44,11 +44,18 @@ export type CompileResult =
  * unknown, a value that is out of range. The conflicts are the ones of the
  * matching: two routes that could match the same request, a route that
  * claims a path the gateway serves itself.
+ *
+ * The ranges of the trusted proxies are the ones of the environment when
+ * the environment names them, and the ones of the file otherwise: an
+ * operator that names the proxies of the deployment in the environment is
+ * not surprised by the ranges of the file, and a deployment that names
+ * them in the file keeps them.
  */
 export function compileTable(
   raw: unknown,
   defaults: EnvironmentDefaults,
-  trustedProxies: string[] = []
+  trustedProxies: string[] = [],
+  trustedProxiesConfigured: boolean = false
 ): CompileResult {
   let config: ShuttleConfigFile
   try {
@@ -76,7 +83,7 @@ export function compileTable(
     table: {
       routes,
       reservedPaths: [...config.reservedPaths],
-      trustedProxies: [...trustedProxies, ...config.trustedProxies],
+      trustedProxies: trustedProxiesConfigured ? [...trustedProxies] : [...config.trustedProxies],
     },
   }
 }
